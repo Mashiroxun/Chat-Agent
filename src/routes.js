@@ -4402,8 +4402,18 @@ export function createRoutes(deps) {
       method: 'GET', pattern: '/api/update-check',
       handler: async ({ res, json }) => {
         const current = localVersion();
+        // 更新源可配置（2026-11-04）：config.update.checkUrl 优先，留空用内置默认。
+        // disabled=true 时直接返回，不发起任何网络请求（离线部署用）。
+        const updateCfg = getConfig().update ?? {};
+        if (updateCfg.disabled) {
+          return json(res, 200, { ok: true, current, latest: current, hasUpdate: false, disabled: true });
+        }
+        const checkUrl = String(updateCfg.checkUrl || UPDATE_INFO_URL || '').trim();
+        if (!checkUrl) {
+          return json(res, 200, { ok: false, current, error: '未配置更新源地址' });
+        }
         try {
-          const r = await fetch(UPDATE_INFO_URL, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
+          const r = await fetch(checkUrl, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           const info = await r.json();
           const latest = String(info.version || '');

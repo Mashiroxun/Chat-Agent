@@ -93,7 +93,12 @@ function allowed(kind, id, cfg) {
 // ── 版本更新检查 ─────────────────────────────────────────────────────
 // 线上版本信息只有一份：kondius.cn/qq-agent/version.json（发版时手动改）。
 // 由后端代取而不是前端直连：绕过 CORS，且失败信息能统一回给 UI。
-const UPDATE_INFO_URL = 'https://kondius.cn/qq-agent/version.json';
+// 默认更新源（2026-11-04 改）：指向自己的仓库，推代码时顺带推 version.json。
+// 可被 config.update.checkUrl 覆盖 —— 私有仓库的 raw 链接匿名读不到（404），
+// 那种情况要么把仓库设公开，要么另建一个只放 version.json 的公开仓库再填到这里。
+// 国内直连 raw.githubusercontent.com 不稳，config 里也可以换成 jsDelivr 镜像：
+//   https://cdn.jsdelivr.net/gh/<user>/<repo>@main/version.json
+const UPDATE_INFO_URL = 'https://raw.githubusercontent.com/Mashiroxun/Chat-Agent/main/version.json';
 
 function localVersion() {
   try {

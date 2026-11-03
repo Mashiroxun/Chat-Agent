@@ -1,0 +1,5 @@
+{
+  "version": "0.4.9.2",
+  "url": "https://github.com/Mashiroxun/Chat-Agent",
+  "notes": "启动组合改造：26 个组件可替换、便携 QQ 外提、覆盖层能力审计。发版时改这里的 version 与 notes，推上来即可。"
+}
