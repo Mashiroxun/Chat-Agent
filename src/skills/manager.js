@@ -671,5 +671,25 @@ export class SkillManager {
   }
 }
 
-/** 进程级单例：所有模块共享同一份 Skill 状态。 */
-export const skillManager = new SkillManager();
+/**
+ * 进程级单例：所有模块共享同一份 Skill 状态。
+ *
+ * 0.4.9.3：从 const 改成 let，并开放 setSkillManager。
+ * 依赖 ESM 的 live binding —— 15 个文件里 232 处 `skillManager.xxx()` 调用一行都不用改，
+ * 换掉实例后它们自动看到新的。用于测试注入假管理器、或启动组合替换整套插件治理。
+ */
+export let skillManager = new SkillManager();
+
+/**
+ * 替换插件管理器实例。传 null 会恢复成一个全新的空管理器。
+ * @param {SkillManager | null} instance
+ */
+export function setSkillManager(instance) {
+  skillManager = instance instanceof SkillManager ? instance : new SkillManager();
+  return skillManager;
+}
+
+/** 当前管理器是否被替换过（诊断用）。 */
+export function isSkillManagerReplaced() {
+  return !(skillManager instanceof SkillManager) || skillManager.__replaced === true;
+}

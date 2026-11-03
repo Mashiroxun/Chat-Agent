@@ -7,7 +7,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { getConfig, updateConfig, ROOT, DATA_DIR, isChatAllowed } from './config.js';
+import { getConfig, updateConfig, ROOT, DATA_DIR, isChatAllowed, setConfigProvider } from './config.js';
 // 版本迁移：处理跨版本升级后残留的旧插件目录/配置引用（详见该文件头部注释）。
 // 必须在 reloadSkills 之前跑 —— 插件扫描读的就是 config.trustedPlugins。
 import { runUpgrades } from './upgrade.js';
@@ -47,7 +47,7 @@ import { createFactories, defaultFactories, listComponentKeys } from './composit
 // 扫描结束一次性生效。详见 tool-registry.js「批量加载静默期」注释。
 import { beginToolsetBatch, endToolsetBatch } from './tool-registry.js';
 import { registerHarness } from './harness/index.js';
-import { skillManager } from './skills/manager.js';
+import { skillManager, setSkillManager } from './skills/manager.js';
 // 插件界面契约：常量 / 路径规则 / URL 拼装 / CSP 全部来自这一份，
 // 前端（06-settings-render.js）与插件侧（api.panel）也 import 同一份 ——
 // 三处各写一遍的时候，任何一处改动漏掉另一处都表现为"按钮点了白屏"且不报错。
@@ -126,6 +126,14 @@ function compareSemver(a, b) {
 const appLogFns = new WeakSet();
 
 export function createApp({ log = console.log, desktopPetHost = null, components = {} } = {}) {
+  // 启动组合注入（0.4.9.3）：这两项必须在读配置之前生效，所以放在最前面。
+  // 不传时是 no-op，行为与之前完全一致。
+  if (typeof components['runtime.config'] === 'function') {
+    setConfigProvider(components['runtime.config']);
+  }
+  if (components['runtime.plugins']) {
+    setSkillManager(components['runtime.plugins']);
+  }
   const cfg = getConfig();
 
   // 桌面伙伴：能力按"已激活的插件"取用 —— 插件没装/被禁用时返回 null，
@@ -1895,7 +1903,9 @@ export function createApp({ log = console.log, desktopPetHost = null, components
     // 协议端进程托管（连接页「无窗口启动」/ 日志面板）
     protocolLauncher,
     // 协议端「一键接入」（连接页注入向导）
-    protocolOnboard
+    protocolOnboard,
+    // 启动组合（0.4.9.3）：console.routes 可追加/覆盖路由表
+    components
   });
 
   async function handleHttp(req, res) {

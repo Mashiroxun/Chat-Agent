@@ -49,9 +49,42 @@ export function systemPrompt(ctx) {
 
 ---
 
-## 可替换的组件（20 个）
+## 可替换的组件（23 个）
 
 键名与 0.5 的组件表一致，两边的层可以互相搬。
+
+### 运行环境（注入点，不是构造工厂）
+
+| 键 | 签名 | 说明 |
+|---|---|---|
+| `runtime.config` | `() => 配置对象` | 配置来源。**必须同步返回**，形状同 `DEFAULT_CONFIG`。返回非对象时回落到读磁盘。 |
+| `runtime.plugins` | `SkillManager 实例` | 插件管理器。替换后全项目 232 处 `skillManager.xxx()` 自动看到新实例（ESM live binding）。 |
+| `console.routes` | `(deps) => 路由数组` | 追加/覆盖 HTTP 路由。返回 `[{ method, pattern, handler }]`，**排在内置 176 条前面**，同 pattern 会覆盖内置。 |
+
+`console.routes` 的例子——给面板加一条自己的接口：
+
+```js
+// overrides/20-my-api/routes.mjs
+export default function myRoutes() {
+  return [{
+    method: 'GET',
+    pattern: '/api/my-thing',
+    handler: async ({ res, json }) => json(res, 200, { ok: true, hello: 'world' }),
+  }];
+}
+```
+
+```json
+{
+  "version": 1,
+  "id": "my-api",
+  "order": 20,
+  "enabled": true,
+  "components": {
+    "console.routes": { "module": "./routes.mjs", "export": "default" }
+  }
+}
+```
 
 ### 数据仓
 
