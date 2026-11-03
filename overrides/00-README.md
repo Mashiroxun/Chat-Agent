@@ -49,6 +49,46 @@ export function systemPrompt(ctx) {
 
 ---
 
+## 能力声明（permissions）
+
+层是原生 ESM，理论上能 `import` 任何东西。加载器会在 `import()` **之前**读源码、
+提取 import 说明符，跟清单里的 `permissions` 比对——**未声明的直接拒绝加载**，不是警告后放行。
+
+```json
+{
+  "version": 1,
+  "id": "my-setup",
+  "order": 20,
+  "permissions": ["fs.read"],
+  "components": { "...": "..." }
+}
+```
+
+| 能力 | 触发条件 |
+|---|---|
+| `proc.spawn` | `import ... from 'node:child_process'` |
+| `proc.worker` | `import ... from 'node:worker_threads'` |
+| `proc.binding` | 源码里出现 `process.binding(` |
+| `fs.read` | `import ... from 'node:fs'`（或 `fs/promises`） |
+| `fs.write` | 同上，且源码里有 `writeFile` / `unlink` / `mkdir` / `createWriteStream` 等写操作 |
+| `net.socket` | `import ... from 'node:net'` |
+| `net.http` | `import ... from 'node:http'` 或 `node:https` |
+| `net.udp` | `import ... from 'node:dgram'` |
+| `code.vm` | `import ... from 'node:vm'` |
+| `code.eval` | 源码里出现 `eval(` 或 `new Function(` |
+
+### 这个机制挡得住什么、挡不住什么
+
+**挡得住**：`import { spawn } from 'node:child_process'`、`await import('fs')`、
+`export ... from 'node:net'` 这类直接写法——没声明就加载不了。
+
+**挡不住**：`await import('child' + 'process')`、`process.binding()`（这个能识别到，
+但拦不住真正的底层调用）、把代码塞进字符串再 `eval`。
+
+定位是**显式声明 + 防误用**，不是防蓄意攻击。真隔离（层拿不到 `process`、
+拿不到 Electron API）只能靠 `worker_threads` 或子进程，那需要重写层规范——
+层就不能再"返回一个函数对象"了。**只装你信任的层**。
+
 ## 可替换的组件（26 个）
 
 键名与 0.5 的组件表一致，两边的层可以互相搬。

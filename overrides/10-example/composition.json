@@ -3,6 +3,7 @@
   "id": "example",
   "order": 10,
   "enabled": false,
+  "permissions": [],
   "components": {
     "core.prompt.system": { "module": "./system-prompt.mjs", "export": "systemPrompt" }
   }
