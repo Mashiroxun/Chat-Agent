@@ -3204,6 +3204,16 @@ function resetUsageStatsCache() {
   usageStatsCache.clear();
   usageStatsInflight.clear();
   usageStatsMicro = { key: '', at: 0, stats: null };
+  // 行缓存与档案也要清（2026-11-03 补）：
+  // 之前只清了上面三个，usageRowsCache / usageArchive 还留着旧数据 ——
+  // 「重置用量统计」之后界面显示的还是重置前的内容，测试之间也会互相污染。
+  usageRowsCache.key = '';
+  usageRowsCache.at = 0;
+  usageRowsCache.rows = null;
+  usageRowsCache.win = null;
+  usageArchive.sig = '';
+  usageArchive.at = 0;
+  usageArchive.sessions = null;
 }
 
 /**
