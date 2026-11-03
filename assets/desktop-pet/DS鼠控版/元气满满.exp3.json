@@ -1,0 +1,36 @@
+{
+ "Type": "Live2D Expression",
+ "IsModelCustomizationExpression": false,
+ "Parameters": [
+  {
+   "Id": "ParamCheek16",
+   "Value": 1.0,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamBrowLY",
+   "Value": 0.7,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamBrowRY",
+   "Value": 0.7,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamMouthOpenY",
+   "Value": 0.3,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamMouthForm",
+   "Value": 1.2,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamAngleY",
+   "Value": 3.0,
+   "Blend": "Add"
+  }
+ ]
+}

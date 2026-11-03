@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>QQ Agent 对话</title>
+  <link rel="stylesheet" href="pet-chat.css">
+</head>
+<body>
+  <section id="panel" class="panel" aria-label="和它对话">
+    <header class="hd">
+      <span id="dot" class="dot" aria-hidden="true"></span>
+      <strong id="who" class="hd-title">对话</strong>
+      <span id="chat-tag" class="hd-tag" title="只属于你的会话，不会跑到任何群里">私聊 · 主人</span>
+      <span id="status" class="hd-status"></span>
+      <button id="dev" class="ghost" type="button" title="切到开发工单">开发工单</button>
+      <button id="close" class="x" type="button" aria-label="关闭（Esc）" title="关闭（Esc）">×</button>
+    </header>
+
+    <div id="list" class="list" role="log" aria-live="polite">
+      <div id="empty" class="empty">
+        <p class="empty-title">这条会话只属于你</p>
+        <p class="empty-desc">你说的每句话都以「主人」的身份进这里，不会跑到任何群里；<br>
+          它用同一套人设、这段对话自己的历史、同一份记忆与工具、同一份表情包策略回你。<br>
+          Enter 发送，Shift+Enter 换行。</p>
+      </div>
+    </div>
+
+    <div id="attach" class="attach" hidden></div>
+
+    <footer class="composer">
+      <button id="plus" class="plus" type="button" title="发文件给它（图片或文本）" aria-label="发文件给它">＋</button>
+      <textarea id="input" class="input" rows="1" placeholder="和它说点什么，或把文件拖进来…" maxlength="2000"></textarea>
+      <button id="send" class="send" type="button">发送</button>
+    </footer>
+  </section>
+  <script type="module" src="pet-chat.js"></script>
+</body>
+</html>

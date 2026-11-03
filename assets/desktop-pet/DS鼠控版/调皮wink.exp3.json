@@ -1,0 +1,31 @@
+{
+ "Type": "Live2D Expression",
+ "IsModelCustomizationExpression": false,
+ "Parameters": [
+  {
+   "Id": "ParamCheek76",
+   "Value": 1.0,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamCheek79",
+   "Value": 1.0,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamEyeROpen",
+   "Value": -1.0,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamMouthForm",
+   "Value": 1.2,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamAngleZ",
+   "Value": 4.0,
+   "Blend": "Add"
+  }
+ ]
+}

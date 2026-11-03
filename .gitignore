@@ -1,0 +1,30 @@
+# ── 依赖与运行时二进制 ──────────────────────────────
+node_modules/
+runtime/
+
+# ── 用户数据（含 API Key、聊天记录、登录态，绝不入库）──
+data/
+data-*/
+log/
+logs/
+*.log
+
+# ── 构建产物 ──────────────────────────────────────
+dist/
+build/
+.qa-local/
+
+# ── 手工备份（历史快照，git 里不需要）──────────────
+*.bak
+*.bak-*
+*.before-*
+*.orig
+
+# ── 系统与临时文件 ────────────────────────────────
+Thumbs.db
+desktop.ini
+.DS_Store
+__pycache__/
+.forge-tmp/
+*.tmp
+*.crdownload
