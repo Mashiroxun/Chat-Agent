@@ -25,6 +25,15 @@ export const DATA_DIR = process.env.QQ_AGENT_DATA_DIR || path.join(ROOT, `data${
 export const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 
 export const DEFAULT_CONFIG = {
+  // 更新检查（2026-11-04）：指向自己的仓库，推代码时顺带推 version.json 即可。
+  // checkUrl 留空则用 app.js 里的内置默认（GitHub raw）。
+  // ⚠️ 私有仓库的 raw 链接匿名访问不到（返回 404）——要么把仓库设为公开，
+  //    要么另建一个只放 version.json 的公开仓库，把地址填到这里。
+  update: {
+    checkUrl: '',
+    // 关掉检查（离线部署 / 不想被提示）
+    disabled: false,
+  },
   // OpenAI 兼容 API（必填才能跑）
   api: {
     // 出厂留空：这是作者本机的网关地址，对其他人毫无意义，
