@@ -284,8 +284,16 @@ function loadPluginTools() {
   // 这里只需要确保 registry 里有它们
 }
 
+// 内置工具只需注册一次（2026-11-03）。
+// registerTool 每次都做 4 项校验 + Object.freeze + registry.set，而 buildToolDefs()
+// 被 cache-warm 的预热路径反复调用 —— 之前每次都要重跑下面这 977 行里 23 个
+// 完整对象字面量的构造，纯属白烧 CPU。工具定义来自源码，改了要重启，标记不会过期。
+let builtinToolsRegistered = false;
+
 /** 注册所有内置工具到 registry。 */
 function registerAllTools() {
+  if (builtinToolsRegistered) return;
+  builtinToolsRegistered = true;
   // 消息发送类
   registerTool({
     id: 'send_message',
