@@ -9,13 +9,30 @@
 // 状态都在闭包里：qqPortableLogs / qqPortableProc / qqProcListCache / localQqCache /
 // qqSetupState 等，多实例互不干扰。
 
-import fs from 'node:fs';
-import path from 'node:path';
-import net from 'node:net';
-import { spawn, execFile } from 'node:child_process';
-import { getConfig, ROOT } from './config.js';
+import fsModule from 'node:fs';
+import pathModule from 'node:path';
+import netModule from 'node:net';
+import { spawn as spawnModule, execFile as execFileModule } from 'node:child_process';
+import { getConfig as getConfigModule, ROOT as ROOTModule } from './config.js';
 
-export function createQqPortable({ log = console.log, emit = () => {} } = {}) {
+/**
+ * 便携 QQ 进程管理。
+ *
+ * 所有系统依赖都可以从参数替换（默认是真实实现）——函数体里仍然直接写 fs / path /
+ * spawn / execFile / ROOT / getConfig，靠参数同名遮蔽，所以搬过来的 600 行一行没改。
+ * 这样测试里可以塞假 fs 和假 spawn，不碰真实进程与磁盘。
+ */
+export function createQqPortable({
+  log = console.log,
+  emit = () => {},
+  fs = fsModule,
+  path = pathModule,
+  net = netModule,
+  spawn = spawnModule,
+  execFile = execFileModule,
+  ROOT = ROOTModule,
+  getConfig = getConfigModule,
+} = {}) {
   function isPortOpen(host, port, timeoutMs = 800) {
     return new Promise((resolve) => {
       const p = Number(port);
@@ -664,5 +681,15 @@ export function createQqPortable({ log = console.log, emit = () => {} } = {}) {
     stopPortableQQ,
     showPortableQQ,
     setupPortableQQFromLocal,
+    // 测试用入口：内部纯函数/状态，不参与运行时契约，不要在外面依赖它们
+    __internals: {
+      qqPortableDir,
+      qqPortableDataDir,
+      qqPortableExe,
+      pushQqLog,
+      qqPortableReady,
+      listQqProcesses,
+      qqPortableRunningPid,
+    },
   };
 }
