@@ -43,6 +43,7 @@ import { loadPlugins, watchPlugins, setOnebotClient, PLUGINS_DIR, SKILLS_DIR } f
 // 启动组合（0.4.9.2）：组件装配改为查表，见 src/composition/factories.js。
 // 不传 components 时全部回落到洛版原实现，行为与 0.4.9.1 一致。
 import { createQqPortable } from './qq-portable.js';
+import { setFetchProvider } from './safe-fetch.js';
 import { createFactories, defaultFactories, listComponentKeys } from './composition/factories.js';
 // 工具集批量静默期：重扫期间 N 个插件会逐个注册工具，中间态一律不发给模型，
 // 扫描结束一次性生效。详见 tool-registry.js「批量加载静默期」注释。
@@ -134,6 +135,9 @@ export function createApp({ log = console.log, desktopPetHost = null, components
   }
   if (components['runtime.plugins']) {
     setSkillManager(components['runtime.plugins']);
+  }
+  if (typeof components['runtime.fetch'] === 'function') {
+    setFetchProvider(components['runtime.fetch']);
   }
   const cfg = getConfig();
 
@@ -283,7 +287,11 @@ export function createApp({ log = console.log, desktopPetHost = null, components
   let pluginWatcher = null;        // 开发模式热重载 watcher（stop() 时要 close，否则句柄泄漏）
   let obPortPollTimer = null;      // OneBot WS 端口就绪轮询（stop() 时要 clear，start() 里赋值）
   let diskPatrolTimer = null;      // 数据盘空间巡检（stop() 时要 clear，start() 里赋值）
-  const emit = (type, payload) => {
+  // 事件出口（0.4.9.3）：core.events 可整体替换，用于事件过滤/镜像/落盘。
+  // 不传时走原实现。签名必须是 (type, payload) => void。
+  const emit = typeof components['core.events'] === 'function'
+    ? components['core.events']
+    : (type, payload) => {
     // 桌宠只关心"连接状态 / 会话状态"这几类事件（用于状态气泡与成就统计）。
     // 这是直接调用，不是插件 hook —— 桌宠抛错绝不能影响群聊主链路。
     if (type === 'onebot-status' || type === 'status' || String(type).startsWith('session-')) {

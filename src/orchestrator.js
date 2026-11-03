@@ -322,6 +322,11 @@ export class Orchestrator {
       llmComplete: components['llm.complete'] ?? chatCompletionWithRetry,
       toolBundle: components['core.tools.bundle'] ?? buildToolDefs,
       parseInline: components['core.tools.parseInline'] ?? parseInlineToolCalls,
+      // 记忆整理提示词（0.4.9.3）：一个键同时管两种提示词，靠 ctx.kind 区分
+      //   kind='consolidate'  → 合并同一群友的多条印象
+      //   kind='impression'   → 从一段对话里抽取新印象
+      // 注入实现返回 { system, user } 即可；返回形状不对时回落到原实现。
+      consolidatePrompt: components['core.memory.consolidate'] ?? null,
     };
     // 事件出口：正常情况下由 app.js 注入（转发到 SSE）。
     // 兜底必须是**明确的 no-op** —— 早先用 createEventBus() 兜底，
@@ -3400,6 +3405,12 @@ export class Orchestrator {
 
   /** 整理模式：合并/删减已有印象。 */
   #buildConsolidatePrompt(mem) {
+    // 启动组合（0.4.9.3）：core.memory.consolidate 可替换整理提示词。
+    const injected = this.policy?.consolidatePrompt;
+    if (typeof injected === 'function') {
+      const r = injected({ kind: 'consolidate', mem });
+      if (r && typeof r.system === 'string' && typeof r.user !== 'undefined') return r;
+    }
     const fmtTs = (t) => new Date(t).toISOString().slice(0, 16).replace('T', ' ');
     const lines = [`群友 QQ：${mem.userId}`, `当前名字：${mem.name}`];
     for (const e of mem.impressions) lines.push(`- ${e.content} (${fmtTs(e.createdAt)})`);
@@ -3420,6 +3431,12 @@ export class Orchestrator {
 
   /** 新建模式：从聊天记录里提炼对某人的长期印象。 */
   #buildNewImpressionPrompt(chatKey, mem, stats) {
+    // 启动组合（0.4.9.3）：同一个键，靠 kind 区分新建模式。
+    const injected = this.policy?.consolidatePrompt;
+    if (typeof injected === 'function') {
+      const r = injected({ kind: 'impression', chatKey, mem, stats });
+      if (r && typeof r.system === 'string' && typeof r.user !== 'undefined') return r;
+    }
     const maxKeep = Number(getConfig().memory?.maxImpressionsPerMember) || 5;
     const uid = String(mem.userId || '');
     const sample = (this.store.recent(chatKey, { limit: 2000 }) || [])

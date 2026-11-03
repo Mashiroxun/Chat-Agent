@@ -374,7 +374,27 @@ export function resolveTextCap(maxBytes) {
 }
 
 /** 抓取网页文本（≤50000 字符），SSRF 全防护（不做内网例外）。 */
+// 出站抓取注入（0.4.9.3）：默认 null，走原来的完整安全检查链。
+// 由启动组合（runtime.fetch）设置。注意 provider 一旦设置就**完全接管**，
+// 包括 SSRF 白名单、内网 IP 拦截、浏览锁、超时与体积上限 ——
+// 替换方必须自己保证这些约束，否则等于把安全闸拆了。
+let fetchProvider = null;
+
+/**
+ * 替换出站抓取的实现。传 null 恢复默认。
+ * @param {null | ((url: string, opts: object) => Promise<any>)} fn
+ */
+export function setFetchProvider(fn) {
+  fetchProvider = typeof fn === 'function' ? fn : null;
+}
+
+/** 当前是否注入了抓取实现（诊断用）。 */
+export function hasFetchProvider() {
+  return fetchProvider !== null;
+}
+
 export async function safeFetch(urlString, { browseLocked = false, headers = null, maxBytes = TEXT_BODY_DEFAULT, timeoutMs = null, proxy = '' } = {}) {
+  if (fetchProvider) return fetchProvider(urlString, { browseLocked, headers, maxBytes, timeoutMs, proxy });
   // ⚠️ `maxBytes` 必须真的生效（2026-10-08 修，用户报障"联网搜图经常搜不了"）。
   //   此前签名里**没有这个参数**，调用方传进来的 maxBytes 被静默忽略，实际恒为 50KB。
   //   后果有两处：

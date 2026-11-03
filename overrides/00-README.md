@@ -49,7 +49,7 @@ export function systemPrompt(ctx) {
 
 ---
 
-## 可替换的组件（23 个）
+## 可替换的组件（26 个）
 
 键名与 0.5 的组件表一致，两边的层可以互相搬。
 
@@ -59,6 +59,8 @@ export function systemPrompt(ctx) {
 |---|---|---|
 | `runtime.config` | `() => 配置对象` | 配置来源。**必须同步返回**，形状同 `DEFAULT_CONFIG`。返回非对象时回落到读磁盘。 |
 | `runtime.plugins` | `SkillManager 实例` | 插件管理器。替换后全项目 232 处 `skillManager.xxx()` 自动看到新实例（ESM live binding）。 |
+| `runtime.fetch` | `(url, opts) => Promise` | 出站抓取。**一旦设置就完全接管**，包括 SSRF 白名单、内网 IP 拦截、浏览锁、超时与体积上限——替换方要自己保证这些。 |
+| `core.events` | `(type, payload) => void` | 事件出口。可用来做事件过滤、镜像、落盘。 |
 | `console.routes` | `(deps) => 路由数组` | 追加/覆盖 HTTP 路由。返回 `[{ method, pattern, handler }]`，**排在内置 176 条前面**，同 pattern 会覆盖内置。 |
 
 `console.routes` 的例子——给面板加一条自己的接口：
@@ -125,6 +127,7 @@ export default function myRoutes() {
 | `core.media.forward` | `media-links.js` `dispatchMediaLinks` | 媒体链接转发 |
 | `core.text.plain` | `md-to-plain.js` `mdToPlain` | Markdown → 纯文本 |
 | `core.text.split` | `md-to-plain.js` `splitForQQ` | 长文切分 |
+| `core.memory.consolidate` | `orchestrator.js` 的 `#buildConsolidatePrompt` / `#buildNewImpressionPrompt` | 记忆整理提示词。**一个键管两种**，靠 `ctx.kind` 区分：`'consolidate'` 合并已有印象、`'impression'` 从对话里抽新印象。返回 `{ system, user }`；形状不对时回落原实现。 |
 
 ---
 
