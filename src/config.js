@@ -791,8 +791,32 @@ export function getConfigWriteBlock() {
   return configWriteBlock ? { ...configWriteBlock } : null;
 }
 
-/** 取当前生效配置（未初始化时从磁盘读）。 */
+// 配置来源注入（0.4.9.3）：默认 null，走原来的磁盘读取路径。
+// 由启动组合（runtime.config）设置；设置后 getConfig() 优先问它，仍是同步调用。
+// 之所以做成 provider 而不是异步接口：全项目有 317 处同步调用 getConfig()，
+// 改成 async 会让整条调用链传染 await。
+let configProvider = null;
+
+/**
+ * 替换配置来源。传 null 恢复默认（读 data/config.json）。
+ * provider 必须同步返回一个配置对象，形状与 DEFAULT_CONFIG 一致。
+ * @param {null | (() => object)} fn
+ */
+export function setConfigProvider(fn) {
+  configProvider = typeof fn === 'function' ? fn : null;
+}
+
+/** 当前是否注入了配置来源（诊断用）。 */
+export function hasConfigProvider() {
+  return configProvider !== null;
+}
+
+/** 取当前生效配置（未初始化时从磁盘读；注入了 provider 时优先问 provider）。 */
 export function getConfig() {
+  if (configProvider) {
+    const provided = configProvider();
+    if (provided && typeof provided === 'object') return provided;
+  }
   if (!currentConfig) currentConfig = loadConfig();
   return currentConfig;
 }

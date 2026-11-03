@@ -250,7 +250,7 @@ export function createRoutes(deps) {
     };
   };
 
-  return [
+  const builtinRoutes = [
     // ── 系统自检（self-doctor 插件提供的 doctor.report 能力）────────────────
     // 三条路由都是"能力代理"：核心不 import 那个插件，靠能力名问它要结果 ——
     // 关掉 self-doctor 后这些接口会明确报"未启用"，而不是 500 或空数据。
@@ -5283,4 +5283,26 @@ export function createRoutes(deps) {
       }
     },
   ];
+
+  // ── 启动组合（0.4.9.3）：console.routes 可以追加路由表 ──────────────────
+  // 组件签名：(deps) => Array<{ method, pattern, handler }>
+  // 返回的条目排在**内置路由前面**，所以同 pattern 的层路由会先匹配到，
+  // 等于可以覆盖某条内置接口；只声明新 pattern 时就是纯追加。
+  // 校验从严：形状不对整批忽略并留痕，不让半张表悄悄生效。
+  const components = deps.components ?? {};
+  const routeLayer = components['console.routes'];
+  if (typeof routeLayer !== 'function') return builtinRoutes;
+  let extra;
+  try {
+    extra = routeLayer(deps);
+  } catch (error) {
+    log?.(`[composition] console.routes 层执行失败，已忽略：${error?.message ?? error}`);
+    return builtinRoutes;
+  }
+  if (!Array.isArray(extra) || !extra.length) return builtinRoutes;
+  const valid = extra.filter((item) => item && typeof item.pattern === 'string' && typeof item.handler === 'function');
+  if (valid.length !== extra.length) {
+    log?.(`[composition] console.routes 有 ${extra.length - valid.length} 条形状不合法，已跳过`);
+  }
+  return [...valid, ...builtinRoutes];
 }
