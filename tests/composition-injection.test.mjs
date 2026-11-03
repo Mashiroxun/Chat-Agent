@@ -83,3 +83,27 @@ test('替换后的管理器保留独立状态，不污染原实例', () => {
     setSkillManager(original);
   }
 });
+
+test('provider 内部再调 getConfig 不会无限递归', () => {
+  // 危险写法：provider 里又调 getConfig()。没有防重入闸会爆栈。
+  setConfigProvider(() => ({ ...getConfig(), injected: true }));
+  try {
+    const cfg = getConfig();
+    assert.equal(typeof cfg, 'object');
+    assert.equal(cfg.injected, true);
+  } finally {
+    setConfigProvider(null);
+  }
+});
+
+test('注入 provider 后 updateConfig 仍写盘但不影响 getConfig 的返回值', () => {
+  const fixed = { api: { model: 'fixed-model' }, marker: 'provider' };
+  setConfigProvider(() => fixed);
+  try {
+    // 读到的始终是 provider 给的对象
+    assert.equal(getConfig(), fixed);
+    assert.equal(getConfig().api.model, 'fixed-model');
+  } finally {
+    setConfigProvider(null);
+  }
+});

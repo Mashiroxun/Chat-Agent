@@ -5337,7 +5337,10 @@ export function createRoutes(deps) {
     return builtinRoutes;
   }
   if (!Array.isArray(extra) || !extra.length) return builtinRoutes;
-  const valid = extra.filter((item) => item && typeof item.pattern === 'string' && typeof item.handler === 'function');
+  // 形状校验：pattern 可以是字符串（精确匹配）或正则（exec），与内置路由一致。
+  const valid = extra.filter((item) => item
+    && (typeof item.pattern === 'string' || item.pattern instanceof RegExp)
+    && typeof item.handler === 'function');
   if (valid.length !== extra.length) {
     log?.(`[composition] console.routes 有 ${extra.length - valid.length} 条形状不合法，已跳过`);
   }

@@ -803,7 +803,13 @@ let configProvider = null;
  * @param {null | (() => object)} fn
  */
 export function setConfigProvider(fn) {
-  configProvider = typeof fn === 'function' ? fn : null;
+  const next = typeof fn === 'function' ? fn : null;
+  // 注入时提醒一次：从此 getConfig() 只认 provider，updateConfig() 的写入
+  // 仍会落到 currentConfig 与磁盘，但**读不到**——避免"改了配置没反应"查半天。
+  if (next && !configProvider) {
+    console.warn('[config] 已接管配置来源（runtime.config）：updateConfig() 的写入不会反映到 getConfig()');
+  }
+  configProvider = next;
 }
 
 /** 当前是否注入了配置来源（诊断用）。 */
@@ -811,11 +817,20 @@ export function hasConfigProvider() {
   return configProvider !== null;
 }
 
+// 防重入：provider 内部若又调 getConfig()（比如写 () => ({...getConfig(), x:1})），
+// 没有这个闸会无限递归爆栈。触发时直接回落到磁盘配置，宁可拿旧值也不崩。
+let resolvingConfig = false;
+
 /** 取当前生效配置（未初始化时从磁盘读；注入了 provider 时优先问 provider）。 */
 export function getConfig() {
-  if (configProvider) {
-    const provided = configProvider();
-    if (provided && typeof provided === 'object') return provided;
+  if (configProvider && !resolvingConfig) {
+    resolvingConfig = true;
+    try {
+      const provided = configProvider();
+      if (provided && typeof provided === 'object') return provided;
+    } finally {
+      resolvingConfig = false;
+    }
   }
   if (!currentConfig) currentConfig = loadConfig();
   return currentConfig;
