@@ -94,6 +94,76 @@ function readManifest(layerDir) {
  * @param {Function} [options.warn] 层加载失败时的报告出口（默认同 log）
  * @returns {Promise<{components: Record<string, Function>, layers: Array, errors: Array}>}
  */
+// ── 能力审计（0.4.9.3）───────────────────────────────────────────────────
+//
+// 层是原生 ESM，理论上能 import 任何东西。**真正的隔离**（层拿不到 process、
+// 拿不到 Electron API）只能靠 worker_threads 或子进程，那需要重写层规范 ——
+// 层就不能再"返回一个函数对象"了。这里做的是能做实的那一层：
+// 读源码提取 import 说明符，比对清单里的 permissions，未声明就拒绝加载。
+//
+// 挡得住：import fs from 'node:fs'、await import('child_process')、
+//         export ... from 'node:net' 这类直接写法。
+// 挡不住：await import('child' + 'process')、process.binding()、eval 拼字符串。
+// 定位是「显式声明 + 防误用」，不是防蓄意攻击。README 里写明，别让人误解。
+const CAPABILITY_BY_MODULE = new Map([
+  ['node:child_process', 'proc.spawn'],
+  ['child_process', 'proc.spawn'],
+  ['node:worker_threads', 'proc.worker'],
+  ['worker_threads', 'proc.worker'],
+  ['node:vm', 'code.vm'],
+  ['vm', 'code.vm'],
+  ['node:net', 'net.socket'],
+  ['net', 'net.socket'],
+  ['node:dgram', 'net.udp'],
+  ['dgram', 'net.udp'],
+  ['node:http', 'net.http'],
+  ['http', 'net.http'],
+  ['node:https', 'net.http'],
+  ['https', 'net.http'],
+]);
+
+const FS_MODULES = new Set(['node:fs', 'fs', 'node:fs/promises', 'fs/promises']);
+// 只用来判断"这个文件有没有写盘动作"，命中就把 fs.write 也算进需求里。
+const FS_WRITE_HINT = /\b(writeFileSync|writeFile|appendFileSync|appendFile|unlinkSync|unlink|rmSync|rmdirSync|mkdirSync|mkdir|renameSync|rename|copyFileSync|copyFile|chmodSync|chmod|createWriteStream|truncateSync|truncate)\s*\(/;
+
+/**
+ * 从源码里提取它需要的能力。导出是为了能单独测。
+ * @param {string} source
+ * @returns {Set<string>}
+ */
+export function scanCapabilities(source) {
+  const found = new Set();
+  const specs = [];
+  const collect = (re) => { for (const m of source.matchAll(re)) specs.push(m[1]); };
+  collect(/\bimport\s+(?:[^'"]*?\bfrom\s*)?['"]([^'"]+)['"]/g);   // import x from 'm'
+  collect(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g);              // await import('m')
+  collect(/\bexport\s+[^'"]*?\bfrom\s*['"]([^'"]+)['"]/g);        // export ... from 'm'
+
+  for (const spec of specs) {
+    const cap = CAPABILITY_BY_MODULE.get(spec);
+    if (cap) found.add(cap);
+    if (FS_MODULES.has(spec)) {
+      found.add('fs.read');
+      if (FS_WRITE_HINT.test(source)) found.add('fs.write');
+    }
+  }
+  if (/\bprocess\.binding\s*\(/.test(source)) found.add('proc.binding');
+  if (/\bnew\s+Function\s*\(|\beval\s*\(/.test(source)) found.add('code.eval');
+  return found;
+}
+
+/** 读文件 → 审计 → 返回未声明的能力。 */
+function auditFile(file, declared) {
+  let source;
+  try {
+    source = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    return { error: `无法读取源码做能力审计：${error.message}`, undeclared: [] };
+  }
+  const needed = scanCapabilities(source);
+  return { error: null, undeclared: [...needed].filter((cap) => !declared.has(cap)) };
+}
+
 export async function loadComposition({ appRoot, log = console.log, warn = null } = {}) {
   const report = { components: {}, layers: [], errors: [] };
   if (typeof appRoot !== 'string' || !appRoot) return report;
@@ -158,6 +228,21 @@ export async function loadComposition({ appRoot, log = console.log, warn = null 
       }
       if (!MODULE_EXT.has(path.extname(file).toLowerCase())) {
         report.errors.push({ dir, key, error: `模块必须是 .js/.mjs/.cjs：${spec.module}` });
+        continue;
+      }
+      // 能力审计：未声明的敏感模块直接拒绝加载，不做"警告后放行"。
+      const declared = new Set(Array.isArray(manifest.permissions) ? manifest.permissions : []);
+      const audit = auditFile(file, declared);
+      if (audit.error) {
+        report.errors.push({ dir, key, error: audit.error });
+        continue;
+      }
+      if (audit.undeclared.length) {
+        report.errors.push({
+          dir,
+          key,
+          error: `未声明能力：${audit.undeclared.join('、')} —— 在 composition.json 的 permissions 里声明后才允许加载`,
+        });
         continue;
       }
       try {
