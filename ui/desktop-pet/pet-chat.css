@@ -1,0 +1,135 @@
+/* 桌宠「直接对话」窗口：420×540 透明圆角卡片。
+   视觉与桌宠气泡 / 用量卡片 / 开发工单窗同一套（白底、圆角、淡阴影），
+   消息区参照 QQ 单聊：自己靠右（实心蓝），对方靠左（带小头像的浅底气泡），
+   表情包按原图比例贴在气泡外侧，不裁切、不加背景。 */
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
+body { font: 13px/1.55 "Microsoft YaHei", "Segoe UI", sans-serif; color: #1a2a3a; }
+
+.panel {
+  position: absolute; inset: 4px; display: flex; flex-direction: column;
+  border-radius: 16px; overflow: hidden;
+  background: rgba(255, 255, 255, .97);
+  box-shadow: 0 10px 28px rgba(16, 34, 51, .22), 0 0 0 1px rgba(120, 150, 175, .18);
+}
+
+.hd { display: flex; align-items: center; gap: 7px; padding: 10px 12px; border-bottom: 1px solid #e8eff5; -webkit-app-region: drag; }
+.hd button { -webkit-app-region: no-drag; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: #b7c6d2; flex: 0 0 auto; }
+.dot.on { background: #1d9e75; }
+.dot.busy { background: #ef9f27; }
+.hd-title { font-size: 13px; font-weight: 600; }
+/* 会话标签：明说这条会话只属于主人，别让用户以为在某个群里 */
+.hd-tag {
+  flex: 0 0 auto; padding: 1px 7px; border-radius: 999px;
+  background: #eef6ff; border: 1px solid #cfe4fb; color: #185fa5; font-size: 10.5px;
+}
+.hd-status { font-size: 11px; color: #7b93a6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ghost {
+  margin-left: auto; padding: 3px 8px; border: 1px solid #d6e3ee; border-radius: 8px;
+  background: #fff; color: #365e7e; font: 11px/1.4 inherit; cursor: pointer;
+}
+.ghost:hover { background: #f2f7fb; }
+.x {
+  width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%;
+  background: transparent; color: #7b93a6; font: 17px/1 "Segoe UI", sans-serif; cursor: pointer;
+}
+.x:hover { background: #eef4f9; color: #365e7e; }
+
+.list {
+  flex: 1 1 auto; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px;
+  scroll-behavior: smooth;
+}
+.list::-webkit-scrollbar { width: 8px; }
+.list::-webkit-scrollbar-thumb { background: #d6e3ee; border-radius: 8px; }
+
+.empty { margin: auto 10px; text-align: center; color: #7b93a6; }
+.empty-title { margin: 0 0 6px; font-size: 13px; color: #365e7e; }
+.empty-desc { margin: 0; font-size: 11px; line-height: 1.75; }
+
+/* ── 一条消息 ── */
+.row { display: flex; align-items: flex-end; gap: 6px; max-width: 100%; }
+.row.me { justify-content: flex-end; }
+.ava {
+  flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: #e6f1fb; color: #185fa5; font-size: 11px; font-weight: 600;
+  align-self: flex-start; margin-top: 2px;
+}
+.stack { display: flex; flex-direction: column; gap: 5px; max-width: calc(100% - 30px); min-width: 0; }
+.row.me .stack { align-items: flex-end; }
+
+.bubble {
+  padding: 7px 10px; border-radius: 12px; font-size: 12.5px;
+  white-space: pre-wrap; word-break: break-word;
+}
+.bubble.them { background: #f4f8fb; color: #22384a; border-bottom-left-radius: 4px; }
+.bubble.me { background: #185fa5; color: #fff; border-bottom-right-radius: 4px; }
+
+/* 自己这句话带的附件：文件名小条，跟在气泡下面 */
+.att { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
+.att-chip {
+  padding: 2px 7px; border: 1px solid #cfe4fb; border-radius: 7px;
+  background: #f4f9ff; font-size: 10.5px; color: #185fa5;
+}
+
+/* 这条会话里的其他人（理论上只有主人能进来，留着以防真有人从别处搭话） */
+.who { display: block; margin-bottom: 2px; font-size: 10px; color: #8aa0b2; }
+
+.sticker {
+  display: block; max-width: 132px; max-height: 132px; border-radius: 10px;
+  image-rendering: auto; background: transparent;
+}
+.sticker.missing {
+  width: 96px; height: 96px; display: flex; align-items: center; justify-content: center;
+  border: 1px dashed #d6e3ee; color: #9aaebd; font-size: 11px; background: #fbfdff;
+}
+
+/* 正在输入 */
+.typing { display: inline-flex; gap: 3px; align-items: center; padding: 9px 11px; }
+.typing i { width: 5px; height: 5px; border-radius: 50%; background: #a8bccd; animation: blink 1.2s infinite ease-in-out; }
+.typing i:nth-child(2) { animation-delay: .18s; }
+.typing i:nth-child(3) { animation-delay: .36s; }
+@keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+
+.tip { align-self: center; font-size: 10.5px; color: #9aaebd; }
+.tip.err { color: #a32d2d; }
+
+/* ── 附件条（加号选的 / 拖进来的文件）── */
+.attach { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px 0; border-top: 1px solid #f0f5f9; }
+.attach[hidden] { display: none; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  padding: 3px 6px 3px 8px; border: 1px solid #d6e3ee; border-radius: 8px;
+  background: #fbfdff; font-size: 11px; color: #365e7e;
+}
+.chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
+.chip-size { color: #9aaebd; font-size: 10px; white-space: nowrap; }
+.chip-x {
+  width: 15px; height: 15px; padding: 0; border: 0; border-radius: 50%;
+  background: transparent; color: #9aaebd; font: 12px/1 "Segoe UI", sans-serif; cursor: pointer; flex: 0 0 auto;
+}
+.chip-x:hover { background: #eef4f9; color: #a32d2d; }
+
+/* 拖拽悬停：整张卡片给一个明显的"可以松手"信号 */
+.panel.is-drop { outline: 2px dashed #85b7eb; outline-offset: -4px; }
+
+.composer { display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px 12px; border-top: 1px solid #e8eff5; background: #fbfdff; }
+.plus {
+  flex: 0 0 auto; width: 34px; height: 34px; border: 1px solid #d6e3ee; border-radius: 10px;
+  background: #fff; color: #365e7e; font: 18px/1 "Segoe UI", sans-serif; cursor: pointer;
+}
+.plus:hover { background: #f2f7fb; }
+.plus:disabled { background: #f4f6f8; color: #b7c6d2; cursor: default; }
+.input {
+  flex: 1 1 auto; min-height: 34px; max-height: 96px; resize: none; padding: 7px 10px;
+  border: 1px solid #d6e3ee; border-radius: 10px; background: #fff; color: #1a2a3a;
+  font: 12.5px/1.5 inherit; outline: none;
+}
+.input:focus { border-color: #85b7eb; box-shadow: 0 0 0 3px rgba(133, 183, 235, .18); }
+.send {
+  flex: 0 0 auto; height: 34px; padding: 0 15px; border: 0; border-radius: 10px;
+  background: #185fa5; color: #fff; font: 13px/1 inherit; cursor: pointer;
+}
+.send:hover { background: #134e87; }
+.send:disabled { background: #b7c6d2; cursor: default; }

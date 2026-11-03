@@ -1,0 +1,40 @@
+{
+ "lastRunAt": 1793061358292,
+ "lastReport": {
+  "at": 1793061358292,
+  "ms": 12,
+  "counts": {
+   "critical": 0,
+   "warning": 0,
+   "info": 0
+  },
+  "total": 0,
+  "issues": [],
+  "extension": {
+   "total": 25,
+   "enabledByDefault": 9
+  },
+  "load": {
+   "issues": []
+  },
+  "runtime": {
+   "issues": [],
+   "scanned": 0,
+   "note": "没有会话留档"
+  },
+  "cache": {
+   "issues": [],
+   "drift": 0
+  },
+  "cacheRounds": {
+   "rounds": [],
+   "totals": {},
+   "scanned": 0,
+   "missing": true
+  },
+  "project": null,
+  "errors": [],
+  "verdict": "ok",
+  "acked": []
+ }
+}

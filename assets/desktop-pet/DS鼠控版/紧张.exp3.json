@@ -1,0 +1,51 @@
+{
+ "Type": "Live2D Expression",
+ "IsModelCustomizationExpression": false,
+ "Parameters": [
+  {
+   "Id": "ParamCheek19",
+   "Value": 1.0,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamBrowLY",
+   "Value": 0.45,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamBrowRY",
+   "Value": 0.45,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamBrowLX",
+   "Value": 0.35,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamBrowRX",
+   "Value": 0.35,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamMouthForm",
+   "Value": -1.1,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamEyeBallX",
+   "Value": 0.55,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamEyeLOpen",
+   "Value": -0.1,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamEyeROpen",
+   "Value": -0.1,
+   "Blend": "Add"
+  }
+ ]
+}

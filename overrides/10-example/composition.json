@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "id": "example",
+  "order": 10,
+  "enabled": false,
+  "components": {
+    "core.prompt.system": { "module": "./system-prompt.mjs", "export": "systemPrompt" }
+  }
+}

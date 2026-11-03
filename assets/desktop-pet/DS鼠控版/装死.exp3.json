@@ -1,0 +1,46 @@
+{
+ "Type": "Live2D Expression",
+ "IsModelCustomizationExpression": false,
+ "Parameters": [
+  {
+   "Id": "ParamCheek18",
+   "Value": 1.0,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamCheek22",
+   "Value": 1.0,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamEyeLOpen",
+   "Value": -1.0,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamEyeROpen",
+   "Value": -1.0,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamMouthOpenY",
+   "Value": 0.18,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamMouthForm",
+   "Value": -0.2,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamAngleZ",
+   "Value": -4.0,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamAngleY",
+   "Value": -3.0,
+   "Blend": "Add"
+  }
+ ]
+}

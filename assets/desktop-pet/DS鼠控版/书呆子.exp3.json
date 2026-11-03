@@ -1,0 +1,31 @@
+{
+ "Type": "Live2D Expression",
+ "IsModelCustomizationExpression": false,
+ "Parameters": [
+  {
+   "Id": "ParamCheek70",
+   "Value": 1.0,
+   "Blend": "Add"
+  },
+  {
+   "Id": "Paramhh2",
+   "Value": 0.3,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamMouthForm",
+   "Value": 0.5,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamBrowLY",
+   "Value": 0.2,
+   "Blend": "Add"
+  },
+  {
+   "Id": "ParamBrowRY",
+   "Value": 0.2,
+   "Blend": "Add"
+  }
+ ]
+}
