@@ -125,7 +125,7 @@ function compareSemver(a, b) {
    防止监听器链式递归（见 createApp 内的递归护栏注释）。 */
 const appLogFns = new WeakSet();
 
-export function createApp({ log = console.log, desktopPetHost = null, components = {} } = {}) {
+export function createApp({ log = console.log, desktopPetHost = null, components = {}, composition = null } = {}) {
   // 启动组合注入（0.4.9.3）：这两项必须在读配置之前生效，所以放在最前面。
   // 不传时是 no-op，行为与之前完全一致。
   if (typeof components['runtime.config'] === 'function') {
@@ -1904,8 +1904,9 @@ export function createApp({ log = console.log, desktopPetHost = null, components
     protocolLauncher,
     // 协议端「一键接入」（连接页注入向导）
     protocolOnboard,
-    // 启动组合（0.4.9.3）：console.routes 可追加/覆盖路由表
-    components
+    // 启动组合（0.4.9.3）：console.routes 可追加/覆盖路由表；composition 供 /api/composition 查询
+    components,
+    composition
   });
 
   async function handleHttp(req, res) {

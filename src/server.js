@@ -16,9 +16,11 @@ process.on('uncaughtException', (error) => {
 // 层清单非法时明确失败，不静默降级到出厂实现。
 const APP_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 let components = {};
+let compositionReport = null;
 try {
   const composition = await loadComposition({ appRoot: APP_ROOT });
   components = composition.components;
+  compositionReport = composition;
   if (composition.errors.length) {
     console.error(`[启动组合] ${composition.errors.length} 个层/组件加载失败，已跳过：`);
     for (const item of composition.errors) {
@@ -30,7 +32,7 @@ try {
   process.exit(1);
 }
 
-const app = createApp({ components });
+const app = createApp({ components, composition: compositionReport });
 app.start().catch((error) => {
   console.error('[启动失败]', error);
   process.exit(1);
