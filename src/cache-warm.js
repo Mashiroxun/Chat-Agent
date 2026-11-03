@@ -403,6 +403,36 @@ export function noteShapeChange({ systemPrompt, tools, log = () => {}, force = f
 const pendingShapeWarms = new Map();
 let shapeWarmTimer = null;
 
+/**
+ * 清空全部预热状态（测试用；也用于「切换模型 / 改了系统提示词后重新预热」）。
+ *
+ * 之前这五个 Map/Set 散在模块顶部，没有任何重置入口 —— 测试之间会互相污染
+ * （上一个用例预热过的 shape，下一个用例直接命中缓存，行为看起来"不对"）。
+ */
+export function resetWarmState() {
+  warmedShapeByShape.clear();
+  tierByShape.clear();
+  earlyWarmDone.clear();
+  lastWarmOkByShape.clear();
+  pendingShapeWarms.clear();
+  if (shapeWarmTimer) {
+    clearTimeout(shapeWarmTimer);
+    shapeWarmTimer = null;
+  }
+}
+
+/** 预热状态的只读快照（诊断用：看现在缓存了多少形状）。 */
+export function warmStateSnapshot() {
+  return {
+    warmed: warmedShapeByShape.size,
+    tiers: tierByShape.size,
+    earlyDone: earlyWarmDone.size,
+    lastOk: lastWarmOkByShape.size,
+    pending: pendingShapeWarms.size,
+    timerActive: shapeWarmTimer !== null,
+  };
+}
+
 /** 3 秒到点：把这一批形状**各自**暖一次（串行，避免并发把服务端限额打满）。 */
 async function flushShapeWarms() {
   shapeWarmTimer = null;
