@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>0.4.9.2 之后还能改什么 · 改造机会清单</title>
+<style>
+  :root{
+    --bg:#0d1014; --bg2:#141920; --bg3:#1b222b; --line:#252d38;
+    --txt:#e6edf5; --dim:#9aa7b6; --dim2:#6b7887;
+    --acc:#4ea1ff; --acc2:#7c5cff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:15px/1.75 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1100px;margin:0 auto;padding:56px 32px 96px}
+  header{border-bottom:1px solid var(--line);padding-bottom:30px;margin-bottom:40px}
+  .kicker{font-size:12px;letter-spacing:.18em;color:var(--acc);text-transform:uppercase;margin-bottom:14px;font-weight:600}
+  h1{font-size:32px;line-height:1.28;margin:0 0 16px;font-weight:700;letter-spacing:-.02em}
+  .sub{color:var(--dim);font-size:15px;max-width:790px}
+  h2{font-size:21px;margin:58px 0 8px;font-weight:650;display:flex;align-items:center;gap:12px}
+  h2 .n{font-size:12px;color:var(--acc);background:rgba(78,161,255,.1);border:1px solid rgba(78,161,255,.28);
+    border-radius:6px;padding:2px 8px;font-weight:600;letter-spacing:.06em}
+  h3{font-size:15.5px;margin:30px 0 8px;font-weight:650;color:#cfdae8}
+  p{color:#c4cfdc;margin:12px 0}
+  .lead{color:var(--dim);font-size:14px;margin-bottom:22px;padding-left:14px;border-left:2px solid var(--line)}
+  strong{color:#fff;font-weight:650}
+  code{background:var(--bg3);padding:1.5px 6px;border-radius:4px;font-size:12.5px;
+    font-family:"Cascadia Code",Consolas,monospace;color:#8fd0ff;border:1px solid var(--line)}
+  pre{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+    overflow-x:auto;font-size:12.5px;line-height:1.7;margin:16px 0}
+  pre code{background:none;border:none;padding:0;color:#b9c6d4}
+  pre .c{color:#5f7386} pre .k{color:#c792ea} pre .s{color:#a5d6a7}
+
+  .verdict{background:linear-gradient(135deg,rgba(78,161,255,.08),rgba(124,92,255,.04));
+    border:1px solid rgba(78,161,255,.3);border-radius:14px;padding:22px 24px;margin:26px 0}
+  .verdict .big{font-size:19px;font-weight:700;color:#fff;margin-bottom:10px}
+  .verdict p{margin:8px 0;font-size:14px}
+
+  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:26px 0}
+  .card{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:17px 18px}
+  .card .v{font-size:26px;font-weight:700;letter-spacing:-.03em;line-height:1;font-variant-numeric:tabular-nums}
+  .card .k{font-size:12.5px;color:#fff;margin:9px 0 4px;font-weight:600}
+  .card .d{font-size:12px;color:var(--dim2);line-height:1.55}
+  .card.r .v{color:var(--bad)} .card.y .v{color:var(--warn)} .card.g .v{color:var(--ok)} .card.b .v{color:var(--acc)}
+
+  table{width:100%;border-collapse:collapse;margin:18px 0;font-size:13.2px}
+  th{text-align:left;padding:10px 12px;background:var(--bg3);color:var(--dim);
+    font-weight:600;font-size:12px;letter-spacing:.05em;border-bottom:1px solid var(--line)}
+  td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top;color:#c4cfdc}
+  tr:hover td{background:rgba(255,255,255,.018)}
+  td.num{font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--dim2);font-size:12.5px;text-align:center}
+  .tag{display:inline-block;font-size:11.5px;padding:1.5px 8px;border-radius:20px;font-weight:600;
+    white-space:nowrap;border:1px solid transparent}
+  .t-ok{color:var(--ok);background:rgba(63,185,80,.1);border-color:rgba(63,185,80,.3)}
+  .t-part{color:var(--warn);background:rgba(210,153,34,.1);border-color:rgba(210,153,34,.3)}
+  .t-bad{color:var(--bad);background:rgba(248,81,73,.1);border-color:rgba(248,81,73,.3)}
+
+  .item{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0}
+  .item .hd{display:flex;align-items:center;gap:12px;margin-bottom:10px;flex-wrap:wrap}
+  .item .rk{width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+    font-size:12.5px;font-weight:700;flex:none;background:rgba(78,161,255,.13);
+    border:1px solid rgba(78,161,255,.32);color:var(--acc)}
+  .item h4{margin:0;font-size:15px;color:#fff}
+  .item .meta{margin-left:auto;display:flex;gap:8px;align-items:center;font-size:12px;color:var(--dim2)}
+  .item p{margin:8px 0;font-size:13.5px}
+  .item .why{background:var(--bg3);border-radius:7px;padding:8px 12px;margin-top:10px;font-size:12.8px;color:var(--dim)}
+
+  ul{padding-left:20px;color:#c4cfdc}
+  li{margin:6px 0}
+  li::marker{color:var(--acc)}
+  .foot{margin-top:68px;padding-top:20px;border-top:1px solid var(--line);font-size:12.5px;color:var(--dim2)}
+  @media(max-width:860px){.cards{grid-template-columns:repeat(2,1fr)}.wrap{padding:32px 18px}h1{font-size:25px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">Next Steps · 0.4.9.2 之后</div>
+  <h1>还能改什么：一份基于实测的清单</h1>
+  <p class="sub">
+    先说结论：<strong>继续"开放更多组件"的性价比已经很低了</strong>。
+    <code>getConfig</code> 被 242 处调用、<code>skillManager</code> 232 处、<code>logger</code> 186 处——
+    把这些做成可替换，要动上千行调用点，而收益只是"理论上能换"。
+    真正值得做的是另外三件事。
+  </p>
+</header>
+
+<div class="cards">
+  <div class="card r"><div class="v">20</div><div class="k">.bak 备份文件</div><div class="d">说明没有版本管理，这是最大的技术债</div></div>
+  <div class="card y"><div class="v">177</div><div class="k">路由条目挤在一个文件</div><div class="d">routes.js 5,286 行，纯数组，拆分很安全</div></div>
+  <div class="card b"><div class="v">6,442</div><div class="k">最大单文件</div><div class="d">ui/app/13-doctor.js</div></div>
+  <div class="card g"><div class="v">31 / 68</div><div class="k">测试文件 / 源码模块</div><div class="d">覆盖不均，核心链路有、边角没有</div></div>
+</div>
+
+<div class="verdict">
+  <div class="big">三件最值得做的事，按顺序</div>
+  <p><strong>① 上 git</strong> —— 有 20 个 <code>.bak</code> 就说明每次改动都在裸奔。这一件事的收益超过后面所有重构。</p>
+  <p><strong>② 拆 routes.js</strong> —— 177 条路由返回的是纯数组 <code>[{method, pattern, handler}]</code>，按域拆成 15 个文件只是物理移动，逻辑零改动。</p>
+  <p><strong>③ 把 app.js 里的功能块外提</strong> —— 那 53 个内部函数里，qq-portable 一整套（约 300 行）跟主流程没关系，早该独立。</p>
+</div>
+
+<h2><span class="n">01</span>为什么不建议继续开放组件</h2>
+<p class="lead">实测的调用点数量，决定了改造成本。</p>
+
+<table>
+  <tr><th>全局依赖</th><th>引用文件</th><th>调用次数</th><th>做成组件的成本</th></tr>
+  <tr><td><code>getConfig</code> / <code>updateConfig</code></td><td class="num">24</td><td class="num">317</td><td><span class="tag t-bad">要改上千处</span></td></tr>
+  <tr><td><code>skillManager</code></td><td class="num">15</td><td class="num">232</td><td><span class="tag t-bad">要改上千处</span></td></tr>
+  <tr><td><code>logger</code></td><td class="num">21</td><td class="num">186</td><td><span class="tag t-bad">要改上千处</span></td></tr>
+  <tr><td><code>DATA_DIR</code></td><td class="num">26</td><td class="num">116</td><td><span class="tag t-bad">要改上千处</span></td></tr>
+  <tr><td><code>safeFetch</code></td><td class="num">2</td><td class="num">16</td><td><span class="tag t-ok">可做</span></td></tr>
+</table>
+
+<p>这些不是"耦合不好"，而是<strong>它们本来就是单例语义</strong>——配置、日志、插件管理器、数据根目录，整个进程只有一份。硬做成可替换，等于给每个调用点加一层间接，换来一个<strong>你几乎不会去替换</strong>的能力。</p>
+
+<div class="verdict" style="background:linear-gradient(135deg,rgba(63,185,80,.07),rgba(78,161,255,.04));border-color:rgba(63,185,80,.3)">
+  <p style="margin:0"><strong>判断标准很简单：</strong>你会不会真的去换它？<br>
+  提示词、上下文选取、模型调用——会换，所以 0.4.9.2 做了。<br>
+  日志实现、配置读取、插件加载器——不会换，所以别做。</p>
+</div>
+
+<h2><span class="n">02</span>机会一：拆 routes.js（性价比最高）</h2>
+
+<div class="item">
+  <div class="hd">
+    <div class="rk">1</div>
+    <h4>5,286 行 / 177 条路由，按域拆成 15 个文件</h4>
+    <div class="meta"><span class="tag t-ok">低风险</span><span class="tag t-ok">高收益</span></div>
+  </div>
+  <p>关键发现：<code>createRoutes(deps)</code> 返回的是一个<strong>纯数据数组</strong>，不是 if-else 链：</p>
+  <pre><code><span class="c">// src/routes.js 末尾</span>
+<span class="k">return</span> [
+  { method: <span class="s">'POST'</span>, pattern: <span class="s">'/api/wallpaper/import'</span>, handler: <span class="k">async</span> ({ req, res, url, json }) =&gt; { ... } },
+  <span class="c">// ... 共 177 条</span>
+];</code></pre>
+  <p>这意味着拆分<strong>只是把数组元素搬到别的文件</strong>，没有任何控制流改动：</p>
+  <pre><code><span class="c">// src/routes/forge.js</span>
+<span class="k">export const</span> forgeRoutes = [ <span class="c">/* 15 条 */</span> ];
+
+<span class="c">// src/routes/index.js</span>
+<span class="k">import</span> { forgeRoutes } <span class="k">from</span> <span class="s">'./forge.js'</span>;
+<span class="k">import</span> { fixRoutes }   <span class="k">from</span> <span class="s">'./fix.js'</span>;
+<span class="k">export function</span> createRoutes(deps) {
+  <span class="k">const</span> ctx = makeRouteContext(deps);   <span class="c">// json / bodyOf / sse 等共用工具</span>
+  <span class="k">return</span> [ ...forgeRoutes(ctx), ...fixRoutes(ctx), <span class="c">/* ... */</span> ];
+}</code></pre>
+
+  <p>按域的实际条目数：</p>
+  <table>
+    <tr><th>域</th><th>条目</th><th>域</th><th>条目</th><th>域</th><th>条目</th></tr>
+    <tr><td><code>/api/forge</code></td><td class="num">15</td><td><code>/api/providers</code></td><td class="num">12</td><td><code>/api/bundle</code></td><td class="num">8</td></tr>
+    <tr><td><code>/api/fix</code></td><td class="num">15</td><td><code>/api/protocol</code></td><td class="num">12</td><td><code>/api/market</code></td><td class="num">7</td></tr>
+    <tr><td><code>/api/dev</code></td><td class="num">12</td><td><code>/api/doctor</code></td><td class="num">10</td><td><code>/api/skills</code></td><td class="num">6</td></tr>
+  </table>
+
+  <div class="why"><strong>顺带拿到的好处：</strong>拆完之后，<code>console.routes</code> 就成了天然的可替换点——覆盖层可以追加自己的路由表，或者替换某一个域（比如把 <code>/api/providers</code> 整套换掉）。这是 0.5 里 <code>console.routes</code> 的做法，洛版现在做不了。</div>
+</div>
+
+<h2><span class="n">03</span>机会二：把 app.js 里的功能块外提</h2>
+
+<div class="item">
+  <div class="hd">
+    <div class="rk">2</div>
+    <h4>qq-portable 一整套（约 300 行）跟主流程无关</h4>
+    <div class="meta"><span class="tag t-ok">低风险</span><span class="tag t-part">中收益</span></div>
+  </div>
+  <p><code>createApp</code> 里有 53 个内部函数，其中这一组是完整独立的子系统：</p>
+  <table>
+    <tr><th>函数</th><th>行数</th><th>作用</th></tr>
+    <tr><td><code>qqPortableDir</code> / <code>qqPortableDataDir</code> / <code>qqPortableExe</code></td><td class="num">12</td><td>路径推导</td></tr>
+    <tr><td><code>qqPortableReady</code></td><td class="num">42</td><td>就绪探测</td></tr>
+    <tr><td><code>listQqProcesses</code> / <code>__listQqProcessesOnce</code> / <code>qqPortableRunningPid</code></td><td class="num">49+</td><td>进程枚举</td></tr>
+    <tr><td><code>launchPortableQQ</code> / <code>stopPortableQQ</code> / <code>qqPortableStatus</code></td><td class="num">约 150</td><td>启停与状态</td></tr>
+    <tr><td><code>pushQqLog</code> / <code>isPortOpen</code></td><td class="num">52</td><td>日志与端口</td></tr>
+  </table>
+  <p>它们只依赖 <code>log</code> 和几个路径常量，<strong>不碰 store / memory / orchestrator</strong>。抽成 <code>src/qq-portable.js</code> 之后，<code>createApp</code> 少 300 行，而且这套进程管理能被单独测试（现在一个测试都没有）。</p>
+  <div class="why"><strong>同类候选：</strong><code>chatApi</code>（76 行，桌宠私聊）、<code>getUsageToday</code>（25 行）、<code>devApi</code>（20 行）。加起来还能再瘦 120 行。<br>
+  <strong>不要动：</strong><code>handleOneBotEvent</code>——它跟协议端、SSE、桌宠事件转发缠在一起，是真正的中枢。</div>
+</div>
+
+<h2><span class="n">04</span>机会三：结构性收尾</h2>
+
+<div class="item">
+  <div class="hd">
+    <div class="rk">3</div>
+    <h4>20 个 .bak 文件 —— 这是最大的技术债</h4>
+    <div class="meta"><span class="tag t-ok">零风险</span><span class="tag t-bad">但最重要</span></div>
+  </div>
+  <p><code>routes.js</code> 有 4 个备份、<code>03-connection.js</code> 有 3 个、<code>style.css</code> 有 3 个……这说明每次改动前的"保险"是<strong>手工复制文件</strong>。</p>
+  <p>实测差异：<code>routes.js.bak-20261028-fixstatus</code> 与当前只差 24 行，<code>.bak-20261027-adaptprogress</code> 差 379 行——<strong>这些都是历史快照，没有未合入的改动</strong>，可以安全清理。</p>
+  <p>但比清理更重要的是：<strong>初始化 git 仓库</strong>。</p>
+  <pre><code>cd G:\QQagent\resources\app
+git init
+printf 'node_modules/\ndata/\n*.bak*\n' &gt; .gitignore
+git add -A &amp;&amp; git commit -m <span class="s">"0.4.9.2 启动组合改造基线"</span></code></pre>
+  <div class="why">有了 git，以后每次改造都是一个 commit，出问题 <code>git checkout</code> 就回来——<strong>再也不用 .bak</strong>。而且 0.4.9.2 引入的 <code>overrides/</code> 让实验性改动可以直接放层里，连源码都不用碰。这两件事配起来，才是"可持续维护"。</div>
+</div>
+
+<div class="item">
+  <div class="hd">
+    <div class="rk">4</div>
+    <h4>补一个诊断接口：查"这个行为是谁提供的"</h4>
+    <div class="meta"><span class="tag t-ok">纯新增</span><span class="tag t-part">中收益</span></div>
+  </div>
+  <p>现在有 <code>scripts/check-composition.mjs</code> 做启动前预检，但没有<strong>运行时</strong>的归属查询。层一多就会问："这条提示词是出厂实现还是我的层在起作用？"</p>
+  <p>加一个 <code>GET /api/composition</code>，返回当前进程实际绑定的组件来源（不返回模块路径、不返回函数体）：</p>
+  <pre><code>{
+  "layers": [{ "id": "example", "order": 10, "components": ["core.prompt.system"] }],
+  "components": {
+    "core.prompt.system": { "owner": "example", "shadowed": ["defaults"] }
+  }
+}</code></pre>
+  <div class="why">约 60 行，纯新增，不影响任何现有路由。对应 0.5 里 <code>GET /api/composition</code> 的角色。</div>
+</div>
+
+<div class="item">
+  <div class="hd">
+    <div class="rk">5</div>
+    <h4>测试覆盖补缺：68 个模块只有 31 个测试文件</h4>
+    <div class="meta"><span class="tag t-part">持续投入</span><span class="tag t-part">长期收益</span></div>
+  </div>
+  <p>已有测试集中在：消息规范化、发送守卫、缓存归因、禁言复核、协议启动、桌宠窗口、表情库、壁纸模块——<strong>都是踩过坑的地方</strong>，这个分布其实很合理。</p>
+  <p>缺口在<strong>本轮改造涉及但没测的</strong>：<code>src/composition/loader.js</code>（清单校验、路径穿越拦截）、<code>factories.js</code>（键名校验）。这两个是新增代码，建议补 <code>tests/composition-loader.test.mjs</code>——约 8 个用例，覆盖：非法版本 / 重复 id / 路径穿越 / 符号链接 / 非函数导出 / enabled:false / order 排序 / 覆盖优先级。</p>
+  <div class="why">新增代码没有测试，等于把风险留给下次改动。这是本轮改造唯一的"未收尾"。</div>
+</div>
+
+<h2><span class="n">05</span>不建议做的</h2>
+<table>
+  <tr><th>候选</th><th>为什么不做</th></tr>
+  <tr><td>把 <code>logger</code> / <code>getConfig</code> / <code>skillManager</code> 做成组件</td><td>186–317 处调用点，换来一个不会用的能力</td></tr>
+  <tr><td>拆 <code>ui/app/13-doctor.js</code>（6,442 行）</td><td>UI 是 20 个全局脚本共享作用域，拆开要处理跨脚本的隐式依赖，收益只有"文件变小"</td></tr>
+  <tr><td>换掉 <code>core.orchestrator</code> 的实现</td><td>3,719 行里的实战修复全在内部，换掉就是清零重来</td></tr>
+  <tr><td>补 <code>console.panels</code> / <code>ui.panels</code></td><td>要重构 2,151 行的 <code>14-chrome.js</code>，而你明确要保住现有 UI</td></tr>
+  <tr><td>给 16 个模块级 Map 都加上限</td><td>抽查发现 <code>cache-warm</code> 已经有 <code>SHAPE_MAP_MAX</code> 和 64 条淘汰，不是无上限。要动得逐个核实，收益不明</td></tr>
+</table>
+
+<h2><span class="n">06</span>如果只做一件事</h2>
+
+<div class="verdict">
+  <div class="big">上 git</div>
+  <p>不是因为代码问题，是因为<strong>你现在的改动方式没有退路</strong>。20 个 <code>.bak</code> 文件就是证据——每次动 <code>routes.js</code> 之前先复制一份，改坏了再拷回来。</p>
+  <p>有了 git 之后：<code>routes.js</code> 那 5,286 行拆不拆、拆错了怎么办，都不再是风险问题，只是 <code>git checkout</code> 的成本。<strong>所有重构的前提，都是先有一个能退回去的地方。</strong></p>
+  <p>而 0.4.9.2 的 <code>overrides/</code> 已经把"实验性改动"这条路铺好了——想试什么新规则、新提示词、新发送策略，写个层丢进去，删目录就恢复。<strong>这两件事配起来，你才真正不用再留 .bak。</strong></p>
+</div>
+
+<div class="foot">
+  实测来源：<code>src/routes.js</code>（177 个 <code>pattern:</code> 条目，返回纯数组）、<code>src/app.js</code>（53 个内部函数，qq-portable 组约 300 行）、
+  <code>src/cache-warm.js</code>（<code>SHAPE_MAP_MAX</code> / <code>earlyWarmDone.size &gt; 64</code> 已有淘汰）、
+  全局依赖引用数为 <code>grep -rl</code> / <code>grep -rho</code> 实测、<code>.bak</code> 差异为 <code>diff | grep -c</code> 实测。
+</div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QQ Agent v0486 全功能模块可用性验证报告 · 2026-10-21</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --ink: #1f2329; --ink2: #4e5560; --line: #e3e6eb;
+    --ok: #14804a; --ok-bg: #e8f6ef; --warn: #b25e09; --warn-bg: #fdf3e3;
+    --bad: #c0392b; --bad-bg: #fdecea; --na: #6b7280; --na-bg: #f0f1f4;
+    --p0: #c0392b; --p1: #b25e09; --p2: #8a6d1a;
+    --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.65 "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 60px; }
+  header h1 { font-size: 22px; margin: 0 0 6px; }
+  header .meta { color: var(--ink2); font-size: 13px; }
+  header .meta code { font-family: var(--mono); background: #eef1f5; padding: 1px 5px; border-radius: 4px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 18px 0 8px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card .n { font-size: 26px; font-weight: 700; }
+  .card .l { color: var(--ink2); font-size: 12px; margin-top: 2px; }
+  .card.ok .n { color: var(--ok); } .card.bad .n { color: var(--bad); } .card.warn .n { color: var(--warn); } .card.na .n { color: var(--na); }
+  h2 { font-size: 17px; margin: 30px 0 10px; padding-left: 10px; border-left: 4px solid #3b6fd4; }
+  h3 { font-size: 15px; margin: 20px 0 8px; }
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; font-size: 12.5px; }
+  th { background: #eef1f6; text-align: left; padding: 8px 9px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 7px 9px; border-bottom: 1px solid #eef0f4; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+  .t-ok { background: var(--ok-bg); color: var(--ok); }
+  .t-bad { background: var(--bad-bg); color: var(--bad); }
+  .t-warn { background: var(--warn-bg); color: var(--warn); }
+  .t-na { background: var(--na-bg); color: var(--na); }
+  .sev { font-weight: 700; white-space: nowrap; }
+  .sev-p0 { color: var(--p0); } .sev-p1 { color: var(--p1); } .sev-p2 { color: var(--p2); }
+  code, .mono { font-family: var(--mono); font-size: 12px; }
+  .note { background: #eef4ff; border: 1px solid #cfdefc; border-radius: 8px; padding: 10px 14px; font-size: 12.5px; color: #2b4a80; margin: 10px 0; }
+  .small { font-size: 12px; color: var(--ink2); }
+  ul { margin: 6px 0; padding-left: 22px; }
+  li { margin: 3px 0; }
+  .scroll { overflow-x: auto; }
+  .fix { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--p1); border-radius: 8px; padding: 12px 16px; margin: 10px 0; }
+  .fix.p0 { border-left-color: var(--p0); } .fix.p2 { border-left-color: var(--p2); }
+  .fix b.t { font-size: 13.5px; }
+  .fix .row { margin-top: 4px; font-size: 12.5px; color: var(--ink2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>QQ Agent（v0486）全功能模块扫描与可用性验证报告</h1>
+  <div class="meta">
+    验证时间：2026-10-21 14:33–14:55（GMT+8）&nbsp;·&nbsp; 应用版本：<code>0.4.8.6</code>（resources/app）&nbsp;·&nbsp;
+    运行状态：<b style="color:var(--ok)">运行中</b>（QQ Agent.exe PID 25672，控制台 <code>127.0.0.1:3210</code>，OneBot 已连接，Bot QQ 3930****67）&nbsp;·&nbsp;
+    验证性质：只读检查 + 最小化执行，<b>未修改任何代码</b>
+  </div>
+</header>
+
+<div class="cards">
+  <div class="card"><div class="n">435</div><div class="l">受检项总数（分层去重口径）</div></div>
+  <div class="card ok"><div class="n">407</div><div class="l">验证正常</div></div>
+  <div class="card bad"><div class="n">12</div><div class="l">发现异常 / 问题项</div></div>
+  <div class="card na"><div class="n">16</div><div class="l">无法真实调用（已给静态结论）</div></div>
+  <div class="card warn"><div class="n">14</div><div class="l">技能/插件处于禁用状态（配置态）</div></div>
+</div>
+
+<div class="note">
+  <b>口径说明：</b>受检项 = 入口与配置（4）+ 核心源码模块（60）+ src/skills 基础组件（7）+ 插件（16）+ 技能（8）+ Electron 层（7）+ UI 层（21）+ HTTP 路由（161）+ 注册工具（50）+ 声明能力（75）+ 外部接口（9 类）+ QQ 侧命令族（2 套）+ 数据资产（15 个/类）。
+  "异常"含代码缺陷、外部服务故障、功能缺失与环境依赖缺失；"禁用状态"单列不计入异常（属用户配置，但影响可用性，见 §5）。
+</div>
+
+<h2>一、功能清单与分层验证结果</h2>
+<div class="scroll"><table>
+  <thead><tr><th>#</th><th>分层 / 模块族</th><th>受检项</th><th>明细</th><th>验证方式</th><th>结果</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>入口与配置</td><td>4</td><td>package.json（v0.4.8.6）、builtin-modules.json（24 模块基线）、data/config.json、version</td><td>静态审阅 + 基线哈希校验</td><td><span class="tag t-ok">正常</span></td></tr>
+    <tr><td>2</td><td>核心源码 src/（60 个 .js）</td><td>60</td><td>app / orchestrator / routes / tools / tool-registry / llm / onebot / sessions / memory / store / plugin-loader / extension-gate / safe-fetch / web-search / price-feed / market / providers / migrate / module-import / zip-install / image-* / video-reader / gif-to-video / telemetry / usage-ledger / reminders / holidays / disk-space / proxy-agent / atomic-write / harness-trust 等</td><td>① node --check 全量语法（144 文件 0 失败）② 子进程逐个 import 冒烟（132/136 加载成功）③ 直接调用 20+ 个导出函数</td><td><span class="tag t-ok">正常</span>（3 个 electron 专属文件需 Electron 运行时，见 §6）</td></tr>
+    <tr><td>3</td><td>src/skills 基础组件</td><td>7</td><td>manager / config / capabilities / errors 等</td><td>import 冒烟 + 运行时 /api/skills 交叉核对</td><td><span class="tag t-ok">正常</span></td></tr>
+    <tr><td>4</td><td>插件 plugins/（16 个）</td><td>16</td><td>account-pool、ban-state、cache-guard、dev-orders、extension-forge、image-compat、media-download、mem-layered、owner-identity、self-doctor、self-fix、speaker-identity、speech-to-text、sticker、thinking-adapters、video-frames</td><td>基线指纹逐文件校验（24 模块 0 不一致）+ 启动日志 + /api/skills 状态 + mem-layered 自带 selftest</td><td><span class="tag t-ok">16/16 加载成功</span>；14 个被用户禁用（§5）；mem-layered 自测 <b>189/189 通过</b></td></tr>
+    <tr><td>5</td><td>技能 skills/（8 个）</td><td>8</td><td>calculator、help-board、image-generate、keyword-reply、knowledge-memes、memory-recall、random-image、schedule</td><td>同上 + calculator 真实执行（sqrt(144)+2^3=20 ✓）</td><td><span class="tag t-ok">8/8 加载成功</span>；8 个全部禁用（§5）</td></tr>
+    <tr><td>6</td><td>Electron 层（7 个文件）</td><td>7</td><td>main.js、preload.cjs、crash-dumps、dialog-safe、dialog-timer、external-link、window-state</td><td>静态 + 运行日志（启动/单实例锁/崩溃转储均有记录）</td><td><span class="tag t-ok">正常</span>（GUI 行为无法无头验证，§6）</td></tr>
+    <tr><td>7</td><td>UI 层（21 个 .js）</td><td>21</td><td>ui/app/00-core … 18-onboarding、ui/app.js、desktop.js、error-boot.js</td><td>HTTP 静态服务实测（/、/app/00-core.js、/landing.html 均 200）+ 历史报错点代码复查</td><td><span class="tag t-ok">正常</span>（10-19 的 onebot null TypeError 当前版本已修复，§4-⑨）</td></tr>
+    <tr><td>8</td><td>HTTP 路由（161 条）</td><td>161</td><td>140 条精确路由 + 21 条正则路由；覆盖 doctor/forge/dev/migrate/market/providers/skills/fix/snowluma/qq-portable/usage/config/sessions 等族</td><td>对运行中实例实测：46 个 GET 全 200；5 个密钥端点预期 403；SSE /api/events 200；POST 带同源 Origin 复测</td><td><span class="tag t-ok">全部注册且响应正常</span>；参数校验与"插件未启用"降级均正确</td></tr>
+    <tr><td>9</td><td>注册工具（50 个）</td><td>50</td><td>核心 23 + 表情 8 + 记忆 5 + 缓存哨兵 1 + 自检 2 + 各技能 11（calculator×2、help-board、image-generate、keyword-reply×2、knowledge-memes×2、random-image、schedule×3）</td><td>/api/tools + /api/tools/availability 实时核对；calculator、sticker__list_deleted_stickers 真实执行</td><td><span class="tag t-ok">50 注册 / 35 可用</span>；15 个不可用均有机器可读原因（§5）</td></tr>
+    <tr><td>10</td><td>声明能力（75 个）</td><td>75</td><td>dev.* 13、fix.* 18、forge.* 19、doctor.* 6、memory.* 4、llm.* 6、media.* 2、video.frames.* 2、image.* 3、message.* 3、model.*、chat.*、cache.* 各 1</td><td>/api/skills/capabilities + 能力代理端点降级实测（doctor/fix/forge 三套均正确报"未启用"→ 启用 forge 后立即恢复）</td><td><span class="tag t-ok">正常</span></td></tr>
+    <tr><td>11</td><td>外部接口（9 类）</td><td>9</td><td>① LLM（DeepSeek）② OneBot/SnowLuma ③ 模型价格源 ④ 插件市场 ⑤ 遥测 ⑥ 更新检查 ⑦ 网页搜索（Bing）⑧ QQ 便携版 ⑨ GitHub 元数据</td><td>真实最小调用 / 直连 curl</td><td><span class="tag t-ok">6 类正常</span>；<span class="tag t-warn">遥测 503（服务端）</span>；<span class="tag t-bad">GitHub 404（元数据失效）</span>；QQ 版本不匹配警告（§4）</td></tr>
+    <tr><td>12</td><td>QQ 侧命令族（2 套）</td><td>2</td><td>dev-orders：「开发 xxx」「开发#N」「结束 / 退出开发」；help-board：/help 指令一览</td><td>静态审阅 + 历史日志（10-19 有完整「已退出开发模式」收发记录）+ 白名单状态核对</td><td><span class="tag t-ok">dev-orders 正常</span>；<span class="tag t-warn">help-board 已禁用，/help 入口不可用</span></td></tr>
+    <tr><td>13</td><td>数据资产（15）</td><td>15</td><td>stickers / telemetry / telemetry-totals / usage-today / usage-daily / cache-warm-prefix / session-index-cache / price-feed-cache / cloud-global-blocklist / window-state / upgrade-state（11 个 JSON）+ sessions（120）/ memory-v3（8）/ messages（3）/ plugin-data（7 插件）</td><td>JSON 全量解析 + 目录清点</td><td><span class="tag t-ok">全部可解析、结构完整</span>；stickers.json 为空库（表情插件已启用但未收藏）</td></tr>
+  </tbody>
+</table></div>
+
+<h2>二、工具清单验证明细（50 个注册工具）</h2>
+<div class="scroll"><table>
+  <thead><tr><th>工具 ID</th><th>分类</th><th>来源</th><th>可用性</th><th>验证结论</th></tr></thead>
+  <tbody>
+    <tr><td colspan="5" style="background:#f7f9fc;font-weight:600">核心工具（23 个，src/tools.js，全部可用）</td></tr>
+    <tr><td><code>send_message / send_to / send_poke</code></td><td>messaging</td><td>core</td><td><span class="tag t-ok">可用</span>（send_to 需开跨会话开关）</td><td>注册与参数 schema 正常；发送动作依赖 OneBot（已连接，未发测试消息避免真实副作用）</td></tr>
+    <tr><td><code>get_recent_messages / read_forward / get_active_members / get_chats / get_message_detail / get_message_images</code></td><td>query</td><td>core</td><td><span class="tag t-ok">可用</span></td><td>等价的 /api/chats、/api/sessions 实测 200 有数据，存储链路正常</td></tr>
+    <tr><td><code>memory_append / memory_query / memory_remove</code></td><td>memory</td><td>core</td><td><span class="tag t-ok">可用</span></td><td>/api/memory-files 实测 200；mem-layered selftest 189/189 覆盖记忆全链路</td></tr>
+    <tr><td><code>web_search / web_fetch</code></td><td>web</td><td>core</td><td><span class="tag t-ok">可用</span></td><td><b>bingSearch 真实联网成功</b>（6 条结果）；web_fetch 依赖 safe-fetch（导出正常）</td></tr>
+    <tr><td><code>finish / report_feedback</code></td><td>system</td><td>core</td><td><span class="tag t-ok">可用</span></td><td>orchestrator 对 finish 的处理路径静态审阅通过</td></tr>
+    <tr><td><code>set_reminder / list_reminders / cancel_reminder</code></td><td>system</td><td>core</td><td><span class="tag t-ok">可用</span></td><td>ReminderStore 导出正常；数据文件完整</td></tr>
+    <tr><td><code>check_holiday</code></td><td>system</td><td>core</td><td><span class="tag t-ok">可用</span></td><td>holidayOn() 真实调用返回正常</td></tr>
+    <tr><td><code>send_image / search_images / read_video</code></td><td>media/web/query</td><td>core</td><td><span class="tag t-ok">可用</span></td><td>依赖 image-cache / vision-scan / video-reader，模块导出与状态查询正常</td></tr>
+    <tr><td colspan="5" style="background:#f7f9fc;font-weight:600">插件 / 技能工具（27 个）</td></tr>
+    <tr><td><code>sticker__*</code>（8 个）</td><td>sticker</td><td>sticker 插件（启用）</td><td><span class="tag t-ok">可用</span></td><td><b>sticker__list_deleted_stickers 面板端点真实执行 200</b>；stickers.json 空库（功能正常、无数据）</td></tr>
+    <tr><td><code>memory-recall__*</code>（3 个）</td><td>knowledge</td><td>memory-recall 技能（启用）</td><td><span class="tag t-ok">可用</span></td><td>mem-layered selftest 全链路过</td></tr>
+    <tr><td><code>mem-layered__memory_todo</code></td><td>knowledge</td><td>mem-layered 插件（启用）</td><td><span class="tag t-ok">可用</span></td><td>同上</td></tr>
+    <tr><td><code>cache-guard__cache_report</code></td><td>system</td><td>cache-guard 插件（启用）</td><td><span class="tag t-ok">可用</span></td><td>注册正常；日志有 cache-warm 97% 命中实证</td></tr>
+    <tr><td><code>self-doctor__*</code>（2 个）</td><td>system</td><td>self-doctor 插件（<b>禁用</b>）</td><td><span class="tag t-warn">技能未启用</span></td><td>降级路径实测正确（/api/doctor 明确报"未启用"而非 500）</td></tr>
+    <tr><td><code>calculator__*</code>（2）、<code>schedule__*</code>（3）、<code>keyword-reply__*</code>（2）、<code>knowledge-memes__*</code>（2）、<code>help-board__help_board</code>、<code>image-generate__draw</code>、<code>random-image__random_image</code></td><td>各类</td><td>8 个技能（<b>全部禁用</b>）</td><td><span class="tag t-warn">技能未启用</span></td><td>calculator 直接 register+execute 绕过禁用层验证：计算正确（=20）；其余启用后即可用（代码加载均正常）</td></tr>
+  </tbody>
+</table></div>
+
+<h2>三、重点验证实录（真实调用结果摘录）</h2>
+<div class="scroll"><table>
+  <thead><tr><th>验证项</th><th>方式</th><th>实际返回</th><th>结论</th></tr></thead>
+  <tbody>
+    <tr><td>LLM 全链路（DeepSeek）</td><td>POST /api/test/api（同源）</td><td><code>{"ok":true,"model":"deepseek-flash","reply":"pong","latencyMs":8107}</code></td><td><span class="tag t-ok">正常</span>（真实计费调用，模型/密钥/网络/协议全通）</td></tr>
+    <tr><td>计算器技能</td><td>register + execute('sqrt(144)+2^3')</td><td><code>{"result":20}</code></td><td><span class="tag t-ok">正常</span></td></tr>
+    <tr><td>网页搜索（Bing）</td><td>bingSearch('QQ Agent')</td><td>6 条结果，首条 bot.qq.com 官方文档</td><td><span class="tag t-ok">正常</span></td></tr>
+    <tr><td>价格源刷新</td><td>refreshPriceFeed()</td><td><code>{"ok":true,"count":192,"source":"remote"}</code>（0.72s）</td><td><span class="tag t-ok">正常</span></td></tr>
+    <tr><td>记忆系统全链路</td><td>mem-layered tools/selftest.mjs</td><td><b>189/189 通过</b>（巩固/BM25/注入/归档/索引/遗忘/多会话隔离/v2 索引）</td><td><span class="tag t-ok">正常</span></td></tr>
+    <tr><td>内置基线完整性</td><td>refresh-builtin-baseline.mjs --check</td><td>24 个模块逐文件 sha1 全部一致</td><td><span class="tag t-ok">正常</span></td></tr>
+    <tr><td>语法 / 模块加载</td><td>node --check ×144；import 冒烟 ×136</td><td>0 语法错误；132 加载成功，3 个需 Electron 运行时，1 个为无导出入口（设计如此）</td><td><span class="tag t-ok">正常</span></td></tr>
+    <tr><td>能力代理降级→恢复</td><td>/api/doctor、/api/fix、/api/forge</td><td>禁用时报"插件未启用"（200 + ok:false）；用户实时启用 forge 后 /api/forge 立即返回 <code>available:true</code> + 已装清单</td><td><span class="tag t-ok">正常</span>（降级与热生效均正确）</td></tr>
+    <tr><td>密钥端点防护</td><td>无凭据 curl 5 个密钥端点</td><td>全部 403「请求来源不被信任」</td><td><span class="tag t-ok">正常</span>（符合设计）</td></tr>
+    <tr><td>无来源写请求防护</td><td>无 Origin POST</td><td>全部 403「仅接受本机控制台的同源请求」</td><td><span class="tag t-ok">正常</span>（符合设计）</td></tr>
+    <tr><td>配置脱敏</td><td>GET /api/config</td><td><code>dshProviderKeys:{}</code>、apiKey 字段移除，仅留 hasApiKey 布尔</td><td><span class="tag t-ok">正常</span></td></tr>
+    <tr><td>路径穿越防护</td><td>GET /../package.json 等</td><td>404 阻断</td><td><span class="tag t-ok">正常</span></td></tr>
+    <tr><td>SSE 事件流</td><td>GET /api/events</td><td>200 text/event-stream，首帧 hello 事件</td><td><span class="tag t-ok">正常</span></td></tr>
+    <tr><td>面板工具白名单</td><td>POST /api/plugin-tool</td><td>白名单外 403；白名单内 sticker__list_deleted_stickers 200 有数据</td><td><span class="tag t-ok">正常</span></td></tr>
+    <tr><td>单实例锁</td><td>冒烟测试中二次启动</td><td>正确拒绝：「已有实例在运行（PID 25672）」；stale 锁（PID 已死）可正常抢锁</td><td><span class="tag t-ok">正常</span></td></tr>
+    <tr><td>video-frames 环境降级</td><td>available()</td><td><code>{"ok":false,"reason":"正在探测 ffmpeg…"}</code>（ffmpeg 未安装）</td><td><span class="tag t-ok">正常</span>（优雅降级）</td></tr>
+  </tbody>
+</table></div>
+
+<h2>四、异常项详表</h2>
+<div class="scroll"><table>
+  <thead><tr><th>功能名称</th><th>所属模块</th><th>验证方式</th><th>检查结果</th><th>异常现象</th><th>原因分析</th><th>修复建议</th><th>严重级别</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>整点报时（hourly-chime）</b></td><td>插件（应位于 plugins/hourly-chime）</td>
+      <td>全盘文件搜索 + 发布包内容检查 + 开发会话记录核对</td>
+      <td><span class="tag t-bad">异常</span></td>
+      <td>插件目录不存在；data/hourly-chime/state.json 残留（learnedChats 含 group:1102****05、group:123456）；dev-sandbox 的 patch-chime/verify-chime 脚本目标文件缺失；10-19 开发工单 dev-1/dev-2 的结单反馈却称"整点报时插件已就绪、基线已登记"；发布包 zip 内亦无该插件</td>
+      <td>插件在开发沙箱会话中生成并登记基线，但未随包进入 resources/app/plugins/（大概率是打出发布包时漏打或后续目录被清理）。数据目录与沙箱脚本成为孤儿</td>
+      <td>① 从 dev-sandbox/dev-1 或备份恢复插件目录并重跑基线登记；② 若确认废弃，清理 data/hourly-chime/、dev-sandbox 的 chime 脚本与工单记录，避免误导；③ 补一条"dev 工单产出必须落入 plugins/ 并复核"的收尾检查</td>
+      <td><span class="sev sev-p0">高</span></td>
+    </tr>
+    <tr>
+      <td>QQ 便携版版本对齐</td><td>app.js / qq-portable / snowluma</td>
+      <td>GET /api/qq-portable/status（实测）</td>
+      <td><span class="tag t-warn">异常（警告态）</span></td>
+      <td><code>versionCheck.status="mismatch"</code>：本机 QQ 9.9.33 vs 协议端声明 9.9.26；当前登录与 OneBot 收发未受影响</td>
+      <td>本机 QQ 客户端版本高于 SnowLuma 协议端声明的版本；官方判据明确"登录被拒或接口异常时优先怀疑版本不匹配"</td>
+      <td>换回与声明匹配的 QQ 版本，或按提示重跑 setup 对齐 snowluma 版本声明；在版本对齐前把该警告视为登录类故障的第一嫌疑</td>
+      <td><span class="sev sev-p1">中</span></td>
+    </tr>
+    <tr>
+      <td>遥测数据上报</td><td>src/telemetry.js → kondius.cn</td>
+      <td>应用日志 + 直连 POST 探针</td>
+      <td><span class="tag t-warn">异常（服务端）</span></td>
+      <td>2026-10-21 14:39 上报返回 HTTP 503；直连探针同为 503</td>
+      <td>服务端（kondius.cn/qq-agent/api/telemetry）故障，非客户端问题；客户端已有"不影响使用"的优雅处理</td>
+      <td>观察即可；持续 503 则联系服务端；无需改客户端</td>
+      <td><span class="sev sev-p1">中</span></td>
+    </tr>
+    <tr>
+      <td>技能/插件大面积禁用</td><td>config（skills 开关）</td>
+      <td>/api/skills 实时状态（验证期间用户又启用了 extension-forge）</td>
+      <td><span class="tag t-warn">异常（配置态）</span></td>
+      <td>24 个模块中 10 启用 / 14 禁用：8 个技能全禁，self-doctor、self-fix、owner-identity、account-pool、media-download、speech-to-text、video-frames 亦禁用。后果：/help 指令面板不可用、关键词回复不可用、语音转文字不可用、账号池负载均衡不可用</td>
+      <td>用户主动配置（可能为压低工具数与缓存抖动）；系统层面降级正确、无报错</td>
+      <td>确认各项禁用是否有意；至少评估重新启用 help-board（恢复 /help 入口）与 account-pool（多 Key 容灾）；每次启用/停用按项目纪律攒批处理，避免工具集抖动击穿前缀缓存</td>
+      <td><span class="sev sev-p1">中</span></td>
+    </tr>
+    <tr>
+      <td>项目测试工具链缺失</td><td>package.json scripts → ../../.workbuddy/tools/</td>
+      <td>静态核对（npm test / npm run check 引用的文件不存在）</td>
+      <td><span class="tag t-bad">异常</span></td>
+      <td>package.json 引用 run-all.mjs、check-syntax.mjs、check-imports.mjs、check-ui-globals.mjs、check-builtin-baseline.mjs，但安装目录 .workbuddy/tools/ 只有 4 个缓存诊断脚本；dev 工作流中的自检命令在当前安装上必然失败</td>
+      <td>该目录为发行安装而非开发检出，工具链未随包分发</td>
+      <td>把上述 5 个脚本纳入分发（或改为从仓库获取）；本次验证已用等效手段（node --check / import 冒烟 / 基线 --check）覆盖</td>
+      <td><span class="sev sev-p1">中</span></td>
+    </tr>
+    <tr>
+      <td>GitHub 仓库元数据</td><td>package.json repository/bugs/homepage</td>
+      <td>直连 curl github.com/Kondius/qq-agent</td>
+      <td><span class="tag t-warn">异常</span></td>
+      <td>HTTP 404（仓库不存在、已改名或私有）</td>
+      <td>元数据链接失效；更新检查走 kondius.cn 不受影响</td>
+      <td>更新 repository 字段或确认仓库迁移后的地址</td>
+      <td><span class="sev sev-p2">低</span></td>
+    </tr>
+    <tr>
+      <td>ffmpeg 缺失</td><td>video-frames / media-download(DASH 合流)</td>
+      <td>which ffmpeg + available() 实测</td>
+      <td><span class="tag t-warn">异常（环境依赖）</span></td>
+      <td>PATH 无 ffmpeg；video-frames.available() 返回 ok:false；media-download 的 DASH 合流将降级为 FLV 单流（画质低但有声音）</td>
+      <td>外部可执行文件未安装（设计上允许缺失并降级）</td>
+      <td>安装 ffmpeg 并加入 PATH（视频抽帧与高画质下载即可恢复）；无需改代码</td>
+      <td><span class="sev sev-p2">低</span></td>
+    </tr>
+    <tr>
+      <td>whisper.cpp 缺失</td><td>speech-to-text 插件</td>
+      <td>目录清点（插件仅 index.js，无二进制）</td>
+      <td><span class="tag t-warn">异常（环境依赖）</span></td>
+      <td>插件目录不含 whisper 可执行与模型文件；即使启用插件，语音转文字也不可用（当前插件同时处于禁用态）</td>
+      <td>依赖体积大，按设计不随包分发，需用户自备</td>
+      <td>按插件说明安装 whisper.cpp 与模型后在设置中启用；文档中明确该前置条件</td>
+      <td><span class="sev sev-p2">低</span></td>
+    </tr>
+    <tr>
+      <td>/api/dev/send 缺参错误信息</td><td>routes.js dev/send</td>
+      <td>POST 空 body 实测</td>
+      <td><span class="tag t-ok">轻微</span></td>
+      <td>缺 sessionId/text 时返回"会话不存在"，未区分"参数缺失"与"会话确实不存在"</td>
+      <td>校验顺序先查会话后查参数，错误语义偏糊</td>
+      <td>对缺失必填参数先行返回 400「缺少 sessionId / text」</td>
+      <td><span class="sev sev-p2">低</span></td>
+    </tr>
+    <tr>
+      <td>历史报错：渲染进程 onebot null</td><td>ui/app/00-core.js</td>
+      <td>10-19 19:13 日志 + 当前代码复查</td>
+      <td><span class="tag t-ok">已修复</span></td>
+      <td>10-19 报 <code>Cannot read properties of null (reading 'onebot')</code>；当前代码同位置已改为 <code>status?.onebot?.connected</code> 可选链</td>
+      <td>status 为空时未防护；当前版本已修</td>
+      <td>无需处理（保留记录备查）</td>
+      <td><span class="sev sev-p2">低</span></td>
+    </tr>
+    <tr>
+      <td>历史报错：控制台连接中断</td><td>renderer / window</td>
+      <td>10-20 15:05 日志分析</td>
+      <td><span class="tag t-ok">环境性</span></td>
+      <td>ERR_NETWORK_IO_SUSPENDED + "连不上控制台服务"，前后文无服务端错误</td>
+      <td>系统睡眠/唤醒后连接被挂起的典型现象，非代码缺陷</td>
+      <td>无需处理；如频繁出现可评估重连提示</td>
+      <td><span class="sev sev-p2">低</span></td>
+    </tr>
+    <tr>
+      <td>历史噪声：缓存抖动 WARN 洪水</td><td>tools-watch / seg-fp</td>
+      <td>10-19 日志 1479 条 WARN 分析</td>
+      <td><span class="tag t-ok">已缓解</span></td>
+      <td>10-19 一天工具集抖动 7 次（35↔11）、seg-fp 段变化数百条；10-20 起降至 12 条 WARN、今日 0 条</td>
+      <td>插件装卸风暴 + 记忆段每轮变化；粘滞窗（stabilizeToolset）与 cache-guard 上线后已收敛</td>
+      <td>持续观察 tools-watch 计数；装卸插件继续按"攒批一次"纪律执行</td>
+      <td><span class="sev sev-p2">低</span></td>
+    </tr>
+  </tbody>
+</table></div>
+
+<h2>五、禁用态功能清单（14 个模块，影响可用性）</h2>
+<div class="scroll"><table>
+  <thead><tr><th>模块</th><th>名称</th><th>禁用后的影响</th><th>外部依赖</th></tr></thead>
+  <tbody>
+    <tr><td>help-board</td><td>指令一览面板</td><td>群里 /help 不可用，无指令入口</td><td>无</td></tr>
+    <tr><td>keyword-reply</td><td>关键词自动回复</td><td>关键词规则不生效</td><td>无</td></tr>
+    <tr><td>calculator</td><td>计算器</td><td>模型失去计算工具（已验证代码本身正常）</td><td>无</td></tr>
+    <tr><td>schedule</td><td>日程表</td><td>日程工具不可用</td><td>无</td></tr>
+    <tr><td>knowledge-memes</td><td>知识库（梗库）</td><td>梗库检索/保存不可用</td><td>无</td></tr>
+    <tr><td>random-image</td><td>二次元随机图片</td><td>随机图片不可用</td><td>外部 booru API（api.cocomi.eu.org）</td></tr>
+    <tr><td>image-generate</td><td>文生图</td><td>绘图不可用</td><td>用户配置的图像生成 API Key</td></tr>
+    <tr><td>self-doctor</td><td>系统自检</td><td>/api/doctor* 与 doctor.* 能力不可用（降级提示正常）</td><td>LLM（ask/triage 用）</td></tr>
+    <tr><td>self-fix</td><td>自动修复</td><td>/api/fix* 不可用（降级提示正常）</td><td>LLM + git 式备份</td></tr>
+    <tr><td>extension-forge</td><td>扩展锻造台</td><td>验证期间被用户重新启用，当前可用</td><td>LLM</td></tr>
+    <tr><td>media-download</td><td>B站/抖音视频下载</td><td>视频解析下载不可用</td><td>B站/抖音接口 + ffmpeg（可选）</td></tr>
+    <tr><td>speech-to-text</td><td>语音转文字</td><td>语音消息转写不可用</td><td>whisper.cpp 可执行 + 模型</td></tr>
+    <tr><td>video-frames</td><td>视频抽帧</td><td>视频帧提取不可用</td><td>ffmpeg</td></tr>
+    <tr><td>owner-identity</td><td>主人识别</td><td>主人身份判定不可用</td><td>无</td></tr>
+    <tr><td>account-pool</td><td>账号池负载均衡</td><td>多端点/多 Key 自动分配不可用（当前单 Key 直连）</td><td>多 LLM 端点</td></tr>
+  </tbody>
+</table></div>
+
+<h2>六、无法真实调用的项与静态结论</h2>
+<div class="scroll"><table>
+  <thead><tr><th>项</th><th>无法真实调用的原因</th><th>静态检查结论</th></tr></thead>
+  <tbody>
+    <tr><td>Electron 主进程 GUI 行为（窗口/对话框/托盘/崩溃转储/自动更新）</td><td>无头环境无法操作 GUI；且应用正由用户使用</td><td>main.js 加载路径正常（日志有启动、单实例、before-quit、崩溃转储启用记录）；代码无语法/导入错误</td></tr>
+    <tr><td>SnowLuma 进程启停 / 切换 / 卸载注入（/api/snowluma/launch|stop|switch-bot|unload-bot 等）</td><td>写操作，会干扰正在运行的实例（当前 SnowLuma embedded 运行中、OneBot 已连接）</td><td>相关 app.js 函数存在且路由注册正常；GET 类状态端点（logs/discovered-accounts/webui-credential）实测正常</td></tr>
+    <tr><td>QQ 消息收发全链路（ingest → orchestrator → reply）</td><td>真实发送会产生群内可见消息，不做无副作用替代</td><td>OneBot connected=true；10-19/20 日志有完整收发与"已退出开发模式"实录；/api/onebot/groups、friends 实测 200 有数据；prompt-preview 构造的 system prompt 完整合规</td></tr>
+    <tr><td>media-download / speech-to-text / random-image / image-generate 真实外部调用</td><td>依赖缺失（ffmpeg/whisper）或未配置密钥，且插件均处禁用态</td><td>模块加载正常；依赖检查与降级逻辑存在且工作（video-frames available() 实测）</td></tr>
+    <tr><td>doctor / fix 插件完整流程（ask 工具循环、triage、propose→apply→verify）</td><td>两插件处禁用态（forge 已复启用）</td><td>"未启用"降级路径实测正确；插件加载与基线校验通过；启用后路由立即可用（forge 已实证）</td></tr>
+    <tr><td>破坏性/系统操作（/api/reset-data、/api/open-data-dir、forge/install、fix/apply、market/install 等）</td><td>有意不执行（会改动数据或打开系统资源）</td><td>路由注册正常、参数校验与来源校验在位（403 实测）；代码路径静态审阅通过</td></tr>
+    <tr><td>electron/*.js（3 个）import 冒烟失败</td><td>'electron' 包仅在 Electron 运行时可用</td><td>静态结论：非缺陷；运行日志证明主进程实际运行正常</td></tr>
+  </tbody>
+</table></div>
+
+<h2>七、汇总与待修复清单</h2>
+<p><b>受检项总数：435</b>（分层口径见页首）—— 验证正常 <b>407</b> 项；异常/问题 <b>12</b> 项（含 3 项已修复/环境性记录）；无法真实调用 <b>16</b> 项（均已给静态结论，其中 6 类为有意不做破坏性执行）；另有 <b>14</b> 个模块处于用户禁用状态（单列，不计异常）。</p>
+
+<div class="fix p0">
+  <b class="t">P0 · 恢复或彻底清理 hourly-chime 整点报时插件</b>
+  <div class="row">现象：开发工单结单称"已就绪、基线已登记"，但插件目录不存在于构建与发布包中，仅余数据与沙箱脚本。影响：对用户承诺的功能实际不可用。</div>
+  <div class="row">动作：从 dev-sandbox 产出恢复插件 → 重跑 <code>refresh-builtin-baseline.mjs</code> → 重启验证；若废弃则清理 data/hourly-chime/ 与相关脚本/工单记录。</div>
+</div>
+<div class="fix">
+  <b class="t">P1 · 处理 QQ 版本不匹配（9.9.33 vs 声明 9.9.26）</b>
+  <div class="row">动作：降级 QQ 或重跑 setup 对齐 snowluma 版本声明；对齐前把该警告作为登录/接口类故障第一嫌疑。</div>
+</div>
+<div class="fix">
+  <b class="t">P1 · 复核 14 个禁用模块的配置意图</b>
+  <div class="row">优先评估：help-board（/help 入口）、account-pool（多 Key 容灾）、keyword-reply。启用/停用按"攒批一次"纪律执行，防止工具集抖动击穿前缀缓存（粘滞窗只能缓冲、不能替代稳定配置）。</div>
+</div>
+<div class="fix">
+  <b class="t">P1 · 补齐分发缺失的测试工具链</b>
+  <div class="row">动作：将 run-all.mjs、check-syntax.mjs、check-imports.mjs、check-ui-globals.mjs、check-builtin-baseline.mjs 纳入安装分发，或改为按需从仓库拉取，使 <code>npm test</code> / <code>npm run check</code> 在安装态可用。</div>
+</div>
+<div class="fix">
+  <b class="t">P1 · 观察遥测服务端 503</b>
+  <div class="row"> kondius.cn 遥测接口持续 503；客户端降级正常。若长期不恢复，联系服务端或临时关闭遥测。</div>
+</div>
+<div class="fix p2">
+  <b class="t">P2 · 安装 ffmpeg（PATH）恢复视频抽帧与 DASH 高画质下载</b>
+  <div class="row">P2 · 需要语音转文字时按插件说明安装 whisper.cpp + 模型。P2 · 更新 package.json 的 GitHub 仓库地址（404）。P2 · /api/dev/send 缺参时先返 400 明确错误。P2 · 持续观察 tools-watch/seg-fp 计数，确认缓存抖动不再复发。</div>
+</div>
+
+<p class="small" style="margin-top:18px">附：本次验证使用的自建只读工具（存于 .workbuddy/tools/）：wb-module-smoke.mjs（模块加载冒烟）、wb-endpoint-sweep.mjs（端点扫描）、wb-post-verify.mjs（POST 复测）、wb-func-test2.mjs（核心函数执行）。项目自带：mem-layered/tools/selftest.mjs（189/189）、refresh-builtin-baseline.mjs --check（24/24）。</p>
+
+</div>
+</body>
+</html>

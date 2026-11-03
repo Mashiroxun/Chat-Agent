@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>清理清单 · 可删 / 保留 / 待上传</title>
+<style>
+  :root{
+    --bg:#0d1014; --bg2:#141920; --bg3:#1b222b; --line:#252d38;
+    --txt:#e6edf5; --dim:#9aa7b6; --dim2:#6b7887;
+    --acc:#4ea1ff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:15px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1140px;margin:0 auto;padding:52px 30px 90px}
+  header{border-bottom:1px solid var(--line);padding-bottom:28px;margin-bottom:36px}
+  .kicker{font-size:12px;letter-spacing:.18em;color:var(--warn);text-transform:uppercase;margin-bottom:12px;font-weight:600}
+  h1{font-size:31px;line-height:1.28;margin:0 0 14px;font-weight:700;letter-spacing:-.02em}
+  .sub{color:var(--dim);font-size:15px;max-width:800px}
+  h2{font-size:20px;margin:52px 0 8px;font-weight:650;display:flex;align-items:center;gap:11px}
+  h2 .n{font-size:12px;color:var(--acc);background:rgba(78,161,255,.1);border:1px solid rgba(78,161,255,.28);
+    border-radius:6px;padding:2px 8px;font-weight:600;letter-spacing:.06em}
+  p{color:#c4cfdc;margin:11px 0}
+  .lead{color:var(--dim);font-size:14px;margin-bottom:20px;padding-left:13px;border-left:2px solid var(--line)}
+  strong{color:#fff;font-weight:650}
+  code{background:var(--bg3);padding:1.5px 6px;border-radius:4px;font-size:12.5px;
+    font-family:"Cascadia Code",Consolas,monospace;color:#8fd0ff;border:1px solid var(--line)}
+
+  .total{display:grid;grid-template-columns:repeat(3,1fr);gap:15px;margin:26px 0}
+  .tt{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:19px 20px}
+  .tt .v{font-size:32px;font-weight:700;letter-spacing:-.03em;line-height:1;font-variant-numeric:tabular-nums}
+  .tt .k{font-size:13px;color:#fff;margin:9px 0 4px;font-weight:600}
+  .tt .d{font-size:12px;color:var(--dim2);line-height:1.5}
+  .tt.r .v{color:var(--bad)} .tt.g .v{color:var(--ok)} .tt.b .v{color:var(--acc)}
+
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13px}
+  th{text-align:left;padding:10px 11px;background:var(--bg3);color:var(--dim);
+    font-weight:600;font-size:11.5px;letter-spacing:.05em;border-bottom:1px solid var(--line)}
+  td{padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top;color:#c4cfdc}
+  tr:hover td{background:rgba(255,255,255,.018)}
+  td.sz{font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--dim);font-size:12.5px;text-align:right}
+  td.pth{font-family:"Cascadia Code",Consolas,monospace;font-size:11.8px;color:#9fb4c9;word-break:break-all}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:20px;font-weight:600;
+    white-space:nowrap;border:1px solid transparent}
+  .t-ok{color:var(--ok);background:rgba(63,185,80,.1);border-color:rgba(63,185,80,.3)}
+  .t-part{color:var(--warn);background:rgba(210,153,34,.1);border-color:rgba(210,153,34,.3)}
+  .t-bad{color:var(--bad);background:rgba(248,81,73,.1);border-color:rgba(248,81,73,.3)}
+
+  .box{background:var(--bg2);border:1px solid var(--line);border-left:3px solid var(--acc);
+    border-radius:0 10px 10px 0;padding:15px 19px;margin:20px 0}
+  .box.warn{border-left-color:var(--warn)}
+  .box.bad{border-left-color:var(--bad)}
+  .box.ok{border-left-color:var(--ok)}
+  .box .t{font-size:13px;font-weight:700;color:#fff;margin-bottom:6px}
+  .box p{margin:6px 0;font-size:13.5px;color:#b9c6d4}
+
+  ul{padding-left:19px;color:#c4cfdc}
+  li{margin:5px 0}
+  li::marker{color:var(--acc)}
+  .foot{margin-top:60px;padding-top:18px;border-top:1px solid var(--line);font-size:12.5px;color:var(--dim2)}
+  @media(max-width:820px){.total{grid-template-columns:1fr}.wrap{padding:30px 16px}h1{font-size:24px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">Cleanup Audit · 只读扫描</div>
+  <h1>清理清单：能删的、要留的、值得传的</h1>
+  <p class="sub">
+    这一轮<strong>只扫描，没有删任何东西</strong>。下面每一条都带完整路径和体积，你圈定哪几组要删，我再用回收站处理。
+    删除一律走回收站，可以还原。
+  </p>
+</header>
+
+<div class="total">
+  <div class="tt r"><div class="v">8.3 GB</div><div class="k">可释放</div><div class="d">WorkBuddy 3.5G + 打包器 2.4G + G盘 1.5G + zip 0.9G</div></div>
+  <div class="tt g"><div class="v">1.3 MB</div><div class="k">值得上传</div><div class="d">89 份历史文档里挑出的精华</div></div>
+  <div class="tt b"><div class="v">20</div><div class="k">个 .bak 文件</div><div class="d">已在 git 里，可以彻底不要了</div></div>
+</div>
+
+<h2><span class="n">A</span>可以删 —— 临时产物（859M + 441M）</h2>
+<p class="lead">这两块是打包/审查过程中生成的完整副本，删了不影响任何东西。</p>
+
+<table>
+  <tr><th>路径</th><th>体积</th><th>是什么</th><th>判断</th></tr>
+  <tr>
+    <td class="pth">Desktop\打包器\_review</td>
+    <td class="sz">859 MB</td>
+    <td>74 个文件，安装器各步骤的截图（01-main-page.png、03-progress.png…）+ 审查产物</td>
+    <td><span class="tag t-ok">可删</span></td>
+  </tr>
+  <tr>
+    <td class="pth">Desktop\打包器\_uiprobe2</td>
+    <td class="sz">441 MB</td>
+    <td>一整个「QQ Agent」目录副本，UI 探测用</td>
+    <td><span class="tag t-ok">可删</span></td>
+  </tr>
+</table>
+
+<h2><span class="n">B</span>可以删 —— 旧版安装包（545M + 109M）</h2>
+<p class="lead">这些是 0.4.8.x 时代的产物，当前已经是 0.4.9.2。</p>
+
+<table>
+  <tr><th>文件</th><th>体积</th><th>日期</th><th>判断</th></tr>
+  <tr><td class="pth">打包器\QQ-Agent-Setup-0.4.8.8-x64.exe</td><td class="sz">110 MB</td><td>10-22</td><td><span class="tag t-ok">可删</span></td></tr>
+  <tr><td class="pth">打包器\QQ-Agent-Setup-0.4.8.9-x64.exe</td><td class="sz">109 MB</td><td>10-22</td><td><span class="tag t-ok">可删</span></td></tr>
+  <tr><td class="pth">打包器\QQ-Agent-TEST-badfp.exe</td><td class="sz">109 MB</td><td>10-22</td><td><span class="tag t-ok">可删</span></td></tr>
+  <tr><td class="pth">打包器\QQ-Agent-TEST-nospace.exe</td><td class="sz">109 MB</td><td>10-22</td><td><span class="tag t-ok">可删</span></td></tr>
+  <tr><td class="pth">打包器\QQ-Agent-TEST-notemp.exe</td><td class="sz">109 MB</td><td>10-22</td><td><span class="tag t-ok">可删</span></td></tr>
+  <tr><td class="pth">打包器\_fix\</td><td class="sz">109 MB</td><td>—</td><td><span class="tag t-ok">可删</span>（含 before-fix 备份）</td></tr>
+</table>
+
+<h2><span class="n">C</span>可以删 —— payload 的旧快照（325M）</h2>
+<p class="lead"><code>payload.7z</code> 本身（93M）是当前打包源，建议留；下面三个是它的历史副本。</p>
+
+<table>
+  <tr><th>文件</th><th>体积</th><th>日期</th><th>判断</th></tr>
+  <tr><td class="pth">打包器\payload\payload.7z.bak-before-nosnowluma</td><td class="sz">108.3 MB</td><td>10-27</td><td><span class="tag t-ok">可删</span></td></tr>
+  <tr><td class="pth">打包器\payload\payload.7z.before-0.4.8.9</td><td class="sz">108.3 MB</td><td>10-22</td><td><span class="tag t-ok">可删</span></td></tr>
+  <tr><td class="pth">打包器\payload\payload.7z.before-fix</td><td class="sz">108.3 MB</td><td>10-22</td><td><span class="tag t-ok">可删</span></td></tr>
+  <tr><td class="pth">打包器\payload\payload.7z</td><td class="sz">93 MB</td><td>10-27</td><td><span class="tag t-part">建议留</span> 当前打包源</td></tr>
+</table>
+
+<h2><span class="n">D</span>可以删 —— 旧版本 zip（1.1 GB）</h2>
+<p class="lead">这些都是已解压过的安装包。当前程序在 <code>G:\QQagent</code>，官方 0.5.0 已解包到 <code>G:\cmp\050</code>。</p>
+
+<table>
+  <tr><th>文件</th><th>体积</th><th>说明</th><th>判断</th></tr>
+  <tr><td class="pth">Downloads\qq-agent-0.5.0-portable (1).zip</td><td class="sz">521 MB</td><td>官方 0.5.0，已解包到 G:\cmp\050（802 个源码文件都在）</td><td><span class="tag t-ok">可删</span></td></tr>
+  <tr><td class="pth">Downloads\洛版v0.4.9.0.zip</td><td class="sz">142.7 MB</td><td>旧版本</td><td><span class="tag t-ok">可删</span></td></tr>
+  <tr><td class="pth">Downloads\洛版v0.4.9.1.zip</td><td class="sz">142.7 MB</td><td>已解压在 G:\QQagent</td><td><span class="tag t-ok">可删</span></td></tr>
+  <tr><td class="pth">Desktop\洛版0.4.9.1.zip</td><td class="sz">140 MB</td><td>与上面重复</td><td><span class="tag t-ok">可删</span></td></tr>
+</table>
+
+<div class="box warn">
+  <div class="t">删 zip 之前提醒一句</div>
+  <p><code>洛版v0.4.9.1.zip</code> 是你<b>唯一能回到 0.4.9.1 干净状态的完整包</b>。虽然 G:\QQagent 是它的解压结果，但那边已经被我们改成 0.4.9.2 了。</p>
+  <p>建议：<b>保留一份 zip 当"出厂还原点"</b>，或者等我把它放进 git 的 <code>release</code> 分支/标签再说。</p>
+</div>
+
+<h2><span class="n">E</span>可以删 —— 代码备份与 .bak（4.4M + 5.2M）</h2>
+
+<table>
+  <tr><th>路径</th><th>体积</th><th>说明</th><th>判断</th></tr>
+  <tr><td class="pth">G:\QQagent\resources\app 下 20 个 *.bak-*</td><td class="sz">4.4 MB</td><td>routes.js×4、03-connection.js×3、style.css×3、13-doctor.js×2…<br>已在 git 基线里（当前版本），这些是历史快照</td><td><span class="tag t-ok">可删</span></td></tr>
+  <tr><td class="pth">G:\QQagent\data\code-backups\</td><td class="sz">5.2 MB</td><td>12 个目录：audit-fix、chrome、diag、legacy-plugins、main-js、scrub、sticker-test…</td><td><span class="tag t-part">先看再删</span></td></tr>
+</table>
+
+<h2><span class="n">F</span>可以删 —— 旧实例与临时残留（0.7M + 16M + 119M）</h2>
+
+<table>
+  <tr><th>路径</th><th>体积</th><th>说明</th><th>判断</th></tr>
+  <tr><td class="pth">AppData\Roaming\qq-agent.old-20261018</td><td class="sz">288 KB</td><td>10-18 的旧实例</td><td><span class="tag t-ok">可删</span></td></tr>
+  <tr><td class="pth">AppData\Roaming\qq-agent.old-20261018-2</td><td class="sz">141 KB</td><td>同上</td><td><span class="tag t-ok">可删</span></td></tr>
+  <tr><td class="pth">AppData\Roaming\qq-agent-f15d48</td><td class="sz">138 KB</td><td>残留实例</td><td><span class="tag t-ok">可删</span></td></tr>
+  <tr><td class="pth">AppData\Local\Temp\pack</td><td class="sz">16 MB</td><td>打包临时解压</td><td><span class="tag t-ok">可删</span></td></tr>
+  <tr><td class="pth">AppData\Roaming\qq-agent</td><td class="sz">119 MB</td><td>Electron 缓存（Cache / Code Cache / Crashpad / DawnCache），<b>不是用户数据</b></td><td><span class="tag t-part">可清</span> 会自动重建</td></tr>
+</table>
+
+<div class="box bad">
+  <div class="t">绝对不能删的</div>
+  <p><code>G:\QQagent\data\</code> —— 你的聊天记录（11M）、记忆（memory-v3 5.5M）、配置（含 API Key）、QQ 登录态全在这。<strong>整目录不碰。</strong></p>
+  <p><code>G:\QQagent\resources\app\{src,ui,electron,plugins,skills,assets}</code> —— 程序本体，已纳入 git。</p>
+</div>
+
+<h2><span class="n">G</span>值得上传 GitHub 的（约 1.3 MB）</h2>
+<p class="lead">这些都是文字类资料，传上去随时能翻。上传前我会逐份扫一遍有没有群号 / QQ 号 / Key。</p>
+
+<h3>Downloads 里的历史报告</h3>
+<table>
+  <tr><th>文件</th><th>大小</th><th>内容</th></tr>
+  <tr><td class="pth">洛版-官方版-京玉版-功能与体验差异-20261018-终稿.pdf</td><td class="sz">1.1 MB</td><td>三个版本的功能对比</td></tr>
+  <tr><td class="pth">洛版v0.4.8.8-发布说明.html</td><td class="sz">14 KB</td><td>0.4.8.8 发布说明</td></tr>
+  <tr><td class="pth">v0.4.8.9-发布说明.html</td><td class="sz">11 KB</td><td>0.4.8.9 发布说明</td></tr>
+  <tr><td class="pth">功能可用性验证报告-2026-10-21.html</td><td class="sz">34 KB</td><td>功能验证</td></tr>
+  <tr><td class="pth">功能可用性验证报告-2026-10-21-复检.html</td><td class="sz">18 KB</td><td>复检结果</td></tr>
+  <tr><td class="pth">报告_给洛版0.5_bug清单_20261027.md</td><td class="sz">11 KB</td><td>给 0.5 的 bug 清单</td></tr>
+  <tr><td class="pth">新插件实施报告.html</td><td class="sz">12 KB</td><td>插件实现记录</td></tr>
+</table>
+
+<h3>WorkBuddy 里的实现报告（选一部分）</h3>
+<table>
+  <tr><th>文件</th><th>内容</th></tr>
+  <tr><td class="pth">QQAgent-R124-发网图预览误判为已发送-修复报告.md</td><td>R124 修复记录</td></tr>
+  <tr><td class="pth">QQAgent-R125-协议端无窗口启动-实现报告.md</td><td>R125 实现记录</td></tr>
+  <tr><td class="pth">QQAgent-R126-一键接入-EULA合规实现报告.md</td><td>R126 实现记录</td></tr>
+  <tr><td class="pth">QQAgent-R127-连接页重做-实现报告.md</td><td>R127 实现记录</td></tr>
+  <tr><td class="pth">QQAgent-R128-连接页单卡-实现报告.md</td><td>R128 实现记录</td></tr>
+  <tr><td class="pth">QQAgent-审计修复报告-20261028.md</td><td>审计修复</td></tr>
+  <tr><td class="pth">QQAgent-表情库黑屏崩溃-问题记录-20261028.md</td><td>问题复盘</td></tr>
+</table>
+
+<h3>今天生成的 6 份分析（已在工作区）</h3>
+<ul>
+  <li>qq-agent-0.5.0-vs-洛版0.4.9.1-差距审计.html</li>
+  <li>洛版迁移0.5模块化-可行性评估.html</li>
+  <li>洛版硬改方案-四档施工.html</li>
+  <li>Tier2之后仍拿不到的20%-能力缺口清单.html</li>
+  <li>细粒度组件可行性-UI影响-价值重估.html</li>
+  <li>0.4.9.2之后还能改什么-改造机会清单.html</li>
+</ul>
+
+<div class="box ok">
+  <div class="t">上传后的目录结构建议</div>
+  <p>仓库里建 <code>docs/</code> 目录，按类型分：<code>docs/history/</code>（历史发布说明与验证报告）、<code>docs/impl/</code>（R124–R128 实现记录）、<code>docs/analysis/</code>（今天的 6 份分析）。</p>
+  <p>这样以后翻起来有脉络，也不会把仓库根目录塞乱。</p>
+</div>
+
+<h2><span class="n">H</span>可以删 —— G 盘根目录的旧安装备份（1.46 GB）</h2>
+<p class="lead">这一批之前没扫到，全在 <code>G:\</code> 根目录下，和当前程序 <code>G:\QQagent</code> 平级。</p>
+
+<table>
+  <tr><th>目录</th><th>体积</th><th>是什么</th><th>判断</th></tr>
+  <tr>
+    <td class="pth">G:\QQ Agent.backup-20261022-174358</td>
+    <td class="sz">446 MB</td>
+    <td>10-22 的<b>完整旧安装</b>（QQ Agent.exe、dll、pak、dev-sandbox 一整套）</td>
+    <td><span class="tag t-ok">可删</span></td>
+  </tr>
+  <tr>
+    <td class="pth">G:\QQ Agent.backup-20261022-194023</td>
+    <td class="sz">454 MB</td>
+    <td>同一天稍晚的完整旧安装</td>
+    <td><span class="tag t-ok">可删</span></td>
+  </tr>
+  <tr>
+    <td class="pth">G:\_qqagent-snowluma-removed-20261023</td>
+    <td class="sz">216 MB</td>
+    <td>移除 SnowLuma 协议端时的备份（snowluma 目录）</td>
+    <td><span class="tag t-ok">可删</span></td>
+  </tr>
+  <tr>
+    <td class="pth">G:\_ref</td>
+    <td class="sz">199 MB</td>
+    <td><b>只有 1 个文件</b>：bilibili-setup-v1.19.0.exe（B站客户端安装包，跟项目无关）</td>
+    <td><span class="tag t-ok">可删</span></td>
+  </tr>
+  <tr>
+    <td class="pth">G:\tmp-shot</td>
+    <td class="sz">79 MB</td>
+    <td>截图临时目录（prof1 + t.html）</td>
+    <td><span class="tag t-ok">可删</span></td>
+  </tr>
+  <tr>
+    <td class="pth">G:\_qqagent-backup-20261019-1700 / -1805 / -1840<br>G:\_qqagent-backup-20261022-0812 / -20261023-premerge / -presnowlumaclean<br>G:\_qqagent-dev-backups</td>
+    <td class="sz">46 MB</td>
+    <td>7 个目录，共约 290 个文件。多是单文件快照（personas.js、prompt.js 之类），<br>其中 <code>-presnowlumaclean</code> 是 31M 单包、<code>-20261022-0812</code> 是 13M/274 文件的目录副本</td>
+    <td><span class="tag t-ok">可删</span></td>
+  </tr>
+  <tr>
+    <td class="pth">G:\_tel</td>
+    <td class="sz">356 KB</td>
+    <td>tel.json</td>
+    <td><span class="tag t-ok">可删</span></td>
+  </tr>
+</table>
+
+<div class="box warn">
+  <div class="t">这一个要先看清楚再决定</div>
+  <p><code>G:\QQ Agent-data-20261022-174358</code>（<b>53 MB</b>）是<b>数据目录的备份</b>，里面有 <code>config.json</code>（含 API Key）、<code>config.json.bak-20261019</code>、<code>affinity.json</code>、<code>Music/</code> 等。</p>
+  <p>如果你现在的配置是好的，这份就是 10-22 的历史快照，可以删；但如果你想留一条"配置回滚"的路，建议先压缩存起来再删。</p>
+</div>
+
+<h2><span class="n">J</span>可以删 —— WorkBuddy AI 历史会话（3.5 GB）</h2>
+<p class="lead">
+  <code>C:\Users\Administrator\WorkBuddy AI\</code> 一共 <b>3.6 GB / 52 个会话目录</b>。
+  但体积几乎全压在 6 个目录里，其余 46 个加起来不到 20 MB。
+  <b>89 份文档类文件总共只有 1.3 MB</b> —— 这才是值得留的部分。
+</p>
+
+<table>
+  <tr><th>路径</th><th>体积</th><th>是什么</th><th>判断</th></tr>
+  <tr>
+    <td class="pth">2026-10-12-21-11-32\_r110</td>
+    <td class="sz">1.4 GB</td>
+    <td>UI 性能分析的 profile 产物：<code>prof-try-none</code> 446M、<code>prof-try-clip</code> 444M、<code>prof-multi-viewport</code> 108M、<code>prof-try-top</code> 62M、<code>prof-r110c/d</code> 各 59M</td>
+    <td><span class="tag t-ok">可删</span></td>
+  </tr>
+  <tr>
+    <td class="pth">2026-10-18-12-14-26\patches\backup</td>
+    <td class="sz">872 MB</td>
+    <td>补丁包的备份目录（同目录下的 README.md、apply.mjs、分发方案.md 只有 40K，建议留）</td>
+    <td><span class="tag t-ok">可删</span> 只删 backup</td>
+  </tr>
+  <tr>
+    <td class="pth">2026-10-13-13-20-31\.workbuddy-ai\build-v0.4.8</td>
+    <td class="sz">576 MB</td>
+    <td>0.4.8 的构建产物</td>
+    <td><span class="tag t-ok">可删</span></td>
+  </tr>
+  <tr>
+    <td class="pth">2026-10-30-19-27-49\mc-architect</td>
+    <td class="sz">439 MB</td>
+    <td><b>Minecraft 建筑项目</b> —— 跟 QQ Agent 完全无关</td>
+    <td><span class="tag t-part">你确认</span></td>
+  </tr>
+  <tr>
+    <td class="pth">2026-10-14-16-11-31\.qa-testdata</td>
+    <td class="sz">199 MB</td>
+    <td>QA 测试数据（backups、dev-sandbox、e2e、e2e2、peak-preset…）</td>
+    <td><span class="tag t-ok">可删</span></td>
+  </tr>
+  <tr>
+    <td class="pth">2026-10-14-15-00-53\tools-flash</td>
+    <td class="sz">88 MB</td>
+    <td>工具目录（同目录的 r122-fixes.patch、R125 审查报告.md 建议留）</td>
+    <td><span class="tag t-ok">可删</span> 只删 tools-flash</td>
+  </tr>
+  <tr>
+    <td class="pth">其余 46 个会话目录</td>
+    <td class="sz">≈ 20 MB</td>
+    <td>每个几百 K 到几 M</td>
+    <td><span class="tag t-part">留着</span> 体积小</td>
+  </tr>
+</table>
+
+<div class="box ok">
+  <div class="t">顺便发现：445 张截图</div>
+  <p>整个 WorkBuddy 目录里有 <b>445 张 .png / .jpg</b>，绝大多数是调试时的界面截图。散在各会话目录里，不影响使用，但删掉临时目录时会一并清掉。</p>
+</div>
+
+<h2><span class="n">K</span>其他盘：D / E 没有项目相关目录</h2>
+<p class="lead">扫了 D（932G/用 804G）和 E（477G/用 23G），<code>*qq*agent*</code> / <code>*洛版*</code> 零命中。</p>
+
+<table>
+  <tr><th>盘</th><th>状态</th><th>说明</th></tr>
+  <tr><td>D:</td><td class="sz">932 G / 剩 129 G</td><td>游戏库（SteamLibrary、Battlefield V、Factorio、eu5…）、ProgramData、<code>Cleanup_Moved_2026-10-24</code>（之前清理的产物，可看一眼）</td></tr>
+  <tr><td>E:</td><td class="sz">477 G / 剩 455 G</td><td>几乎空盘，主要是游戏录像 mkv 和一个 AutoCAD 安装包 zip</td></tr>
+  <tr><td>F:</td><td class="sz">7.3 M / 满</td><td>虚拟盘，不用管</td></tr>
+</table>
+
+<h2><span class="n">L</span>需要你拍板的六件事</h2>
+<table>
+  <tr><th>#</th><th>问题</th><th>我的建议</th></tr>
+  <tr><td class="num">1</td><td>A + B + C 三组（约 1.9 GB）要不要删？</td><td><span class="tag t-ok">删</span> 都是临时产物和旧版安装包</td></tr>
+  <tr><td class="num">2</td><td><b>H 组 G 盘旧备份（1.46 GB）</b>要不要删？</td><td><span class="tag t-ok">删</span> 但 <code>QQ Agent-data</code> 那 53M 先确认</td></tr>
+  <tr><td class="num">3</td><td>D 组旧 zip（946 MB）删哪些？</td><td><span class="tag t-part">留一份 0.4.9.1.zip</span> 当还原点，其余删</td></tr>
+  <tr><td class="num">4</td><td><code>code-backups</code> 那 12 个目录（5.2M）</td><td><span class="tag t-part">体积小</span> 可删可留，删了也不影响</td></tr>
+  <tr><td class="num">5</td><td>G 组报告要不要全部上传？</td><td><span class="tag t-ok">传</span> 但先做敏感信息扫描</td></tr>
+  <tr><td class="num">6</td><td><b>J 组 WorkBuddy 历史会话（3.5 GB）</b></td><td><span class="tag t-ok">删</span> 但 <code>mc-architect</code> 那 439M 要你确认（Minecraft 项目）</td></tr>
+</table>
+
+<div class="foot">
+  扫描时间 2026-11-03 20:20。体积来自 <code>du -sh</code> / <code>ls -l</code> 实测。本轮<b>未删除、未移动、未修改</b>任何文件。
+  确认后我会用回收站（不是 rm）分批处理，每批最多 10 项，删完逐批核对。
+</div>
+
+</div>
+</body>
+</html>

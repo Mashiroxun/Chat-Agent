@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>细粒度组件可行性 · UI 影响 · 改造价值重估</title>
+<style>
+  :root{
+    --bg:#0d1014; --bg2:#141920; --bg3:#1b222b; --line:#252d38;
+    --txt:#e6edf5; --dim:#9aa7b6; --dim2:#6b7887;
+    --acc:#4ea1ff; --acc2:#7c5cff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:15px/1.75 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1100px;margin:0 auto;padding:56px 32px 96px}
+  header{border-bottom:1px solid var(--line);padding-bottom:30px;margin-bottom:40px}
+  .kicker{font-size:12px;letter-spacing:.18em;color:var(--acc);text-transform:uppercase;margin-bottom:14px;font-weight:600}
+  h1{font-size:32px;line-height:1.28;margin:0 0 16px;font-weight:700;letter-spacing:-.02em}
+  .sub{color:var(--dim);font-size:15px;max-width:790px}
+  h2{font-size:21px;margin:60px 0 8px;font-weight:650;display:flex;align-items:center;gap:12px}
+  h2 .n{font-size:12px;color:var(--acc);background:rgba(78,161,255,.1);border:1px solid rgba(78,161,255,.28);
+    border-radius:6px;padding:2px 8px;font-weight:600;letter-spacing:.06em}
+  h3{font-size:15.5px;margin:32px 0 8px;font-weight:650;color:#cfdae8}
+  p{color:#c4cfdc;margin:12px 0}
+  .lead{color:var(--dim);font-size:14px;margin-bottom:22px;padding-left:14px;border-left:2px solid var(--line)}
+  strong{color:#fff;font-weight:650}
+  code{background:var(--bg3);padding:1.5px 6px;border-radius:4px;font-size:12.5px;
+    font-family:"Cascadia Code",Consolas,monospace;color:#8fd0ff;border:1px solid var(--line)}
+  pre{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+    overflow-x:auto;font-size:12.5px;line-height:1.7;margin:16px 0}
+  pre code{background:none;border:none;padding:0;color:#b9c6d4}
+  pre .c{color:#5f7386} pre .k{color:#c792ea} pre .s{color:#a5d6a7} pre .n{color:#ffcb6b}
+  pre .del{color:#f08a84;text-decoration:line-through;opacity:.75}
+  pre .add{color:#7ee08a}
+
+  .correction{background:linear-gradient(135deg,rgba(248,81,73,.1),rgba(210,153,34,.04));
+    border:1px solid rgba(248,81,73,.35);border-radius:14px;padding:22px 24px;margin:26px 0}
+  .correction .big{font-size:18.5px;font-weight:700;color:#fff;margin-bottom:10px}
+  .correction p{margin:8px 0;font-size:14px}
+
+  .verdict{background:linear-gradient(135deg,rgba(63,185,80,.09),rgba(78,161,255,.05));
+    border:1px solid rgba(63,185,80,.32);border-radius:14px;padding:22px 24px;margin:26px 0}
+  .verdict .big{font-size:19px;font-weight:700;color:#fff;margin-bottom:10px}
+  .verdict p{margin:8px 0;font-size:14px}
+
+  .scale{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:26px 0}
+  .sc{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:17px 18px}
+  .sc .v{font-size:27px;font-weight:700;letter-spacing:-.03em;line-height:1;font-variant-numeric:tabular-nums}
+  .sc .k{font-size:12.5px;color:#fff;margin:9px 0 4px;font-weight:600}
+  .sc .d{font-size:12px;color:var(--dim2);line-height:1.55}
+  .sc.g .v{color:var(--ok)} .sc.y .v{color:var(--warn)} .sc.r .v{color:var(--bad)} .sc.b .v{color:var(--acc)}
+
+  table{width:100%;border-collapse:collapse;margin:18px 0;font-size:13.2px}
+  th{text-align:left;padding:10px 12px;background:var(--bg3);color:var(--dim);
+    font-weight:600;font-size:12px;letter-spacing:.05em;border-bottom:1px solid var(--line)}
+  td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top;color:#c4cfdc}
+  tr:hover td{background:rgba(255,255,255,.018)}
+  td.num{font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--dim2);font-size:12.5px;text-align:center}
+  .tag{display:inline-block;font-size:11.5px;padding:1.5px 8px;border-radius:20px;font-weight:600;
+    white-space:nowrap;border:1px solid transparent}
+  .t-ok{color:var(--ok);background:rgba(63,185,80,.1);border-color:rgba(63,185,80,.3)}
+  .t-part{color:var(--warn);background:rgba(210,153,34,.1);border-color:rgba(210,153,34,.3)}
+  .t-bad{color:var(--bad);background:rgba(248,81,73,.1);border-color:rgba(248,81,73,.3)}
+
+  .box{background:var(--bg2);border:1px solid var(--line);border-left:3px solid var(--acc);
+    border-radius:0 10px 10px 0;padding:15px 19px;margin:20px 0}
+  .box.warn{border-left-color:var(--warn)}
+  .box.bad{border-left-color:var(--bad)}
+  .box.ok{border-left-color:var(--ok)}
+  .box .t{font-size:13px;font-weight:700;color:#fff;margin-bottom:6px}
+  .box p{margin:6px 0;font-size:13.5px;color:#b9c6d4}
+
+  ul{padding-left:20px;color:#c4cfdc}
+  li{margin:6px 0}
+  li::marker{color:var(--acc)}
+  .foot{margin-top:68px;padding-top:20px;border-top:1px solid var(--line);font-size:12.5px;color:var(--dim2)}
+  @media(max-width:860px){.scale{grid-template-columns:repeat(2,1fr)}.wrap{padding:32px 18px}h1{font-size:25px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">Correction &amp; Re-estimate</div>
+  <h1>细粒度组件能加吗 · UI 会不会被破坏 · 改造到底值不值</h1>
+  <p class="sub">
+    三个问题，一个必须先更正。我上一份说"细粒度组件等于重写编排器"——<strong>这个判断是错的</strong>。
+    查完 <code>orchestrator.js</code> 的实际 import 之后发现：那 23 个策略<strong>大部分在洛版本来就是独立导出函数</strong>，
+    只是被直接 <code>import</code> 进来调用了。
+  </p>
+</header>
+
+<div class="correction">
+  <div class="big">更正：不是"重写"，是"加个短路"</div>
+  <p>我原以为这些策略是"嵌在 3,700 行里的私有方法"。实际上 <code>orchestrator.js</code> 顶部是这样写的：</p>
+  <pre style="margin:12px 0"><code><span class="k">import</span> { buildSystemPrompt, buildUserPrompt, resolveContextTier, isAtMe } <span class="k">from</span> <span class="s">'./prompt.js'</span>;
+<span class="k">import</span> { chatCompletion, chatCompletionWithRetry, addUsage, isRetryableError } <span class="k">from</span> <span class="s">'./llm.js'</span>;
+<span class="k">import</span> { rescueUnsentReply } <span class="k">from</span> <span class="s">'./reply-rescue.js'</span>;
+<span class="k">import</span> { buildToolDefs, toOpenAiTools, executeTool } <span class="k">from</span> <span class="s">'./tools.js'</span>;</code></pre>
+  <p><strong>它们早就是独立模块、独立导出函数了。</strong>缺的只是"不从 import 取，而从组件表取"这一步。而且每个函数在 orchestrator 里只被调用 1–3 次。</p>
+</div>
+
+<h2><span class="n">01</span>23 个组件，17 个能加</h2>
+<p class="lead">逐项核对洛版现有代码，按"能不能加"分三档。</p>
+
+<h3>✅ 已有独立导出函数，加注入只要 2 行（14 个）</h3>
+<table>
+  <tr><th>0.5 组件</th><th>洛版现有实现</th><th>调用点数</th><th>改动量</th></tr>
+  <tr><td><code>core.prompt.system</code></td><td><code>prompt.js → buildSystemPrompt</code></td><td class="num">1</td><td class="num">2 行</td></tr>
+  <tr><td><code>core.prompt.user</code></td><td><code>prompt.js → buildUserPrompt</code></td><td class="num">1</td><td class="num">2 行</td></tr>
+  <tr><td><code>core.prompt.pastState</code></td><td><code>prompt.js → buildPastState</code></td><td class="num">1</td><td class="num">2 行</td></tr>
+  <tr><td><code>core.prompt.anchor</code></td><td><code>prompt.js → anchorChunkFor</code></td><td class="num">—</td><td class="num">2 行</td></tr>
+  <tr><td><code>core.prompt.persona</code></td><td><code>config.js → personaForChat</code></td><td class="num">—</td><td class="num">2 行</td></tr>
+  <tr><td><code>core.wake.resolve</code></td><td><code>prompt.js → resolveContextTier</code></td><td class="num">2</td><td class="num">3 行</td></tr>
+  <tr><td><code>core.text.plain</code></td><td><code>md-to-plain.js → mdToPlain</code></td><td class="num">—</td><td class="num">2 行</td></tr>
+  <tr><td><code>core.text.split</code></td><td><code>md-to-plain.js → splitForQQ</code></td><td class="num">—</td><td class="num">2 行</td></tr>
+  <tr><td><code>core.reply.rescue</code></td><td><code>reply-rescue.js → rescueUnsentReply</code></td><td class="num">3</td><td class="num">4 行</td></tr>
+  <tr><td><code>core.session.retryable</code></td><td><code>llm.js → isRetryableError</code></td><td class="num">1</td><td class="num">2 行</td></tr>
+  <tr><td><code>llm.complete</code></td><td><code>llm.js → chatCompletionWithRetry</code></td><td class="num">1</td><td class="num">2 行</td></tr>
+  <tr><td><code>core.tools.bundle</code></td><td><code>tools.js → buildToolDefs + toOpenAiTools</code></td><td class="num">2</td><td class="num">3 行</td></tr>
+  <tr><td><code>core.tools.parseInline</code></td><td><code>orchestrator.js:3579 → parseInlineToolCalls</code><br><span style="font-size:11.5px;color:var(--dim2)">已经是 export，只是同文件内调用</span></td><td class="num">1</td><td class="num">2 行</td></tr>
+  <tr><td><code>core.media.forward</code></td><td><code>media-links.js → dispatchMediaLinks</code></td><td class="num">1</td><td class="num">2 行</td></tr>
+</table>
+
+<h3>🔶 部分可加，要拆一下（3 个）</h3>
+<table>
+  <tr><th>0.5 组件</th><th>洛版现状</th><th>难点</th></tr>
+  <tr><td><code>core.memory.consolidate</code></td><td>拆成两半：<code>buildConsolidatePrompt</code> / <code>buildNewImpressionPrompt</code>（纯字符串拼接，易注入）+ <code>maybeConsolidateMemory</code>（调度逻辑，在 orchestrator 内部）</td><td><span class="tag t-part">只加提示词那半</span></td></tr>
+  <tr><td><code>llm.target</code></td><td><code>providers.js → currentProviders</code>，但洛版没有"目标解析器"这一层，渠道选择散在 llm.js 里</td><td><span class="tag t-part">要新写解析器</span></td></tr>
+  <tr><td><code>llm.thinking</code></td><td>洛版有 <code>thinking-adapters</code> 插件（527 行），逻辑在插件里不在内核</td><td><span class="tag t-part">已经是插件，天然可换</span></td></tr>
+</table>
+
+<h3>❌ 加不了，别碰（2 个）</h3>
+<table>
+  <tr><th>0.5 组件</th><th>为什么不能</th></tr>
+  <tr><td><code>core.agentRunner</code></td><td>洛版的 <code>runAgent</code> / <code>runAgentInner</code> 是<strong>状态机</strong>：多轮循环、中止、工具结果回填、推理历史挂载，深度依赖 <code>this.runningChats</code> / <code>this.aborted</code> / <code>this.cfg</code>。注入替代实现等于重写多轮循环——<strong>这个确实是"重写"</strong></td></tr>
+  <tr><td><code>core.ingest</code></td><td>入站处理在 <code>app.js</code> 的 <code>handleOneBotEvent</code> 里，不在独立模块，而且和协议端、SSE、桌宠事件转发缠在一起</td></tr>
+</table>
+
+<div class="scale">
+  <div class="sc g"><div class="v">14</div><div class="k">直接能加</div><div class="d">每个 2–4 行</div></div>
+  <div class="sc y"><div class="v">3</div><div class="k">拆一下能加</div><div class="d">只加其中一半</div></div>
+  <div class="sc r"><div class="v">2</div><div class="k">不能加</div><div class="d">状态机型，别碰</div></div>
+  <div class="sc b"><div class="v">≈45</div><div class="k">总改动行数</div><div class="d">不是 3,700 行</div></div>
+</div>
+
+<h3>具体怎么改</h3>
+<pre><code><span class="c">// ① 顶部：加一个可选的 components 参数</span>
+<span class="k">export function</span> createOrchestrator({ store, memory, sender, sessions, onebot,
+  emit, reminders, videoReader, <span class="add">components = {}</span> }) {
+
+<span class="c">// ② 构造时解析一次，缺省回落到原实现</span>
+  <span class="k">const</span> systemPromptFor  = <span class="add">components['core.prompt.system']  ?? buildSystemPrompt</span>;
+  <span class="k">const</span> userPromptFor    = <span class="add">components['core.prompt.user']    ?? buildUserPrompt</span>;
+  <span class="k">const</span> pastStateFor     = <span class="add">components['core.prompt.pastState'] ?? buildPastState</span>;
+  <span class="k">const</span> resolveWake      = <span class="add">components['core.wake.resolve']    ?? resolveContextTier</span>;
+  <span class="k">const</span> llmComplete      = <span class="add">components['llm.complete']         ?? chatCompletionWithRetry</span>;
+  <span class="k">const</span> retryable        = <span class="add">components['core.session.retryable'] ?? isRetryableError</span>;
+  <span class="k">const</span> rescueReply      = <span class="add">components['core.reply.rescue']    ?? rescueUnsentReply</span>;
+  <span class="c">// ... 其余同理，共 14 行</span>
+
+<span class="c">// ③ 调用点：把直接调用换成变量</span>
+<span class="del">  const sys = buildSystemPrompt(ctx);</span>
+<span class="add">  const sys = systemPromptFor(ctx);</span>
+}</code></pre>
+
+<p><strong>关键点：默认值全部指向原实现，所以不传 <code>components</code> 时行为 100% 不变。</strong>这就是"薄注入"——不是重构，是在原有调用链上加一个可选的岔路口。</p>
+
+<div class="box ok">
+  <div class="t">这一步的真正价值</div>
+  <p>加完之后，<strong>换系统提示词、换上下文选取策略、换模型调用封装、换文本切分规则——全都不用改源码了</strong>，写个 overrides 层声明一下就行。</p>
+  <p>而这些东西恰好是一个魔改项目<strong>最频繁要调</strong>的地方。你过去两年在 <code>prompt.js</code>（82 KB）和 <code>llm.js</code>（75 KB）里改的每一处，以后都可以变成"一层可开关的覆盖"。</p>
+</div>
+
+<h2><span class="n">02</span>UI：最大影响是零，前提是别做错一件事</h2>
+
+<div class="verdict">
+  <div class="big">Tier 1 + Tier 2 + 细粒度组件注入，对 UI 的影响是 <span style="color:var(--ok)">0</span></div>
+  <p>这三次改动全部发生在后端：<code>app.js</code> 的装配块、<code>orchestrator.js</code> 的调用点、新增的 <code>composition/</code> 目录。<strong>不碰 <code>ui/</code> 下任何一个字节。</strong></p>
+  <p>你辛苦调出来的 20 个全局脚本、设计 token、明暗主题、玻璃效果、动效，全部原样保留。</p>
+</div>
+
+<h3>唯一会动 UI 的是 console.panels —— 而它正好可以不做</h3>
+<p>我上一份建议"补 <code>console.panels</code>（300–500 行）拿到加页自由"。<strong>在你"必须保留现有 UI"的前提下，这个建议要撤回。</strong></p>
+
+<p>洛版的侧边栏是 <code>ui/index.html</code> 里 6 个硬编码的 <code>&lt;button class="nav-item" data-tab="..."></code>：</p>
+
+<pre><code><span class="c">&lt;!-- ui/index.html:64 --&gt;</span>
+&lt;button class=<span class="s">"nav-item active"</span> data-top=<span class="s">"sessions"</span> data-tab=<span class="s">"sessions"</span>&gt;会话&lt;/button&gt;
+&lt;button class=<span class="s">"nav-item"</span> data-top=<span class="s">"usage"</span> data-tab=<span class="s">"usage"</span>&gt;用量&lt;/button&gt;
+&lt;button class=<span class="s">"nav-item"</span> data-top=<span class="s">"ext"</span> data-tab=<span class="s">"skills"</span>&gt;下载&lt;/button&gt;
+&lt;button class=<span class="s">"nav-item"</span> data-top=<span class="s">"ops"</span> data-tab=<span class="s">"harness"</span>&gt;工具&lt;/button&gt;
+<span class="c">&lt;!-- 壁纸被注释掉了，2026-10-23 收回设置页 --&gt;</span>
+&lt;button class=<span class="s">"nav-item"</span> data-top=<span class="s">"settings"</span> data-tab=<span class="s">"settings"</span>&gt;设置&lt;/button&gt;</code></pre>
+
+<div class="box warn">
+  <div class="t">补 console.panels 反而会伤到你现有的 UI</div>
+  <p>要做"数据驱动渲染"，必须把这段静态 HTML 拆掉、改成 <code>14-chrome.js</code> 动态生成。<strong>而 <code>14-chrome.js</code> 有 2,140 行</strong>，里面除了 tab 切换还有主题切换、玻璃效果、快捷键、窗口控制。</p>
+  <p>为了一点点"加页不用改 HTML"的便利，去动这 2,140 行的核心文件——<strong>风险收益完全倒挂</strong>。你花了很长时间调的东西，正好在这条路径上。</p>
+</div>
+
+<h3>加页的正确做法：照现有结构加，别改机制</h3>
+<p>想加一个新页（比如"记忆详情"或"DSH 桥"），只需三处、约 50 行，<strong>不碰任何现有代码</strong>：</p>
+
+<pre><code><span class="c">// ① ui/index.html —— 在「设置」前面插一个按钮（照抄现有 nav-item 的写法）</span>
+&lt;button class=<span class="s">"nav-item"</span> data-top=<span class="s">"ext"</span> data-tab=<span class="s">"memory-detail"</span> title=<span class="s">"..."</span>&gt;
+  &lt;svg viewBox=<span class="s">"0 0 24 24"</span>&gt;...&lt;/svg&gt;记忆
+&lt;/button&gt;
+
+<span class="c">// ② ui/index.html —— 在对应位置插一个 section</span>
+&lt;section data-tab=<span class="s">"memory-detail"</span> hidden&gt; ...你的页面... &lt;/section&gt;
+
+<span class="c">// ③ 新建 ui/app/21-memory-detail.js，照 15-desktop-pet.js 的写法</span>
+<span class="c">//    在 11-init.js 里加一行 script 标签</span></code></pre>
+
+<p>这条路的好处：<strong>样式自动继承</strong>（同一套 CSS 变量和 class）、<strong>主题自动跟随</strong>、<strong>切换逻辑自动生效</strong>（<code>data-tab</code> 是现成机制）。而且随时可以删掉，不留痕迹。</p>
+
+<div class="box ok">
+  <div class="t">所以"保留 0.4.9.1 的 UI"这件事，不但没冲突，反而让方案变简单了</div>
+  <p>砍掉 <code>console.panels</code>（300–500 行）和 <code>ui.panels</code>（800–1,500 行）之后，<strong>总改造量从约 2,000 行降到约 280 行</strong>，而且完全不碰 <code>ui/</code> 目录。</p>
+</div>
+
+<h2><span class="n">03</span>改造价值重估</h2>
+
+<h3>成本（修正后）</h3>
+<table>
+  <tr><th>阶段</th><th>内容</th><th>行数</th><th>碰 UI 吗</th></tr>
+  <tr><td>Tier 1</td><td>8 个 <code>new</code> 改成查表 + 新增 <code>factories.js</code></td><td class="num">≈ 90</td><td><span class="tag t-ok">不碰</span></td></tr>
+  <tr><td>Tier 2</td><td>键名对齐 + <code>lifecycle.onStop</code> + 扫 <code>overrides/</code></td><td class="num">≈ 200</td><td><span class="tag t-ok">不碰</span></td></tr>
+  <tr><td>Tier 2.5</td><td><strong>细粒度策略注入（14 个）</strong></td><td class="num">≈ 45</td><td><span class="tag t-ok">不碰</span></td></tr>
+  <tr><td colspan="2" style="color:#fff;font-weight:650">合计</td><td class="num" style="color:var(--ok);font-weight:700">≈ 335</td><td><span class="tag t-ok">零影响</span></td></tr>
+</table>
+
+<h3>收益（修正后）</h3>
+<table>
+  <tr><th>能力</th><th>改造前</th><th>改造后</th></tr>
+  <tr><td>可替换组件数</td><td class="num">0 / 60</td><td class="num" style="color:var(--ok);font-weight:700">20 / 60（33%）</td></tr>
+  <tr><td>数据层（消息/记忆/会话/提醒）</td><td>改源码</td><td>加层覆盖</td></tr>
+  <tr><td>发送管线</td><td>改源码</td><td>加层覆盖</td></tr>
+  <tr><td>编排流程</td><td>改源码</td><td>加层覆盖</td></tr>
+  <tr><td><strong>系统提示词 / 上下文选取</strong></td><td>改 <code>prompt.js</code>（82 KB）</td><td><strong>加层覆盖</strong></td></tr>
+  <tr><td><strong>模型调用封装 / 重试判定</strong></td><td>改 <code>llm.js</code>（75 KB）</td><td><strong>加层覆盖</strong></td></tr>
+  <tr><td><strong>文本切分 / 纯文本转换</strong></td><td>改 <code>md-to-plain.js</code></td><td><strong>加层覆盖</strong></td></tr>
+  <tr><td>发送失败补救</td><td>改 <code>reply-rescue.js</code></td><td>加层覆盖</td></tr>
+  <tr><td>整层卸载回滚</td><td>无</td><td>删目录即恢复</td></tr>
+  <tr><td>UI</td><td colspan="2" style="text-align:center;color:var(--dim2)">完全不变</td></tr>
+</table>
+
+<div class="verdict">
+  <div class="big">价值判断：这一档的性价比最高，而且比前两档更高</div>
+  <p><strong>335 行换 20 个可替换组件，UI 零改动，每步可独立验证。</strong>投入产出比在整个方案里是最优的——比 Tier 3 那些"换 0.5 实现"的活儿划算得多。</p>
+  <p>原因在于：<strong>这 14 个策略恰好是魔改项目改得最多的地方。</strong>你过去在 <code>prompt.js</code>、<code>llm.js</code>、<code>md-to-plain.js</code> 里改的每一处，以后都能变成可开关的层——改坏了删目录就回来，不用再留 <code>.bak-20261027-xxx</code> 那种文件。</p>
+  <p><strong>而且它把"要不要换 0.5 实现"这个决策推迟了。</strong>加完注入点之后，你可以先只覆盖一两个组件试试水，跑一段时间再决定要不要大规模替换——而不是现在就必须押注。</p>
+</div>
+
+<h3>仍然拿不到的</h3>
+<ul>
+  <li><code>core.agentRunner</code>、<code>core.ingest</code> —— 状态机型，这两个确实是"重写"级别，别碰</li>
+  <li><code>runtime.*</code> 13 个基础设施 —— 散在各处、互相直接 import，换不了</li>
+  <li><code>console.*</code> —— 决定不做了（为了保 UI）</li>
+  <li>治理机制（权限门 / 能力代际 / 服务租约）—— 层里的权限声明仍是装饰性的</li>
+  <li>诊断（静态预检 / 归属查询）—— 这个倒是可以单独补，<strong>约 80 行</strong>，纯新增文件，零风险</li>
+</ul>
+
+<h2><span class="n">04</span>修正后的路线</h2>
+<table>
+  <tr><th>#</th><th>做什么</th><th>行数</th><th>验收</th></tr>
+  <tr><td class="num">1</td><td>Tier 1：8 个 <code>new</code> 改查表</td><td class="num">90</td><td>31 个单测全绿，行为不变</td></tr>
+  <tr><td class="num">2</td><td>Tier 2：键名对齐 + <code>overrides/</code> 扫描</td><td class="num">200</td><td>写一个只依赖 6 个组件的最小层，能加载、能卸载</td></tr>
+  <tr><td class="num">3</td><td><strong>Tier 2.5：14 个策略注入</strong></td><td class="num">45</td><td>写一个覆盖 <code>core.prompt.system</code> 的层，看提示词是否真的变了</td></tr>
+  <tr><td class="num">4</td><td>补 <code>inspect-composition</code> 静态预检</td><td class="num">80</td><td>故意写一个坏清单，看是否明确报错</td></tr>
+  <tr><td class="num">5</td><td>（可选）按需覆盖一两个策略，观察一段时间</td><td class="num">—</td><td>行为符合预期，随时可回滚</td></tr>
+</table>
+
+<div class="box">
+  <div class="t">不建议做的</div>
+  <p><code>console.panels</code> / <code>ui.panels</code>（伤 UI，且你不需要）· <code>core.agentRunner</code> / <code>core.ingest</code>（真重写）· 大规模换 0.5 实现（收益抽象、代价具体）</p>
+</div>
+
+<div class="foot">
+  核实来源：<code>src/orchestrator.js</code>（顶部 17 条 import；<code>parseInlineToolCalls</code> 在 3579 行已导出）、
+  <code>src/prompt.js</code>（82,077 字节，导出 buildSystemPrompt / buildUserPrompt / buildPastState / resolveContextTier / anchorChunkFor）、
+  <code>src/llm.js</code>（74,858 字节，导出 chatCompletionWithRetry / isRetryableError）、
+  <code>src/md-to-plain.js</code>（导出 mdToPlain / splitForQQ）、<code>src/tools.js</code>、<code>src/media-links.js</code>、<code>src/reply-rescue.js</code>；
+  调用点数量为 <code>grep -c</code> 实测。<code>ui/index.html:64–93</code>（6 个 nav-item）、<code>ui/app/14-chrome.js</code>（2,140 行）。
+</div>
+
+</div>
+</body>
+</html>

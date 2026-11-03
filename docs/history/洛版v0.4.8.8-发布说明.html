@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QQ Agent v0.4.8.8 发布说明</title>
+<style>
+  body{margin:0;background:#f5f7fa;color:#1c2430;font:15px/1.7 "Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;}
+  .wrap{max-width:900px;margin:0 auto;padding:32px 22px 60px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.08);}
+  header{border-bottom:3px solid #2f6fdb;padding-bottom:16px;margin-bottom:24px}
+  .kicker{font-size:12px;letter-spacing:.14em;color:#7b8798;text-transform:uppercase}
+  h1{font-size:28px;margin:8px 0 6px;letter-spacing:-.3px}
+  h1 small{display:block;font-size:14px;font-weight:400;color:#5b6a7d;margin-top:6px}
+  h2{font-size:19px;margin:30px 0 10px;padding-bottom:6px;border-bottom:1px solid #e2e8f0}
+  h3{font-size:15px;margin:18px 0 8px;color:#2f3b4a}
+  table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13.5px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #e8ecf2;vertical-align:top}
+  th{background:#f0f4f9;color:#3c4a5c;font-weight:600}
+  code{font-family:"Cascadia Code",Consolas,monospace;font-size:12.5px;background:#f2f5f9;border:1px solid #dde4ec;border-radius:4px;padding:1px 5px;color:#1f4f9c}
+  pre{background:#f7f9fc;border:1px solid #dde4ec;border-left:3px solid #2f6fdb;border-radius:6px;padding:11px 13px;overflow:auto;font-family:Consolas,monospace;font-size:12.5px;color:#20406e;margin:8px 0}
+  .pill{display:inline-block;font-size:11.5px;padding:2px 8px;border-radius:999px;font-weight:600;white-space:nowrap}
+  .p-new{background:#e6f4ea;color:#137333;border:1px solid #b7e0c2}
+  .p-fix{background:#fef3e2;color:#a35b00;border:1px solid #f5d6a8}
+  .p-hard{background:#e8f0fe;color:#1a4bb3;border:1px solid #bcd4fb}
+  .p-note{background:#eceff3;color:#4a5766;border:1px solid #d5dbe3}
+  .fix{border-left:3px solid #f0a500;background:#fffaf0;padding:9px 13px;margin:9px 0;border-radius:0 6px 6px 0}
+  .fix b{color:#8a4b00}
+  .new{border-left:3px solid #2f9e56;background:#f2fbf5;padding:9px 13px;margin:9px 0;border-radius:0 6px 6px 0}
+  .new b{color:#137333}
+  .note{border-left:3px solid #2f6fdb;background:#f2f6fd;padding:9px 13px;margin:9px 0;border-radius:0 6px 6px 0}
+  .warnbox{border:2px solid #d93025;background:#fdecea;border-radius:8px;padding:14px 16px;margin:14px 0}
+  .warnbox h3{margin-top:0;color:#a52714}
+  .warnbox table{background:#fff}
+  .foot{margin-top:38px;padding-top:14px;border-top:1px solid #e2e8f0;color:#7b8798;font-size:12px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+  ul,ol{margin:8px 0 8px 20px;padding:0}
+  li{margin:3px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">QQ Agent 发布说明</div>
+  <h1>v0.4.8.8 <span style="color:#7b8798;font-weight:400">←</span> v0.4.8.x
+    <small>稳定性 + 工程化版本：四个开发类模块内置化、自动修复工单不再"死透"、被 @ 必回、随包 ffmpeg 修复、密钥端点加固</small>
+  </h1>
+  <table>
+    <tr><th style="width:150px">发布包</th><td><code>QQ-Agent-v0.4.8.8.zip</code> · 458 个文件 · 173.8 MB（含 Electron 运行时）</td></tr>
+    <tr><th>打包时间</th><td>2026-10-22 10:08（GMT+8）· 第二次打包：纳入软件内「更新报告」内容更新</td></tr>
+    <tr><th>内置模块</th><td>20 个（plugin 12 / skill 8）+ 4 个 core（harness）· 基线 80 文件指纹一致</td></tr>
+    <tr><th>体检结论</th><td>774 项受检 → 正常 655 / 异常 3 / 未就绪 8 / 无法验证 106 / 禁用 2；其中唯一必修项（语音模块基线）已修复并复验</td></tr>
+  </table>
+</header>
+
+<h2>一、新增</h2>
+
+<div class="new">
+  <b>harness 四模块内置化</b> <span class="pill p-hard">架构</span><br>
+  系统自检（self-doctor）、自动修复（self-fix）、扩展锻造（extension-forge）、开发工单（dev-orders）从 <code>plugins/</code>
+  迁入 <code>src/harness/</code>，以 <code>kind=core</code> 注入。它们不再出现在"插件"页、不会被误禁用、也不会被"磁盘已删除"逻辑误卸载。
+  代价：<b>这四个模块改完不再热重载，需重启生效</b>。
+</div>
+
+<div class="new">
+  <b>表情策略：容量档 + 同批发送</b> <span class="pill p-new">体验</span><br>
+  发表情频率改为 <code>min(配置档, 容量档)</code>：0 张不再承诺、1–3 张 1 档、4–9 张 2 档、≥10 张回到配置档；
+  提示词改为"文字与表情放在同一次调用里发"，避免被自动收尾逻辑砍掉第二句。
+</div>
+
+<div class="new">
+  <b>收藏表情支持标签与适用场景</b> <span class="pill p-new">体验</span><br>
+  <code>collect_sticker</code> 新增 <code>tags</code>（数组或逗号串）与 <code>usage</code>（一句话场景），候选列表直接渲染 <code>[tags]</code>，挑选更准。
+</div>
+
+<div class="new">
+  <b>身份锚点与 @ 判定</b> <span class="pill p-new">体验</span><br>
+  系统提示里的"我是谁"改为「群名片 / QQ 号 / 角色名」三件套（名片自动带 10 分钟缓存）；
+  每条被 @ 的唤醒消息会在提示词里注入一行「这一条 @ 了你本人」，被点名不再静默。
+</div>
+
+<h2>二、修复</h2>
+
+<div class="fix">
+  <b>自动修复工单"改到闸门可通过、闸门却不放行"</b> <span class="pill p-fix">P0</span><br>
+  批准令牌原来只消费不重置：apply 失败或回滚后再申请必然 403，而 commit 又要求 verified —— 工单直接死透。
+  现在：提案带指纹（改动即失效并提示）、verify 失败 / rollback 后自动换票退回 proposed、暂存区保留可 rerun。
+</div>
+
+<div class="fix">
+  <b>视频抽帧找不到随包 ffmpeg</b> <span class="pill p-fix">P1</span><br>
+  <code>findFfmpeg()</code> 原先只查 PATH，导致"包里明明有 ffmpeg、插件却报未找到"。
+  现在先解析随包的 <code>resources/app/runtime/ffmpeg.exe</code>，再退回 PATH。
+</div>
+
+<div class="fix">
+  <b>密钥端点仅靠 Origin 同源保护</b> <span class="pill p-fix">P1 · 安全</span><br>
+  伪造 <code>Origin</code> 头即可读到明文 WebUI 密码。现在密钥类端点一律要求 <code>server.allowBrowserKeyRead</code> 显式开启（默认 false），
+  实测无凭据 / 伪造同源 / 跨源三种来源全部 403，<code>/api/config</code> 里的 apiKey 也已脱敏。
+</div>
+
+<div class="fix">
+  <b>语音模块把提示词击穿缓存</b> <span class="pill p-fix">P1 · 性能</span><br>
+  <code>speech-to-text</code> 的 <code>available()</code> 在探测中乐观放行，配合"失败 60 秒后重探"造成状态来回翻转，
+  系统提示的「语音消息」段每 60 秒增删一次 —— 实测贡献当日约 28% 的缓存 miss。改为探测中返回不可用。
+</div>
+
+<div class="fix">
+  <b>语音模块改完后被安全闸拒载</b> <span class="pill p-fix">P0 · 本次修</span><br>
+  改了 <code>plugins/speech-to-text/index.js</code> 却没重算 <code>builtin-modules.json</code>，
+  基线判定"内容与随包不一致"→ 整个模块被拒载（现象是功能静默消失，不报错）。本版已重算基线，24/24 模块全部加载成功。
+</div>
+
+<div class="fix">
+  <b>接口语义：错误码该 4xx 的不再报 5xx</b> <span class="pill p-fix">P2</span><br>
+  <code>/api/models</code> 空配置 → 400（原 502）；persona 非法 id → 400、不存在 → 404（原 502）。
+</div>
+
+<div class="fix">
+  <b>QQ 拒发不进用量账本</b> <span class="pill p-fix">P2</span><br>
+  发送失败现在会透传到 usage 的 errors 计数（按调用计数），不再只有协议端日志里能看到。
+</div>
+
+<h2>三、升级须知</h2>
+<ol>
+  <li><b>需要重新登录与配置</b>：<code>data/</code> 不在发布包内（含 API Key、群聊记录、记忆），收包人首次启动要重新登录 QQ 并重填配置。</li>
+  <li><b>改内置模块必须重算基线</b>：动过 <code>plugins/</code> 或 <code>skills/</code> 后，执行
+    <code>node .workbuddy/tools/refresh-builtin-baseline.mjs</code>，否则收包人侧该模块会被准入闸拦下（表现为功能静默消失）。</li>
+  <li><b>harness 四模块不再热重载</b>，改完要重启应用；它们也不在"插件"页显示，自动修复开关在「工具 → 自检 → 自动修复」。</li>
+  <li><b>语音转文字需要填 modelPath</b>：未填时模块正常降级为不可用（提示"还没填模型文件路径"），不再是时好时坏。</li>
+  <li><b>文生图 / 账号池 / 主人 QQ</b> 三项仍未配置时，对应能力会显示明确原因并降级，不影响其余功能。</li>
+  <li>建议覆盖升级前先备份自己的 <code>data/</code>（配置、记忆、聊天记录、登录态都在里面）。</li>
+</ol>
+
+<h2>四、version.json 建议内容</h2>
+<p>由发布人手动上传到 <code>https://kondius.cn/qq-agent/version.json</code>（本次不代传）：</p>
+<pre>{
+  "version": "0.4.8.8",
+  "url": "https://kondius.cn/qq-agent/QQ-Agent-V0.4-Preview-Setup.exe",
+  "notes": "harness 四模块内置化；修复自动修复工单令牌死循环、ffmpeg 随包解析、密钥端点越权读取、语音模块击穿缓存；接口错误码语义修正。升级前请备份 data 目录。",
+  "publishedAt": "2026-10-22"
+}</pre>
+<div class="note">
+  <b>顺带一提：</b>当前线上 <code>version.json</code> 仍写着 <code>0.4.0</code>，低于已安装的 0.4.8.8 —— 不更新的话用户永远看不到升级提示（体检项 R2）。
+</div>
+
+<h2>五、软件内的「更新报告」也更新了</h2>
+<p>软件首页（会话首页底部）那张「更新报告」卡片读的是本地数据，不接线上检查，离线也看得见。本次把 <b>0.4.8.8 这一条从 11 项扩充到 24 项</b>，把 10-21 的记忆检索 / 安装包修复与之后两天的改动全部并入、统一改写成口语化描述：</p>
+<ul>
+  <li><b>体验</b>：被 @ 不再装没听见（身份锚点三件套 + @ 判定行、finish 拦截后真的再走一轮）、发表情改成同批发送、频率按库存自适应、收藏支持标签与用途；</li>
+  <li><b>工程</b>：自动修复工单不再"改到一半死透"、四个开发类工具内置化（不再出现在插件列表、改完需重启）、自动修复开关有了入口、左栏「工具」二级页签名改回 harness；</li>
+  <li><b>稳定</b>：视频抽帧认随包的 ffmpeg、语音消息不再时好时坏（探测期一律不可用，不再击穿缓存）；</li>
+  <li><b>安全与语义</b>：密钥端点伪造同源一律 403、502 改 400/404、被 QQ 拒发的消息记进用量账本。</li>
+</ul>
+<div class="note">
+  <b>维护约定（写给后续维护者）：</b>这张卡片按版本号记住"已关闭"—— 只有 <code>STAGE_CHANGELOG</code> 第 1 条的 <code>version</code> 换新号，关掉过的用户才会再看到一次；只改 <code>items</code> 不动 <code>version</code>，他们不会再看到。
+  本次用户明确要求并入 <b>0.4.8.8</b>（不另起新号），因此 version 未动、date 同步为 2026-10-22 —— 已关过这一版的人不会自动再看到，知情即可。
+</div>
+
+<h2>★ 打包时必须排除的（每次打包都要逐条核对）</h2>
+<div class="warnbox">
+  <h3>漏掉任何一项 = 密钥或群聊记录随包发出去</h3>
+  <table>
+    <thead><tr><th style="width:290px">排除路径</th><th>里面是什么</th><th>本次</th></tr></thead>
+    <tbody>
+      <tr><td><code>data</code></td><td>明文 API Key（实测含 <code>sk-</code> 密钥）、全部群聊记录、会话存档、记忆、日志</td><td>已排除 ✓</td></tr>
+      <tr><td><code>.workbuddy</code></td><td>开发工具数据：调试脚本、设计文档、备份</td><td>已排除 ✓</td></tr>
+      <tr><td><code>dev-sandbox</code></td><td>开发工单沙箱产物</td><td>已排除 ✓</td></tr>
+      <tr><td><code>resources/app/snowluma/data</code></td><td>QQ 消息库、媒体库、身份库及 WAL</td><td>已排除 ✓</td></tr>
+      <tr><td><code>resources/app/snowluma/logs</code></td><td>SnowLuma 运行日志</td><td>已排除 ✓</td></tr>
+      <tr><td><code>resources/app/snowluma/config</code></td><td><code>onebot_3930779767.json</code>（网关 token）、<code>webui.json</code>（passwordHash + Salt）—— <b>整个目录排除，别只排这两个文件</b></td><td>已排除 ✓</td></tr>
+      <tr><td>形态类：<code>*.dmp</code> / <code>*.log</code> / <code>*.zip</code> / <code>.git</code></td><td>崩溃转储（含进程内存）、日志、上一次的发布包（不排会滚雪球）</td><td>已排除 ✓</td></tr>
+      <tr><td>非内置扩展（不在 <code>builtin-modules.json</code> 里的 <code>plugins/*</code> <code>skills/*</code>）</td><td>本机自装的第三方扩展，到别人机器上会一律报"触碰高危能力"，让人以为包坏了</td><td>本次无 ✓</td></tr>
+    </tbody>
+  </table>
+  <p style="margin-bottom:0"><b>必须保留</b>：<code>LICENSES.chromium.html</code>、<code>LICENSE.electron.txt</code> —— Chromium / Electron 许可证，法律要求随包分发。</p>
+</div>
+
+<h3>本次打包的验证结果</h3>
+<table>
+  <thead><tr><th style="width:210px">验证项</th><th>结果</th></tr></thead>
+  <tbody>
+    <tr><td>CRC 完整性</td><td><code>unzip -t</code> 全量 OK，无错误</td></tr>
+    <tr><td>敏感路径计数</td><td><code>snowluma/data</code> 0 · <code>snowluma/logs</code> 0 · <code>snowluma/config</code> 0 · <code>webui.json</code> 0 · <code>onebot_</code> 0 · <code>/data/</code> 0 · <code>dev-sandbox</code> 0</td></tr>
+    <tr><td>解压后明文密钥扫描</td><td><code>grep -rl "sk-[A-Za-z0-9]\{20,\}"</code> 命中 <b>0</b> 个文件</td></tr>
+    <tr><td>关键文件抽查</td><td>version / package.json / prompt.js / builtin-modules.json / speech-to-text/index.js / harness/index.js / 两份许可证 全部 ✓</td></tr>
+    <tr><td>包内版本号</td><td><code>"version": "0.4.8.8"</code> ✓</td></tr>
+  </tbody>
+</table>
+
+<div class="foot">
+  <span>QQ Agent v0.4.8.8 发布说明 · 2026-10-22</span>
+  <span>打包工具：qq-agent-release-pack / make-zip.mjs（排除清单已内置为代码约束）</span>
+</div>
+
+</div>
+</body>
+</html>

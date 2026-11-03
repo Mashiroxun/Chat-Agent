@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>QQ Agent v0.4.8.9 发布说明</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#fff; --ink:#1f2430; --sub:#5c6472; --line:#e6e9ef;
+    --fix:#0f7b5f; --fix-bg:#eaf6f1; --new:#1a5fd0; --new-bg:#eaf1fb;
+    --warn:#b3261e; --warn-bg:#fdecea; --code:#f3f4f7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 20px 64px;background:var(--bg);color:var(--ink);
+    font:15px/1.75 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+  .wrap{max-width:860px;margin:0 auto}
+  header{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:26px 28px;margin-bottom:20px}
+  h1{margin:0 0 6px;font-size:24px;letter-spacing:.3px}
+  .ver{font-size:14px;color:var(--sub);margin-bottom:10px}
+  .ver b{color:var(--ink)}
+  .tag{display:inline-block;font-size:12px;padding:2px 9px;border-radius:999px;background:var(--new-bg);color:var(--new);margin-right:6px}
+  section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 26px;margin-bottom:18px}
+  h2{font-size:17px;margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+  h3{font-size:15px;margin:18px 0 8px}
+  ul{margin:6px 0 6px 20px;padding:0}
+  li{margin:5px 0}
+  .pill{display:inline-block;font-size:11px;font-weight:600;padding:1px 8px;border-radius:999px;
+    vertical-align:1px;margin-right:6px}
+  .p-fix{background:var(--fix-bg);color:var(--fix)}
+  .p-new{background:var(--new-bg);color:var(--new)}
+  .fix{border-left:3px solid var(--fix);background:#fbfdfc;padding:10px 14px;border-radius:0 8px 8px 0;margin:10px 0}
+  .fix .t{font-weight:600}
+  .fix .d{color:var(--sub);font-size:14px;margin-top:4px}
+  code{background:var(--code);padding:1px 6px;border-radius:5px;font-size:13px;
+    font-family:ui-monospace,Consolas,monospace}
+  pre{background:var(--code);padding:12px 14px;border-radius:8px;overflow:auto;font-size:13px;
+    font-family:ui-monospace,Consolas,monospace;line-height:1.6}
+  .warnbox{background:var(--warn-bg);border:1px solid #f3c2bd;border-radius:12px;padding:16px 20px}
+  .warnbox h2{color:var(--warn);border-bottom-color:#f3c2bd}
+  table{width:100%;border-collapse:collapse;font-size:14px;margin:8px 0}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--sub);font-weight:600;font-size:13px}
+  .muted{color:var(--sub);font-size:13px}
+  footer{text-align:center;color:var(--sub);font-size:12px;margin-top:26px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>QQ Agent v0.4.8.9 发布说明</h1>
+  <div class="ver"><b>v0.4.8.9</b> ← v0.4.8.8 · 2026-10-22</div>
+  <div>
+    <span class="tag">稳定性版</span>
+    <span class="tag">群禁言全链路修复</span>
+    <span class="tag">表情包引导强化</span>
+  </div>
+  <p class="muted" style="margin:12px 0 0">
+    这一版解决两个「功能都在、但就是不生效」的问题：被禁言后机器人还在空转烧 token，
+    以及机器人几乎不发表情包。前者是三个集成点只接了一个，后者是省 token 机制把表情的
+    轮次吃掉了 —— 两件事的共同点都是「代码看着对，行为对不上」。
+  </p>
+</header>
+
+<section>
+  <h2>一、修复</h2>
+
+  <div class="fix">
+    <div class="t"><span class="pill p-fix">修复</span>群禁言「禁言后不说话」：七个断点全部接上</div>
+    <div class="d">
+      实测禁言 10 分钟：连跑 4 个会话、净烧约 19.5 万 prompt token、5 次发送全部被拒
+      （<code>result=120</code>）、0 条消息送达。根因是「零件齐全、装配缺失」——事件写入端
+      从未接线，唯一的查询兜底又被 60 秒缓存架空，而所有失败路径都是静默的。
+    </div>
+    <ul>
+      <li><b>缓存穿透</b>：ban-state 新增状态变化订阅，禁言 / 解禁 / 到期三条路径都直接覆写缓存，不等 TTL。</li>
+      <li><b>协议层接线</b>：<code>group_ban</code> 事件只认 <code>user_id === self_id</code>（群友被禁言不能把自己标成禁言），ban+duration&gt;0 → 禁言中，lift_ban → 解除。</li>
+      <li><b>发送层兜底</b>：识别 <code>result=120</code> 签名 → 立即标记禁言 + WARN；全败时抛出带 <code>muteRejection</code> 的结构化错误。</li>
+      <li><b>终态化</b>：<code>send_message</code> 把禁言失败作为终态返回给模型（「已被禁言，请勿重试」），实测掐断了把单请求 body 撑到 1.9MB 的重试风暴。</li>
+      <li><b>开关接线</b>：<code>skipRunWhenMuted</code> / <code>markReadWhenMuted</code> 以前算了没人读，现在真的生效。</li>
+      <li><b>可观测性</b>：跳过路径记 INFO（群、剩余秒数、依据、标已读条数）；查询失败 / selfId 缺失补 WARN，排障时能区分「没被禁言」和「查不到」。</li>
+      <li><b>提醒闸</b>：禁言期到点的提醒延后补发，不再 20 秒一次刷屏报错。</li>
+    </ul>
+  </div>
+
+  <div class="fix">
+    <div class="t"><span class="pill p-fix">修复</span>表情包发得少：从「模型性格问题」改到机制上</div>
+    <div class="d">
+      实测机器人发表情率 <b>3.2%</b>（10 次 / 315 条发言），不到群友带图率（7.6%）的一半；
+      149 条 ≤10 字的短反应全是纯文字。根因不是模型不想发，而是 10-01 上线的「发言即收尾」
+      （<code>autoEndAfterSend</code>）把「先说文字、下一轮补表情」这条路物理斩断 ——
+      纯文字批发完会话就结束，表情排在下一个不存在的轮次里。
+    </div>
+    <ul>
+      <li><span class="pill p-new">P1</span><b>短回应硬指引</b>：策略段新增一行 —— ≤10 字的纯反应优先配图，且必须与 <code>send_message</code> 同批调用；仅在有效档位 ≥2 时出现（0/1 档是你明确要「少发」）。</li>
+      <li><span class="pill p-new">P2</span><b>主动收藏</b>：从「你开口说收藏它才收」改成「看到合适的图就收」，看图确认降级为可选步骤；note/tags/usage 三件套与每小时 10 次的上限不变。库容过 10 张后档位自动解锁。</li>
+      <li><span class="pill p-new">P3</span><b>收尾精细化</b>：本该立刻收尾时先问一次 —— 满足「短回应或刚有人发图 + 库里有图 + 档位 ≥2 + 5 分钟冷却 + 本次唤醒未宽限过」才多给一轮，在 tool 结果之后补一条提醒。其余情况照旧立刻收尾。</li>
+    </ul>
+    <p class="muted" style="margin:6px 0 0">
+      成本：每宽限一次多跑一轮，约 19K token，所以卡在「短回应 + 5 分钟一次」。
+      想彻底关掉：配置里把 <code>api.autoEndStickerGrace</code> 设为 <code>false</code> 即可退回旧行为。
+    </p>
+  </div>
+
+  <div class="fix">
+    <div class="t"><span class="pill p-fix">修复</span>内置模块基线与磁盘不一致（重启会拒载 ban-state）</div>
+    <div class="d">
+      改完插件代码后没有重算 <code>builtin-modules.json</code>，<code>ban-state</code> 的指纹对不上 →
+      下次启动时信任闸会把整个模块判为「占名顶替」，禁言功能会静默失效。本次已重算，
+      打包前也复核了 24 个内置模块的逐文件指纹<b>全部一致</b>。
+    </div>
+  </div>
+
+  <div class="fix">
+    <div class="t"><span class="pill p-fix">清理</span>旧表情模块下线（581 行死代码）</div>
+    <div class="d">
+      <code>src/stickers.js</code> / <code>src/sticker-manager.js</code> 里还留着一份旧的策略提示，
+      文案仍在教模型「先发文字、再单独发表情」—— 与 10-21 的修复直接矛盾，留着就是下一个坑。
+      全仓检索确认无人引用后删除（备份保留在开发侧，不随包分发）。
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>二、升级须知</h2>
+  <ul>
+    <li><b>建议重启</b>：内置模块的信任基线带 mtime 校验，基线文件变化时热重载会重新读盘；重启仍是最稳妥的确认方式。</li>
+    <li><b>覆盖安装即可</b>：本包<b>不含</b> <code>data/</code>（你的配置、会话存档、记忆、表情库、密钥都在那里），
+      装到新目录或覆盖旧目录都不会动它们。</li>
+    <li><b>首次启动会自己建 data/</b>：全新安装需要重新填 API Key、重新登录 QQ。</li>
+    <li>本次新增两个内部开关（默认都是「开」，不配也能用）：<code>api.autoEndStickerGrace</code>（收尾宽限）、
+      <code>api.autoEndAfterSend</code>（发言即收尾，老开关）。</li>
+    <li>验收观察点：日志里 <code>收尾宽限一轮</code> 的频率（正常一天几十次，不是上百次）；
+      一周后看 <code>stickers.json</code> 的 useCount 有没有从 3.2% 往 6% 走。</li>
+  </ul>
+</section>
+
+<section>
+  <h2>三、version.json 建议内容</h2>
+  <p class="muted">按站点现有格式填写，上传动作由你手动完成（<code>https://kondius.cn/qq-agent/version.json</code>）。</p>
+<pre>{
+  "version": "0.4.8.9",
+  "date": "2026-10-22",
+  "notes": "群禁言全链路修复（F1–F7）+ 表情包引导强化（P1/P2/P3）+ 内置模块基线重算",
+  "download": "https://kondius.cn/qq-agent/QQ-Agent-v0.4.8.9.zip"
+}</pre>
+</section>
+
+<section class="warnbox">
+  <h2>★ 打包时必须排除的</h2>
+  <p style="margin-top:0">
+    下面每一项都是<b>明文凭据或隐私</b>，漏一项就等于把密钥和群聊记录一起发出去。
+    <code>make-zip.mjs</code> 已把这份清单写成代码里的底线（命令行只能追加、不能替换），
+    并且打包前还会按特征再扫一遍，命中就中止。
+  </p>
+  <table>
+    <tr><th style="width:38%">排除路径</th><th>里面是什么</th></tr>
+    <tr><td><code>data</code></td><td>运行时数据根：API Key（config.json）、全部群聊记录（sessions）、记忆、usage、表情库</td></tr>
+    <tr><td><code>resources/app/data</code></td><td>同一份运行时数据的另一处落点（开发/直跑模式会用这条），<b>本次新增排除</b></td></tr>
+    <tr><td><code>.workbuddy</code></td><td>开发工具数据：调试脚本、笔记、备份</td></tr>
+    <tr><td><code>dev-sandbox</code></td><td>开发工单沙箱（运行时产物）</td></tr>
+    <tr><td><code>resources/app/snowluma/data</code></td><td>QQ 消息库（约 39MB）、媒体库、身份库及 WAL</td></tr>
+    <tr><td><code>resources/app/snowluma/logs</code></td><td>SnowLuma 运行日志</td></tr>
+    <tr><td><code>resources/app/snowluma/config</code></td><td>OneBot access token、WebUI 密码哈希与盐（整个目录排除，换 QQ 号也不会漏）</td></tr>
+    <tr><td><code>*_归档-发布前清理</code></td><td>历史上的清理备份目录</td></tr>
+  </table>
+  <p class="muted" style="margin-bottom:0">
+    <b>必须保留</b>：<code>LICENSES.chromium.html</code>、<code>LICENSE.electron.txt</code> ——
+    Chromium / Electron 的许可证，法律要求随包分发。
+  </p>
+</section>
+
+<footer>QQ Agent v0.4.8.9 · 打包 2026-10-22 22:55 · 481 个文件 / 174.1 MB</footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>功能可用性验证报告 · QQ Agent v0.4.8.6 · 2026-10-21 复检</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1c2733;--muted:#5b6b7b;--line:#e3e8ee;--ok:#0e9f6e;--bad:#d64545;--warn:#c27803;--info:#3b6fe0;--chip-ok:#e6f7f0;--chip-bad:#fdecec;--chip-warn:#fdf3e0;--chip-info:#e9f0fd;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Segoe UI","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.65;padding:32px 16px}
+.wrap{max-width:1080px;margin:0 auto}
+h1{font-size:24px;margin-bottom:4px}
+h2{font-size:18px;margin:32px 0 12px;padding-bottom:6px;border-bottom:2px solid var(--line)}
+h3{font-size:15px;margin:18px 0 8px}
+.meta{color:var(--muted);font-size:13px;margin-bottom:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:14px 0}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+.stat .n{font-size:26px;font-weight:700}
+.stat .l{font-size:12px;color:var(--muted)}
+.stat.ok .n{color:var(--ok)}.stat.bad .n{color:var(--bad)}.stat.warn .n{color:var(--warn)}.stat.info .n{color:var(--info)}
+table{width:100%;border-collapse:collapse;font-size:13px;background:var(--card);border-radius:8px;overflow:hidden}
+th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+th{background:#eef2f6;font-weight:600;white-space:nowrap}
+.tag{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;font-weight:600}
+.t-ok{background:var(--chip-ok);color:var(--ok)}.t-bad{background:var(--chip-bad);color:var(--bad)}.t-warn{background:var(--chip-warn);color:var(--warn)}.t-info{background:var(--chip-info);color:var(--info)}.t-mute{background:#eef1f4;color:var(--muted)}
+code{background:#f0f3f6;border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-family:Consolas,monospace;font-size:12px;word-break:break-all}
+li{margin:4px 0 4px 20px}
+.formula{background:#f0f3f6;border-radius:6px;padding:10px 14px;font-size:13px;font-family:Consolas,monospace;margin:8px 0}
+.note{color:var(--muted);font-size:12.5px;margin-top:8px}
+.p0{color:var(--bad);font-weight:700}.p1{color:var(--warn);font-weight:700}.p2{color:var(--info);font-weight:700}
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>功能可用性验证报告（复检）</h1>
+<div class="meta">
+验证时间：2026-10-21 15:42 – 15:55（GMT+8）　|　
+系统：<b>QQ Agent v0.4.8.6</b>（package.json；Electron 33.4.11）　|　
+根目录：<code>F:\QQA\v0486</code>　|　
+运行状态：<b>运行中</b>（5 进程；OneBot 已连接：？！鲸鲸！? / 3930779767）　|　
+管理端口：<b>3210</b>（读自 <code>data/console-port</code>，非写死）　|　
+性质：<b>只读复检</b>，对照同日首验报告核对复发情况；红线零违反（未发 QQ 消息、未启停进程、未改任何代码/配置/数据）
+</div>
+
+<h2>一、总览卡片</h2>
+<div class="card">
+<div class="formula">受检项 = 加载冒烟 136（src 60 + src/skills 7 + electron 7 + 插件 42 + 技能 20，去重后 136 个 js 文件）＋ UI 语法 21 ＋ 基线指纹 24 模块 ＋ 运行时端点 45（GET 38 + 敏感 403 验证 6 + 未知端点 1）＋ 带同源 POST 7 ＋ 数据资产 21（JSON 14 + 目录 7）＋ 日志 3 天 ＋ 外部服务/依赖 7 ＋ 函数语义 12 ＋ 工具链 1 ＝ <b>277 项</b></div>
+<div class="grid">
+<div class="stat ok"><div class="n">259</div><div class="l">正常</div></div>
+<div class="stat bad"><div class="n">6</div><div class="l">异常</div></div>
+<div class="stat warn"><div class="n">14</div><div class="l">禁用态（不计异常）</div></div>
+<div class="stat info"><div class="n">4</div><div class="l">预期失败（不计异常）</div></div>
+</div>
+<p class="note">预期失败：electron 专属 3 个模块在 Node 环境无法加载 <code>electron</code> 包（GUI 专属，属预期）；<code>server.js</code> 无导出（启动器设计）。与首验（435 项口径：正常 407 / 异常 12 / 无法验证 16 / 禁用 14）相比，异常面明显收敛：首验 12 项异常中 6 项已消除（其中 web-search 判定为测试断言问题而非系统故障），4 项维持，新增 1 项（测试脚本断言过时）。</p>
+</div>
+
+<h2>二、分层验证结果表</h2>
+<table>
+<tr><th>层</th><th>受检项</th><th>验证方式</th><th>结果</th></tr>
+<tr><td>1 源码层</td><td>加载冒烟 136 + UI 语法 21</td><td>子进程逐文件 import 冒烟（<code>wb-module-smoke.mjs</code>）；<code>node --check</code></td><td><span class="tag t-ok">正常</span> 132/136 加载 OK，UI 21/21 语法 OK；4 项预期失败（3×electron 包、1×server.js 无导出启动器）</td></tr>
+<tr><td>2 配置层</td><td>基线 24 模块、package.json、CHANGELOG</td><td><code>refresh-builtin-baseline.mjs --check</code>（只读）逐文件 sha1</td><td><span class="tag t-ok">正常</span> 24/24 一致；<span class="tag t-bad">异常</span> package.json <code>check</code>/`test` 脚本引用的 <code>check-*.mjs</code> 等 5 个工具脚本在分发中缺失（P1-4）</td></tr>
+<tr><td>3 运行时层</td><td>GET 38 + 敏感 6 + 未知端点 1 + 带同源 POST 7；启用态 24 模块</td><td><code>wb-endpoint-sweep.mjs</code>（无 Origin）＋ <code>wb-post-verify.mjs</code>（带 Origin）＋ /api/skills、/api/tools 解析</td><td><span class="tag t-ok">正常</span> GET 全 200；敏感端点 6/6 返回 403"请求来源不被信任"；无 Origin 的 POST 7/7 被 403（设计）；带 Origin POST 全部语义正确（LLM <code>pong</code> 1174ms）；<span class="tag t-info">禁用 14</span>，broken=0；每项降级提示明确（如"「系统自检」插件未启用"），无 500、无空数据</td></tr>
+<tr><td>4 数据层</td><td>JSON 14 + 目录 7</td><td>全量 JSON.parse + 目录名 vs 源码引用交叉</td><td><span class="tag t-ok">正常</span> 14/14 可解析、0 损坏；<span class="tag t-bad">异常</span> <code>data/hourly-chime/</code> 为唯一真孤儿（P0-1）；<code>memory-v3</code>（mem-layered 禁用关联）、<code>messages</code>（migrate.js:42）、<code>plugin-data</code>（app.js 等）均有代码引用，非孤儿</td></tr>
+<tr><td>5 日志层</td><td>近 3 天（10-19/20/21）</td><td>错误四分类 + 逐日趋势对比</td><td><span class="tag t-ok">正常</span> 10-19 的渲染进程崩溃、<code>null.onebot</code> TypeError、GPU/Utility 子进程 killed 在 10-20/21 <b>零复发</b>（结论：已修复/已缓解）；10-21 仅 1 条"单实例启动失败"——单实例锁正确拦截二次启动，<b>防护生效</b>，非缺陷</td></tr>
+<tr><td>6 构建物与外部服务层</td><td>构建物 2 + 外部服务 6 + 环境依赖 2 + 版本 1</td><td>基线 vs 磁盘；curl 实连最小探测；which 检查</td><td><span class="tag t-ok">正常</span> 模块清单 vs 磁盘 24/24；LLM API <code>pong</code> 1174ms（deepseek-flash）；更新源 /api/update-check 200；市场 list 351ms 200；OneBot 连接正常；<span class="tag t-bad">异常</span> 遥测 kondius.cn <b>503</b>（0.31s，客户端可达、服务端故障，P1-3）；QQ 版本 mismatch 9.9.33 vs 声明 9.9.26（P1-2，系统自带诊断文案）；ffmpeg 不在 PATH（P2-4）；whisper.cpp 未装（P2-5）</td></tr>
+</table>
+
+<h2>三、异常项详表</h2>
+<table>
+<tr><th>#</th><th>功能/项</th><th>所属</th><th>验证方式</th><th>结果</th><th>异常现象</th><th>原因分析</th><th>修复建议</th><th>级别</th></tr>
+<tr><td>1</td><td>hourly-chime 整点报时</td><td>数据层（孤儿）</td><td>目录枚举 × 代码引用交叉</td><td>异常</td><td><code>data/hourly-chime/state.json</code> 存在，但 plugins/ 与 src/ 均无任何 chime 代码（grep 0 命中）</td><td>插件曾被移除/未随包分发，状态文件残留；系统无注册该插件的代码路径</td><td>恢复插件本体，或明确废弃并清理 <code>data/hourly-chime/</code></td><td><span class="p0">P0</span>（维持）</td></tr>
+<tr><td>2</td><td>QQ 版本对齐</td><td>协议端（snowluma）</td><td>/api/status → versionCheck</td><td>异常</td><td><code>status: "mismatch"</code>：实装 QQ 9.9.33 vs 协议端声明 9.9.26；系统自带诊断：登录被拒或接口异常时优先怀疑此项</td><td>本机 QQ 自动升级后未重跑 setup 对齐声明</td><td>换回 9.9.26 或重跑 <code>npm run setup</code> 重新对齐（同步改写 snowluma 版本声明）</td><td><span class="p1">P1</span>（维持）</td></tr>
+<tr><td>3</td><td>遥测上报</td><td>外部服务</td><td>curl 实连 <code>https://kondius.cn/qq-agent/api/telemetry</code></td><td>异常</td><td>GET 返回 <b>503</b>（0.31s，有响应）</td><td>服务端故障；客户端可正常建立连接，排除本地网络/DNS</td><td>等待服务方恢复；如长期 503 应在客户端做静默降级确认</td><td><span class="p1">P1</span>（维持）</td></tr>
+<tr><td>4</td><td>分发测试工具链</td><td>配置层（孤儿引用）</td><td>package.json scripts × 磁盘核对</td><td>异常</td><td><code>npm run check</code> 引用的 check-syntax / check-imports / check-ui-globals / check-builtin-baseline.mjs 与 `test` 的 run-all.mjs 共 5 个脚本均不在 <code>.workbuddy/tools/</code></td><td>分发包未随附开发态工具（仅存于源仓库）</td><td>随包补齐或从 package.json scripts 移除引用，避免"验证能力本身受损"</td><td><span class="p1">P1</span>（维持）</td></tr>
+<tr><td>5</td><td>web-search 语义测试断言</td><td>测试工具（wb-func-test2.mjs）</td><td>单独复测 bingSearch</td><td>异常（工具侧）</td><td>func-test2 断言 <code>results=-1</code> FAIL；直接调用实际返回 <code>{query, results:[…真实结果]}</code>，搜索功能正常</td><td><b>测试脚本断言过时</b>：期望裸数组，实际为对象包装——系统无故障，测试工具自身缺陷</td><td>修正 wb-func-test2.mjs 断言为 <code>r.results?.length&gt;0</code></td><td><span class="p2">P2</span>（<b>新发现</b>）</td></tr>
+<tr><td>6</td><td>/api/dev/send 缺参语义</td><td>运行时（dev-orders）</td><td>带 Origin POST 空参</td><td>异常（语义可改进）</td><td>缺参返回 <code>{"ok":false,"error":"会话不存在"}</code>——明确错误、无 500，但未指示"缺少必要参数"</td><td>参数校验顺序：先查会话再校验必填项</td><td>缺必填参数时优先返回参数级错误</td><td><span class="p2">P2</span>（维持）</td></tr>
+</table>
+
+<h2>四、无法真实调用项及静态结论</h2>
+<table>
+<tr><th>项</th><th>未真实执行的原因</th><th>静态结论</th></tr>
+<tr><td>GUI 行为（窗口、托盘、对话框、表情面板 viewer）</td><td>无头环境无法渲染验证；且启停进程属红线</td><td>启动日志佐证正常：crashpad 启用、无渲染崩溃（10-19 后零复发）、UI 语法 21/21 通过、窗口状态文件可解析</td></tr>
+<tr><td>QQ 真实消息收发（send_message 全链路）</td><td>红线：禁止产生外部可见副作用（向群发消息）</td><td>OneBot 已连接（self=3930779767）；prompt-preview 返回完整系统提示词（send_message 工具规则注入正常）；发送链路静态代码在位</td></tr>
+<tr><td>禁用的 14 个模块（7 技能 + 7 插件）</td><td>配置态禁用，启用即产生行为变更（如 random-image、media-download）</td><td>代码加载冒烟全部 OK（属 132 OK 之列）、基线指纹一致；启用后可用性高。禁用名单见 §五</td></tr>
+<tr><td>speech-to-text（whisper）真实转写</td><td>whisper.cpp 未安装（P2-5）</td><td>插件禁用态，不构成实际影响</td></tr>
+<tr><td>video-frames 真实抽帧 / DASH 高画质</td><td>ffmpeg 不在 PATH（P2-4）；不下载媒体（红线）</td><td>gif-to-video 导出正常（含 ffmpeg 探测缓存接口）；根目录自带 ffmpeg.dll（Electron 内部用，与 CLI 不同）</td></tr>
+<tr><td>market 安装 / forge install / fix apply / reset-data 等写端点</td><td>红线：破坏性与系统级操作禁止</td><td>无 Origin 一律 403（实测 7/7）；降级提示文案明确</td></tr>
+</table>
+
+<h2>五、汇总与待修复清单</h2>
+<div class="card">
+<p><b>启用态清单</b>（active 10 / disabled 14 / broken 0，读自 /api/skills）：</p>
+<p><span class="tag t-ok">启用</span> memory-recall、sticker、cache-guard、ban-state、thinking-adapters、dev-orders、extension-forge、image-compat、speaker-identity、mem-layered 之外请以控制台为准（skill/summary 口径 active=10）</p>
+<p style="margin-top:6px"><span class="tag t-mute">禁用（14）</span> 技能 7：calculator、help-board、image-generate、keyword-reply、knowledge-memes、random-image、schedule　插件 7：account-pool、media-download、owner-identity、self-doctor、self-fix、speech-to-text、video-frames</p>
+<p class="note">影响评估：系统自检（/api/doctor）与自动修复（/api/fix）入口因 self-doctor/self-fix 禁用而降级为"未启用"提示（实测文案明确，非 500）；<code>/help</code> 帮助板入口随 help-board 禁用不可用。工具注册 50、能力 75 个（含禁用模块声明的能力）。</p>
+</div>
+<table>
+<tr><th>优先级</th><th>待修复项</th><th>复验命令/方式（修复后怎么算修好）</th></tr>
+<tr><td><span class="p0">P0</span></td><td>恢复或彻底清理 hourly-chime 整点报时插件</td><td><code>ls resources/app/plugins | grep -i chime</code> 有结果；或 <code>data/hourly-chime/</code> 不存在——两者居一即修复</td></tr>
+<tr><td><span class="p1">P1</span></td><td>QQ 版本对齐（9.9.33 vs 9.9.26）</td><td><code>curl -s http://127.0.0.1:3210/api/status</code> 中 <code>versionCheck.status</code> 不再为 "mismatch"</td></tr>
+<tr><td><span class="p1">P1</span></td><td>复核 14 个禁用模块的配置意图（确认是用户有意关闭而非误关）</td><td>/api/skills 中 disabled 数与用户意图一致</td></tr>
+<tr><td><span class="p1">P1</span></td><td>补齐分发缺失的测试工具链（check-*.mjs ×4 + run-all.mjs）</td><td><code>npm run check</code> 退出码 0</td></tr>
+<tr><td><span class="p1">P1</span></td><td>遥测服务端 503（服务方侧）</td><td><code>curl -s -o /dev/null -w "%{http_code}" https://kondius.cn/qq-agent/api/telemetry</code> 返回 200/4xx 语义码而非 503</td></tr>
+<tr><td><span class="p2">P2</span></td><td><b>新</b> 修正 wb-func-test2.mjs 的 webSearch 断言（期望裸数组 → 对象包装）</td><td>重跑 <code>wb-func-test2.mjs</code> 为 12/12 PASS</td></tr>
+<tr><td><span class="p2">P2</span></td><td>安装 ffmpeg 到 PATH，恢复视频抽帧与 DASH 高画质</td><td><code>which ffmpeg</code> 有结果且 video-frames 能力 available</td></tr>
+<tr><td><span class="p2">P2</span></td><td>需要语音转文字时按插件说明安装 whisper.cpp + 模型</td><td><code>which whisper-cli</code> 有结果</td></tr>
+<tr><td><span class="p2">P2</span></td><td>/api/dev/send 缺参时先返回参数级错误</td><td>带 Origin POST 空参返回"缺少 xxx 参数"类文案</td></tr>
+<tr><td><span class="p2">P2</span></td><td>更新 package.json 的 GitHub 仓库地址（原 404）</td><td><code>curl -s -o /dev/null -w "%{http_code}" https://github.com/Kondius/qq-agent</code> 返回 200</td></tr>
+</table>
+
+<h2>六、与同日首验对比（复发核对）</h2>
+<table>
+<tr><th>首验结论（2026-10-21 早）</th><th>本次复检</th><th>结论</th></tr>
+<tr><td>hourly-chime 孤儿数据（P0）</td><td>仍存在，代码引用仍为 0</td><td><span class="tag t-bad">复发/未处理</span></td></tr>
+<tr><td>QQ 版本 mismatch（P1）</td><td>9.9.33 vs 9.9.26 仍在</td><td><span class="tag t-bad">维持</span></td></tr>
+<tr><td>14 个禁用模块（P1）</td><td>名单一致（active 10 / disabled 14 / broken 0）</td><td><span class="tag t-info">无变化</span></td></tr>
+<tr><td>测试工具链缺失（P1）</td><td>check-*.mjs 仍缺失</td><td><span class="tag t-bad">维持</span></td></tr>
+<tr><td>遥测 503（P1）</td><td>仍 503（0.31s）</td><td><span class="tag t-bad">维持</span></td></tr>
+<tr><td>ffmpeg 缺失（P2）</td><td>仍不在 PATH</td><td><span class="tag t-bad">维持</span></td></tr>
+<tr><td>whisper 未装（P2）</td><td>仍未安装</td><td><span class="tag t-bad">维持</span></td></tr>
+<tr><td>package.json 仓库 404（P2）</td><td>未复测详情，维持</td><td><span class="tag t-mute">维持</span></td></tr>
+<tr><td>10-19 历史错误（渲染崩溃、null.onebot、子进程 killed）</td><td>10-20/21 零复发</td><td><span class="tag t-ok">已修复/已缓解</span></td></tr>
+<tr><td>web-search 相关</td><td>首验判故障 → 复测返回真实结果，实为测试断言过时</td><td><span class="tag t-ok">系统正常</span>（工具侧记 P2）</td></tr>
+</table>
+
+<h2>七、验证安全记录</h2>
+<div class="card">
+<ul>
+<li><b>安全反向验证全过</b>：无凭据/无来源访问敏感端点 6/6 被拒（webui-credential、api-key、search-key、onebot-token、doctor/config-key、dev/config-key，均 403"请求来源不被信任"）；POST 7/7 无同源 Origin 被 403；响应未发现明文密钥泄漏（hasApiKey 仅布尔）。</li>
+<li><b>外部调用最小化</b>：LLM 仅 1 次 <code>ping</code>（1174ms）；搜索仅 1 次查询；遥测仅 GET 探测；未发任何 QQ 消息、未启停任何进程、未安装/卸载任何东西。</li>
+<li><b>零改动</b>：本次未修改任何系统代码/配置/数据；仅复用既有只读脚本 <code>wb-*.mjs</code>（未新建文件）。</li>
+</ul>
+</div>
+
+<p class="note">报告生成：WorkBuddy 只读体检 · 2026-10-21 15:55 · 验证脚本：<code>.workbuddy/tools/wb-module-smoke.mjs</code>、<code>wb-endpoint-sweep.mjs</code>、<code>wb-post-verify.mjs</code>、<code>wb-func-test2.mjs</code>、<code>refresh-builtin-baseline.mjs --check</code>（均为既有只读工具）</p>
+
+</div></body>
+</html>

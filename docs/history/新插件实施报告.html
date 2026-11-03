@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>新插件实施报告 · QQ Agent v0.4</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#ffffff; --ink:#1f2328; --sub:#57606a; --line:#e4e8ec; --accent:#0b66c3; --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.75 "Segoe UI","Microsoft YaHei",sans-serif; }
+  .wrap { max-width:980px; margin:0 auto; padding:32px 20px 64px; }
+  h1 { font-size:26px; margin:0 0 4px; }
+  h2 { font-size:20px; margin:36px 0 12px; border-left:4px solid var(--accent); padding-left:10px; }
+  h3 { font-size:16px; margin:20px 0 8px; }
+  .meta { color:var(--sub); font-size:13px; margin-bottom:24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px 20px; margin:14px 0; }
+  table { border-collapse:collapse; width:100%; margin:10px 0; background:var(--card); }
+  th,td { border:1px solid var(--line); padding:8px 12px; text-align:left; vertical-align:top; font-size:14px; }
+  th { background:#eef2f6; }
+  code { background:#eef1f4; padding:1px 6px; border-radius:4px; font-size:13px; font-family:Consolas,monospace; }
+  .ok { color:var(--ok); font-weight:600; }
+  .warn { color:var(--warn); font-weight:600; }
+  .bad { color:var(--bad); font-weight:600; }
+  .tag { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; margin-right:6px; }
+  .tag.plugin { background:#ddf4ff; color:#0b66c3; }
+  .tag.skill { background:#fbefff; color:#8250df; }
+  .tag.core { background:#fff1e5; color:#bc4c00; }
+  .tag.on { background:#dafbe1; color:#1a7f37; }
+  .tag.off { background:#eaeef2; color:#57606a; }
+  ul { margin:6px 0; padding-left:22px; }
+  .muted { color:var(--sub); font-size:13px; }
+  .big { font-size:15px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>新插件实施报告</h1>
+  <div class="meta">QQ Agent v0.4.2 · 2026-09-27 · 按「新插件创意计划」全量落地：4 个确定性插件 + 2 个 LLM 技能 + 3 处核心补丁 · 冒烟测试 27/27 通过</div>
+
+  <h2>交付总览</h2>
+  <table>
+    <tr><th>#</th><th>名称</th><th>类型</th><th>目录</th><th>默认</th><th>挂载点</th></tr>
+    <tr><td>1</td><td>cache-guard 前缀缓存哨兵</td><td><span class="tag plugin">插件</span></td><td><code>plugins/cache-guard/</code></td><td><span class="tag on">默认启用</span></td><td>before-llm-messages · after-response · 工具 cache_report</td></tr>
+    <tr><td>2</td><td>anti-flood 刷屏话题锚点</td><td><span class="tag plugin">插件</span></td><td><code>plugins/anti-flood/</code></td><td><span class="tag on">默认启用</span></td><td>before-context（对象级）· before-llm-messages（文本级）</td></tr>
+    <tr><td>3</td><td>presence 参与度自适应</td><td><span class="tag plugin">插件</span></td><td><code>plugins/presence/</code></td><td><span class="tag off">默认关闭</span></td><td>before-context · after-response · before-tool 否决 · 动态片段</td></tr>
+    <tr><td>4</td><td>relationship 关系状态</td><td><span class="tag plugin">插件</span></td><td><code>plugins/relationship/</code></td><td><span class="tag off">默认关闭</span></td><td>before-context · 动态 promptSections</td></tr>
+    <tr><td>5</td><td>topic-tracker 话题追踪</td><td><span class="tag skill">技能</span></td><td><code>skills/topic-tracker/</code></td><td><span class="tag off">默认关闭</span></td><td>工具 topic_timeline / topic_search</td></tr>
+    <tr><td>6</td><td>group-profile 群画像</td><td><span class="tag skill">技能</span></td><td><code>skills/group-profile/</code></td><td><span class="tag off">默认关闭</span></td><td>工具 group_profile / daily_digest</td></tr>
+    <tr><td>7</td><td>core-hardening</td><td><span class="tag core">核心补丁</span></td><td><code>src/</code> 等三处</td><td>—</td><td>stop() 收尾 · skillManager.disposeAll · random-image 数据目录</td></tr>
+  </table>
+  <p class="muted">默认关闭的三个会改变机器人行为/人设（拦截发送、改语气、加工具），需要你在「技能管理」界面手动启用；纯观测与纯裁剪的两个默认启用。</p>
+
+  <h2>1. cache-guard · 前缀缓存哨兵 <span class="tag plugin">插件</span><span class="tag on">默认启用</span></h2>
+  <div class="card big">
+    <b>解决什么</b>：命中率 93.36% 意味着每天约 75 万 prompt token 未命中缓存，而任何插件改动系统提示都会悄悄击穿前缀——此前毫无线索。<br>
+    <b>怎么工作</b>：① 每次调用从 <code>session.lastCallCache</code> 聚合每日/每群的命中率（含单次最低/最高）；② 对系统提示按 <code>▸ 小节</code> 切段做指纹，任何段落漂移立即告警并<b>归因到具体段落</b>（如「分层会话记忆」改了它的片段）；③ 注册 <code>cache_report</code> 工具，问"缓存怎么样"时模型可自查。<br>
+    <b>红线遵守</b>：数据只写 <code>data/plugin-data/cache-guard/</code>（节流 30s + tmp/rename 原子写），绝不写进 <code>plugins/</code> 触发热重载风暴。
+  </div>
+
+  <h2>2. anti-flood · 刷屏话题锚点 <span class="tag plugin">插件</span><span class="tag on">默认启用</span></h2>
+  <div class="card big">
+    <b>两级裁剪（全规则、不走 LLM）</b>：<br>
+    L1 对象级：<code>before-context</code> 把同一发送者 3 秒内的连发合并为一条（保留首条消息 id 作回复锚点，文本以「 ／ 」拼接）。<br>
+    L2 文本级：历史块里同一发送者的连续占位符行 <code>[图片][图片][图片]</code> 折叠成 <code>[图片×N]</code>（保留首行 #id）。<br>
+    <b>锚点保护</b>：带 @、带引用、带媒体、自己发的消息永不合并；【本次唤醒】块的行永远不折叠——回复锚点（replyToMessageId）永远有效。<br>
+    <b>真实数据实测（诚实版）</b>：
+    <table>
+      <tr><th>指标</th><th>实测</th></tr>
+      <tr><td>L1 连发合并（153 个带 trigger 的会话）</td><td>合并 225 条，trigger 字符节省 <b>5.2%</b></td></tr>
+      <tr><td>L2 历史占位符折叠（40 个会话样本）</td><td>节省 <b>0.2%</b>——该群虽 1 秒/条但轮流发图，同发送者连续段最长只有 2 连，故默认 foldMinRun 已调为 2</td></tr>
+    </table>
+    结论：价值主要是 L1 的节流 + 减少 anchor 噪声，量级比初版计划估计（25~40%）小得多——以实测为准。
+  </div>
+
+  <h2>3. presence · 参与度自适应 <span class="tag plugin">插件</span><span class="tag off">默认关闭</span></h2>
+  <div class="card big">
+    <b>针对</b>：机器人发言占全群 22.5%（581/2584），且 363 个会话里只有 6.9% 主动选择不说话。<br>
+    <b>三层介入</b>：① 账本——每群维护最近 120 条的 (ts, self) 滚动序列（纯内存）；② 软介入——占比 ≥25% 时在系统提示注入「这轮倾向安静」建议（动态片段，不报数字）；③ 硬介入——占比 ≥32% 且 8 秒内刚发过言时，<code>before-tool</code> 直接否决 <code>send_message</code>（模型收到工具错误自然收尾，不烧额外 API）。<br>
+    <b>逃生门</b>：带 replyToMessageId 或带 @ 的发送放行（可能是被点名）；否决冷却 60s 防死循环。冒烟测试已验证：25% 软介入、32.5% 硬否决、引用放行、@放行、冷却全部符合预期。
+  </div>
+
+  <h2>4. relationship · 关系状态 <span class="tag plugin">插件</span><span class="tag off">默认关闭</span></h2>
+  <div class="card big">
+    <b>机制来源</b>：health-system 证明了「状态只改语气、绝不显示数值」是让模拟角色自然的关键——本插件把同一机制搬到群友关系上。<br>
+    <b>怎么工作</b>：每个群友一个 0~100 隐藏熟悉度（说话 +1.2、含 @ +2.5、引用 +3、每天衰减 1.5）；动态片段向系统提示注入自然语言关系描述：「老熟人可以开玩笑/接梗」「常打照面语气放松」「新面孔礼貌克制」，本次唤醒里在场的人优先描述。<br>
+    <b>保密指令</b>：片段末尾硬性要求「绝不要在聊天里提熟悉度/好感度或任何数字」。状态落 <code>data/plugin-data/relationship/</code>，热重载不丢。
+  </div>
+
+  <h2>5 + 6. topic-tracker / group-profile <span class="tag skill">技能</span><span class="tag off">默认关闭</span></h2>
+  <div class="card big">
+    两个 LLM 技能补「模型几乎不主动翻历史」的行为缺口（363 个会话里 get_recent_messages 只被调过 3 次）。检索本身是纯确定性统计，零 LLM 成本：<br>
+    · <b>topic-tracker</b>：<code>topic_timeline</code> 把某天消息按 8 分钟间隙切段（时间段/参与者/关键词/例句）；<code>topic_search</code> 按关键词跨天回搜。已用真实存档验证：2584 条切成 3 段、「鲸鱼」30 天回搜 21+ 条命中。<br>
+    · <b>group-profile</b>：<code>group_profile</code> 出排行榜/单成员画像/时段分布（含机器人占比提示）；<code>daily_digest</code> 按小时分块的流水摘要。已用真实存档验证全部三个工具。
+  </div>
+
+  <h2>7. core-hardening <span class="tag core">核心补丁</span></h2>
+  <div class="card big">
+    <table>
+      <tr><th>位置</th><th>修复</th></tr>
+      <tr><td><code>src/app.js</code> stop()</td><td>补 <code>orchestrator.stopProactiveLoop()</code>——此前只停 reminderLoop，主动发言定时器退出后仍继续调度；补 <code>skillManager.disposeAll()</code>——此前插件实例从不 dispose，health-system 的衰减 setInterval 等在退出后仍泄漏运行</td></tr>
+      <tr><td><code>src/skills/manager.js</code></td><td>新增 <code>disposeAll(context)</code>：逐个 deactivate+dispose，单个失败不影响其余</td></tr>
+      <tr><td><code>skills/random-image/config.js</code></td><td>数据目录从 <code>process.cwd()</code> 改为 env 优先 + 模块锚点回退（与 09-25 media-download 修复同源）</td></tr>
+      <tr><td>已确认无需再修</td><td>media-download 的 cwd 与 selfInfo 延迟补拉在 09-25 那轮已落（env 优先 / 循环补拉已存在）</td></tr>
+    </table>
+  </div>
+
+  <h2>验证结果</h2>
+  <div class="card big">
+    <ul>
+      <li><span class="ok">✔</span> 9 个 JS 文件 <code>node --check</code> 全部通过；6 个清单 JSON 解析通过，prompt priority ≤ 99 合规</li>
+      <li><span class="ok">✔</span> 冒烟测试 <b>27/27 通过</b>（<code>.workbuddy/plugin-smoke-test.mjs</code>，可重复执行）：<br>
+        cache-guard 统计落盘 + 漂移归因到段落 · anti-flood 连发 5→3/锚点保护/折叠/唤醒块不折叠 · presence 25% 软介入 + 32.5% 硬否决 + 引用/@/冷却逃生门 · relationship 片段生成 + 不泄露数值 + 原子落盘 · 两个技能对真实存档全部可用</li>
+      <li><span class="ok">✔</span> 插件数据全部落在 <code>data/plugin-data/&lt;id&gt;/</code>，无一写入 plugins/ 目录（热重载安全）</li>
+      <li><span class="warn">⚠</span> 诚实修正：anti-flood 实测节省（L1 5.2% / L2 0.2%）远小于计划书估计值，已在上方如实标注</li>
+    </ul>
+  </div>
+
+  <h2>启用指南</h2>
+  <div class="card big">
+    <ol>
+      <li>应用启动后热重载自动加载两个默认启用的插件（cache-guard / anti-flood），启动日志可见「✅ 加载成功」。</li>
+      <li>presence / relationship / topic-tracker / group-profile 到「技能管理」里手动打开；开关只有一处 <code>config.skills[id].enabled</code>。</li>
+      <li>cache-guard 跑一天后对机器人说「缓存命中率怎么样」即可拿到报表；系统提示一旦被谁改了，漂移记录会直接点名段落。</li>
+      <li>所有插件可在设置界面按 configSchema 的中文标签调参（阈值/窗口/开关）。</li>
+    </ol>
+  </div>
+</div>
+</body>
+</html>

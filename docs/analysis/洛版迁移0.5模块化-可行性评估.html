@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>洛版 0.4.9.1 → 0.5 模块化底座 · 可行性评估</title>
+<style>
+  :root{
+    --bg:#0d1014; --bg2:#141920; --bg3:#1b222b; --line:#252d38;
+    --txt:#e6edf5; --dim:#9aa7b6; --dim2:#6b7887;
+    --acc:#4ea1ff; --acc2:#7c5cff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:15px/1.75 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1120px;margin:0 auto;padding:56px 32px 96px}
+  header{border-bottom:1px solid var(--line);padding-bottom:32px;margin-bottom:44px}
+  .kicker{font-size:12px;letter-spacing:.18em;color:var(--acc);text-transform:uppercase;margin-bottom:14px;font-weight:600}
+  h1{font-size:34px;line-height:1.25;margin:0 0 16px;font-weight:700;letter-spacing:-.02em}
+  .sub{color:var(--dim);font-size:15px;max-width:790px}
+  .meta{margin-top:22px;display:flex;gap:26px;flex-wrap:wrap;font-size:13px;color:var(--dim2)}
+  .meta b{color:var(--dim);font-weight:600}
+  h2{font-size:22px;margin:62px 0 8px;font-weight:650;letter-spacing:-.01em;display:flex;align-items:center;gap:12px}
+  h2 .n{font-size:12px;color:var(--acc);background:rgba(78,161,255,.1);border:1px solid rgba(78,161,255,.28);
+    border-radius:6px;padding:2px 8px;font-weight:600;letter-spacing:.06em}
+  h3{font-size:16px;margin:34px 0 10px;font-weight:650;color:#cfdae8}
+  p{color:#c4cfdc;margin:12px 0}
+  .lead{color:var(--dim);font-size:14px;margin-bottom:24px;padding-left:14px;border-left:2px solid var(--line)}
+  strong{color:#fff;font-weight:650}
+  code{background:var(--bg3);padding:1.5px 6px;border-radius:4px;font-size:13px;
+    font-family:"Cascadia Code",Consolas,monospace;color:#8fd0ff;border:1px solid var(--line)}
+  pre{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+    overflow-x:auto;font-size:12.5px;line-height:1.65;margin:16px 0}
+  pre code{background:none;border:none;padding:0;color:#b9c6d4}
+
+  .verdict{background:linear-gradient(135deg,rgba(63,185,80,.08),rgba(78,161,255,.05));
+    border:1px solid rgba(63,185,80,.3);border-radius:14px;padding:24px 26px;margin:26px 0}
+  .verdict .big{font-size:20px;font-weight:700;color:#fff;margin-bottom:12px;letter-spacing:-.01em}
+  .verdict p{margin:9px 0;font-size:14px}
+
+  table{width:100%;border-collapse:collapse;margin:20px 0;font-size:13.5px}
+  th{text-align:left;padding:11px 13px;background:var(--bg3);color:var(--dim);
+    font-weight:600;font-size:12px;letter-spacing:.05em;border-bottom:1px solid var(--line)}
+  td{padding:11px 13px;border-bottom:1px solid var(--line);vertical-align:top;color:#c4cfdc}
+  tr:hover td{background:rgba(255,255,255,.018)}
+  td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+  .tag{display:inline-block;font-size:11.5px;padding:1.5px 8px;border-radius:20px;font-weight:600;
+    white-space:nowrap;border:1px solid transparent}
+  .t-ok{color:var(--ok);background:rgba(63,185,80,.1);border-color:rgba(63,185,80,.3)}
+  .t-part{color:var(--warn);background:rgba(210,153,34,.1);border-color:rgba(210,153,34,.3)}
+  .t-bad{color:var(--bad);background:rgba(248,81,73,.1);border-color:rgba(248,81,73,.3)}
+  .t-new{color:var(--acc2);background:rgba(124,92,255,.12);border-color:rgba(124,92,255,.32)}
+
+  .box{background:var(--bg2);border:1px solid var(--line);border-left:3px solid var(--acc);
+    border-radius:0 10px 10px 0;padding:16px 20px;margin:22px 0}
+  .box.warn{border-left-color:var(--warn)}
+  .box.bad{border-left-color:var(--bad)}
+  .box.ok{border-left-color:var(--ok)}
+  .box .t{font-size:13px;font-weight:700;color:#fff;margin-bottom:6px;letter-spacing:.02em}
+  .box p{margin:6px 0;font-size:13.5px;color:#b9c6d4}
+
+  .routes{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:26px 0}
+  .route{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:20px;position:relative}
+  .route.rec{border-color:rgba(63,185,80,.4);background:linear-gradient(160deg,rgba(63,185,80,.06),var(--bg2))}
+  .route .badge{position:absolute;top:-10px;left:18px;font-size:11px;font-weight:700;
+    background:var(--ok);color:#04170a;padding:2px 9px;border-radius:20px;letter-spacing:.04em}
+  .route h4{margin:0 0 4px;font-size:15px;color:#fff}
+  .route .cap{font-size:12px;color:var(--dim2);margin-bottom:14px;line-height:1.5}
+  .route ul{padding-left:17px;margin:0;font-size:12.8px;color:#b9c6d4}
+  .route li{margin:6px 0}
+  .route li::marker{color:var(--dim2)}
+  .route .cost{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);
+    font-size:12px;color:var(--dim2)}
+  .route .cost b{color:var(--warn);font-weight:650}
+
+  .steps{counter-reset:s;margin:24px 0}
+  .step{background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:18px 20px 16px;margin:14px 0;
+    position:relative;padding-left:58px}
+  .step::before{counter-increment:s;content:counter(s);position:absolute;left:18px;top:18px;
+    width:26px;height:26px;border-radius:8px;background:rgba(78,161,255,.13);border:1px solid rgba(78,161,255,.32);
+    color:var(--acc);font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .step h4{margin:0 0 6px;font-size:14.5px;color:#fff}
+  .step .why{font-size:13px;color:#b9c6d4;margin:0 0 8px}
+  .step .do{font-size:12.8px;color:var(--dim);margin:0}
+  .step .do b{color:#8fd0ff;font-weight:600}
+  .step .acc{margin-top:10px;font-size:12px;color:var(--ok);
+    background:rgba(63,185,80,.07);border-left:2px solid rgba(63,185,80,.4);padding:6px 10px;border-radius:0 5px 5px 0}
+
+  ul{padding-left:20px;color:#c4cfdc}
+  li{margin:7px 0}
+  li::marker{color:var(--acc)}
+  .foot{margin-top:72px;padding-top:22px;border-top:1px solid var(--line);font-size:12.5px;color:var(--dim2)}
+  @media(max-width:860px){.routes{grid-template-columns:1fr}.wrap{padding:32px 18px}h1{font-size:26px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">Feasibility Assessment · 2026-11-03</div>
+  <h1>把洛版 0.4.9.1 换到 0.5 的模块化底座</h1>
+  <p class="sub">
+    结论先说：<strong>能实现，但"改造底层"这个说法会把人带进坑里。</strong>
+    这不是给旧房子换地基——是<strong>搬进新房子</strong>，家具能带走，承重墙带不走。
+    真正的问题是：洛版那 5,261 行的分层记忆，在新房子里有没有位置。
+  </p>
+  <div class="meta">
+    <span><b>证据来源</b> 两侧源码逐文件比对</span>
+    <span><b>关键发现</b> 0.5 已内置 <code>migrateFrom04</code></span>
+    <span><b>硬障碍</b> 2 处（内核接口 / 分层记忆）</span>
+  </div>
+</header>
+
+<div class="verdict">
+  <div class="big">可行，但要选对路线：迁移，不要重构</div>
+  <p><strong>①</strong> 官方 0.5.0 里已经有 <code>src/kernel/migrator.js</code>，导出 <code>detectMigrationSource</code> / <code>migrateFrom04</code>——<strong>0.4 数据迁移是设计内的功能，不是你要自己造</strong>。覆盖 config / messages / memory / stickers / reminders / telemetry 六类。</p>
+  <p><strong>②</strong> 洛版 13 个插件里 <strong>9 个只用了 <code>api.config</code> + <code>api.log</code> + <code>api.storage</code> + <code>registerTool</code></strong>，0.5.0 的 <code>compat-04</code> 垫片正好覆盖这几个——接近零改动就能跑。</p>
+  <p><strong>③</strong> 但内核三件套（编排器 / 记忆仓 / 发送队列）<strong>接口签名完全不同</strong>，洛版模块塞不进 0.5 的组件位。这两层必须二选一：用 0.5 的，或者写适配器。</p>
+</div>
+
+<h2><span class="n">01</span>为什么"改造 0.4.9.1 的底层"这条路不成立</h2>
+<p class="lead">如果你说的是"把洛版现有代码原地重构成模块化"，那等于重写——原因不是代码量，是耦合方式。</p>
+
+<p>0.5.0 的"模块化"不是把文件拆小，是<strong>三件套</strong>：依赖注入 + 组件表 + 生命周期登记。而洛版代码里全是直接 <code>import</code> 和 <code>this.xxx</code> 调用：</p>
+
+<pre><code>// 洛版 src/app.js —— 41 个顶层 import，全部直接绑定具体实现
+import { Orchestrator } from './orchestrator.js'
+import { MemoryStore } from './memory.js'
+import { SendQueue } from './sender.js'
+import { ChatStore } from './store.js'
+// ... 共 41 行 import，没有一个是通过参数传入的
+
+// 0.5.0 src/kernel/orchestrator.js —— 实现从组件表取，可被 overrides 替换
+const systemPromptFor = components?.['core.prompt.system'] ?? buildSystemPrompt;
+const userPromptFor   = components?.['core.prompt.user']   ?? buildUserPrompt;
+const agentRunner     = components?.['core.agentRunner']   ?? runAgent;</code></pre>
+
+<p>要把洛版重构成这个形态，得把 <code>orchestrator.js</code>（3,700 行）、<code>routes.js</code>（5,286 行）、<code>app.js</code>（3,977 行）逐段拆开、把每处 <code>this.store.xxx()</code> 改成注入、再补上 <code>lifecycle.onStop</code> 的清理登记。<strong>工作量约等于重写一遍 0.5，而且拿不到 0.5 的任何测试与文档红利。</strong></p>
+
+<div class="box bad">
+  <div class="t">所以问题应该重新表述</div>
+  <p>不是"怎么把 0.4.9.1 改造成模块化"，而是<strong>"怎么把洛版的能力搬到 0.5 的模块化底座上"</strong>。前者是重写，后者是迁移——后者可行，下面全是后者。</p>
+</div>
+
+<h2><span class="n">02</span>三条路线的真实成本</h2>
+
+<div class="routes">
+  <div class="route rec">
+    <div class="badge">推荐</div>
+    <h4>A · 迁移到 0.5</h4>
+    <div class="cap">洛版功能以追加层/插件形式挂上 0.5，内核用 0.5 的</div>
+    <ul>
+      <li>数据靠官方 migrator 六类导入</li>
+      <li>9 个插件走 compat-04 直接跑</li>
+      <li>桌宠壁纸已有现成参考层</li>
+      <li>内核语义接受 0.5 版本</li>
+    </ul>
+    <div class="cost">代价：<b>内核行为要重新验收</b>，不是原样保留</div>
+  </div>
+  <div class="route">
+    <h4>B · 原地重构 0.4.9.1</h4>
+    <div class="cap">保持 0.4 内核，只把代码组织改成模块化</div>
+    <ul>
+      <li>视觉上像 0.5，内核还是 0.4</li>
+      <li>要拆 13,000 行巨型文件</li>
+      <li>拿不到 0.5 的组合/覆盖能力</li>
+      <li>拆完仍需自己维护两套</li>
+    </ul>
+    <div class="cost">代价：<b>纯投入，无架构收益</b> —— 不推荐</div>
+  </div>
+  <div class="route">
+    <h4>C · 双轨并存</h4>
+    <div class="cap">0.4 继续日常用，0.5 侧逐步接管特定能力</div>
+    <ul>
+      <li>这个 portable 包已在做（洛希桥）</li>
+      <li><code>/dsh</code> 命令切换主脑</li>
+      <li>风险隔离最好</li>
+      <li>但两套数据两套配置</li>
+    </ul>
+    <div class="cost">代价：<b>长期双份维护</b>，适合过渡期</div>
+  </div>
+</div>
+
+<p>下面按 <strong>路线 A</strong> 展开，因为它是唯一能同时拿到"洛版能力"和"模块化架构"的路径。</p>
+
+<h2><span class="n">03</span>好消息：这三块几乎不用你动手</h2>
+
+<h3>3.1 数据迁移 —— 官方已经写好了</h3>
+<p><code>src/kernel/migrator.js</code>（238 行）的设计约束很明确：<strong>0.4 目录只读、永不回写、目标 data 必须为空、支持 dryRun</strong>，迁完写 <code>migration-report.json</code>。它处理六类：</p>
+
+<table>
+  <tr><th>类别</th><th>迁移内容</th><th>洛版实测</th><th>状态</th></tr>
+  <tr><td>① config</td><td><code>config.json</code>，剥离废弃键与 derived flags</td><td>47 KB</td><td><span class="tag t-ok">可迁</span></td></tr>
+  <tr><td>② messages</td><td><code>messages/</code> 整目录</td><td>11 MB</td><td><span class="tag t-ok">可迁</span></td></tr>
+  <tr><td>③ memory</td><td><code>memory/</code>，含 0.4 旧单文件格式自动拆分</td><td>383 KB</td><td><span class="tag t-ok">可迁</span></td></tr>
+  <tr><td>④ stickers</td><td><code>stickers.json</code> + <code>sticker-images/</code></td><td>103 KB</td><td><span class="tag t-ok">可迁</span></td></tr>
+  <tr><td>⑤ reminders</td><td>提醒任务</td><td>—</td><td><span class="tag t-ok">可迁</span></td></tr>
+  <tr><td>⑥ telemetry</td><td>沿用 <code>installId</code></td><td>78 B</td><td><span class="tag t-ok">可迁</span></td></tr>
+</table>
+
+<div class="box ok">
+  <div class="t">但注意：迁移器只认官方 0.4 的六类</div>
+  <p>洛版 <code>data/</code> 下这些<strong>不在迁移范围内</strong>，需要你自己决定：<code>memory-v3/</code>（5.5 MB，mem-layered 的私有数据）、<code>usage-ledger/</code>、<code>usage-daily.json</code>、<code>plugin-data/</code>、<code>desktop-pet/</code>、<code>sessions/</code>（8.1 MB）、<code>image-cache/</code>、<code>video-cache/</code>、<code>cache-warm-prefix.json</code>、<code>bridge/</code>。<strong>其中 <code>memory-v3</code> 是最大的问题，见第 4 节。</strong></p>
+</div>
+
+<h3>3.2 九个插件 —— 兼容垫片直接吃</h3>
+<p>统计洛版 13 个插件的实际 API 调用面，结果出乎意料地窄：</p>
+
+<pre><code>api.log      × 20        api.config   × 14        api.warn   × 10
+api.storage  × 4         api.qqCall   × 4         api.capability × 3
+api.panel    × 2         api.thinkingMode × 3     api.sendSticker × 1
+api.registerTool × 1     api.isSkillActive × 1</code></pre>
+
+<p>而 <code>bundled/compat-04/index.js</code> 提供的兼容面正好是 <code>config / log / warn / error / capability / hasCapability / registerTool / utils</code>，并且明确保留"未标记用户包可调用旧配置入口"和"旧 <code>parameters</code> / <code>execute(ctx,args)</code> 自动映射到新顺序"。</p>
+
+<table>
+  <tr><th>插件</th><th>依赖的 API</th><th>迁移判断</th></tr>
+  <tr><td>ban-state / image-compat / media-download / owner-identity / speech-to-text / video-frames / account-pool / cache-guard / thinking-adapters</td><td>仅 <code>config</code> + <code>log</code>（cache-guard 另加 <code>registerTool</code>）</td><td><span class="tag t-ok">基本零改动</span></td></tr>
+  <tr><td>speaker-identity / mem-layered</td><td>+ <code>api.capability</code></td><td><span class="tag t-part">改 1 处</span> 换成 <code>ctx.capability</code> 显式注册</td></tr>
+  <tr><td>thinking-adapters</td><td>+ <code>api.thinkingMode</code> / <code>thinkingBudget</code></td><td><span class="tag t-part">语义核对</span> 0.5 有 <code>thinking-policy.js</code> 但字段名要对</td></tr>
+  <tr><td>sticker</td><td>+ <code>api.qqCall</code> + <code>api.panel</code> + <code>api.sendSticker</code></td><td><span class="tag t-bad">要改</span> 见 4.2</td></tr>
+  <tr><td>desktop-pet</td><td>独立 Electron 进程 + <code>api.log</code></td><td><span class="tag t-new">已有现成</span> <code>overrides/30-desktop-extras</code> 就是重写好的</td></tr>
+</table>
+
+<h3>3.3 桌宠和壁纸 —— 已经有人替你搬过了</h3>
+<p>这个 portable 包里的 <code>overrides/30-desktop-extras/</code> 就是活样板：它把洛版的桌宠 + 壁纸整体接到 0.5 上，用了 <code>wrap console.panels</code> 插两页 + 独立路由 <code>/api/pet/*</code>、<code>/api/wallpaper/*</code> + 独立 Electron 进程，<strong>没改 0.5 的任何出厂文件</strong>。README 里连"模糊的根因是小红车预览图只有 1024px"这种细节都写了。</p>
+<p>要搬洛版其他重 UI 功能，照这个结构抄就行。</p>
+
+<h2><span class="n">04</span>坏消息：两块硬骨头</h2>
+
+<h3>4.1 内核三件套接口不兼容（这是根本性障碍）</h3>
+<p>如果你打算"把洛版的编排器/记忆仓/发送队列直接塞进 0.5 的组件位"，先看这张表：</p>
+
+<table>
+  <tr><th>模块</th><th>洛版 0.4.9.1</th><th>0.5.0</th><th>兼容</th></tr>
+  <tr>
+    <td><strong>编排器</strong></td>
+    <td><code>new Orchestrator({store, memory, sender, sessions, onebot, emit, reminders, videoReader})</code><br><span style="font-size:12px;color:var(--dim2)">8 个依赖，对象字面量</span></td>
+    <td><code>createOrchestrator({cfg, store, sessions, memory, send, registry, loader, capability, transport, onebot, log, bus, isPaused, buildToolsFor, execContextFor, transcribe, now, llmInvoker, components, lifecycle, ...})</code><br><span style="font-size:12px;color:var(--dim2)">20+ 依赖，内部再按组件表取提示词/运行器</span></td>
+    <td><span class="tag t-bad">不兼容</span></td>
+  </tr>
+  <tr>
+    <td><strong>记忆仓</strong></td>
+    <td>18 个公开方法：<code>append / query / remove / editMemberImpression / formatForPrompt / mergeMemberInto / listChats / markConsolidated / …</code></td>
+    <td>公开面只有 <code>mergeNameDuplicates / migrateLegacy / persist</code>，其余在闭包里</td>
+    <td><span class="tag t-bad">公开面不同</span></td>
+  </tr>
+  <tr>
+    <td><strong>发送队列</strong></td>
+    <td><code>sendTextBatch / sendImage / sendMedia / sendSticker</code></td>
+    <td><code>sendTextBatch / sendImage / sendSticker / sendSegments / poke</code></td>
+    <td><span class="tag t-part">部分重叠</span> <code>sendMedia</code> 无对应</td>
+  </tr>
+</table>
+
+<div class="box bad">
+  <div class="t">这意味着什么</div>
+  <p>洛版的 <code>Orchestrator</code> 不能被塞进 0.5 的 <code>core.orchestrator</code> 组件位——除非写一个适配器，把 0.5 传进来的 20 个依赖映射成洛版要的 8 个，<strong>并且</strong>再把洛版内部对 <code>this.store.xxx()</code> / <code>this.memory.xxx()</code> 的调用翻译成 0.5 的接口。这个适配器本身就是个几千行的兼容层，比直接用 0.5 的编排器再补功能更贵。</p>
+  <p><strong>正确做法：内核用 0.5 的，洛版的增强做成插件挂在外面。</strong></p>
+</div>
+
+<h3>4.2 分层记忆 mem-layered：5,261 行，最麻烦的一块</h3>
+<p>这是洛版最有价值的差异化功能（BM25 检索 + Weibull 衰减 + 共激活联想 + 后台增量巩固），也是迁移里唯一的"重资产"：</p>
+
+<table>
+  <tr><th>维度</th><th>洛版 mem-layered</th><th>0.5.0 memory-service</th></tr>
+  <tr><td>代码量</td><td class="num">5,261 行（20 个文件）</td><td class="num">约 300 行</td></tr>
+  <tr><td>数据位置</td><td><code>data/memory-v3/</code>（blocks / index / cards / cross-turn / todos / budget / stats）<br><strong>实测 5.5 MB</strong></td><td><code>data/memory/</code>（按 QQ 号一人一文件，每条印象截断 300 字）</td></tr>
+  <tr><td>检索</td><td>BM25 索引 + 强度衰减 + 联想激活</td><td>最近 15 成员 × 每人 3 条印象，直接塞提示词</td></tr>
+  <tr><td>迁移器覆盖</td><td><span class="tag t-bad">不覆盖</span></td><td>迁移器只迁官方 <code>memory/</code> 格式</td></tr>
+</table>
+
+<p>三个选择，代价递增：</p>
+<ul>
+  <li><strong>方案 1（最省）：把 mem-layered 当插件整体搬过去</strong>，数据目录继续用 <code>memory-v3</code>。它只用 <code>api.config</code> + <code>api.log</code> + <code>registerTool</code> + <code>api.capability</code>，改一处能力位注册即可。5.5 MB 历史记忆原样保留。<strong>推荐这条。</strong></li>
+  <li><strong>方案 2：写一次性转换脚本</strong>，把 <code>memory-v3/blocks/</code> 里的日块摘要导出成 0.5 的 <code>memory/*.json</code>。结构差异大（块是"按天的对话摘要"，0.5 是"按人的印象条目"），<strong>信息损失严重</strong>，BM25 索引和衰减曲线全丢。</li>
+  <li><strong>方案 3：放弃洛版记忆，用 0.5 原生的。</strong>最干净，但洛版最核心的能力就没了——那迁移的意义少一半。</li>
+</ul>
+
+<h3>4.3 sticker 插件：<code>qqCall</code> 在 0.5 里不存在</h3>
+<p>洛版 sticker 插件用 <code>api.qqCall('fetch_custom_face_detail')</code> 直接调 OneBot 拉 QQ 收藏表情详情。全量 grep 0.5.0 源码，<strong><code>qqCall</code> 零命中</strong>——0.5 不给插件直连 OneBot 的口子（这是安全设计，文档写明"桥只监听回环，插件拿不到 OneBot"）。</li>
+<p>0.5 的替代是 <code>execution.send.sendSticker(chatKey, sticker, options)</code>，只管发不管拉。所以要保留"同步 QQ 收藏表情"这个功能，得走 <code>bundled/transport-onebot</code> 暴露的能力位，或者干脆砍掉这一支、只保留本地表情库。</p>
+
+<h3>4.4 测试不可复跑，回归全靠自己</h3>
+<p>0.5.0 的 <code>test/</code> 目录<strong>没随包分发</strong>（<code>package.json</code> 有 <code>test/run-all.mjs</code> 但目录缺失）。洛版那 31 个测试文件、235 条用例，测的是 0.4 的接口。迁移完成后<strong>没有现成的回归网</strong>，得自己重建。</p>
+
+<h2><span class="n">05</span>执行路径（按可验证的里程碑切）</h2>
+<p class="lead">每一步都能独立验收，不要一次性全搬。前两步是"证明可行"，不是"完成迁移"。</p>
+
+<div class="steps">
+
+  <div class="step">
+    <h4>先跑通数据迁移，确认能启动</h4>
+    <p class="why">不写一行新代码，先验证官方迁移器能不能吃下洛版的 data。这一步失败，后面都不用谈。</p>
+    <p class="do">在 0.5 的空 data 目录旁放一份洛版 <code>data/</code> 副本，调 <b><code>detectMigrationSource</code></b> 看它认不认；再 <b><code>migrateFrom04({dryRun:true})</code></b> 出报告，核对六类条数与洛版实际是否对得上。</p>
+    <div class="acc">验收：<code>migration-report.json</code> 六类全 ok，config 的 47 KB 关键字段（providers / 白名单 / 人设）在 0.5 设置页可见</div>
+  </div>
+
+  <div class="step">
+    <h4>搬第一个"零风险"插件：cache-guard</h4>
+    <p class="why">269 行，纯观测型、不改任何行为，只用 <code>api.config</code> + <code>api.log</code> + <code>registerTool</code>。用它验证 compat-04 垫片到底能不能接住洛版插件。</p>
+    <p class="do">整个目录丢进 <code>plugins/</code>，看加载器是否识别、工具是否注册、日志是否出现"旧接口被调用"的兼容记录。</p>
+    <div class="acc">验收：面板里能看到缓存命中率报表，且 <code>compat-04</code> 的 compatibility 字段记录了旧接口调用</div>
+  </div>
+
+  <div class="step">
+    <h4>批量过 7 个小插件</h4>
+    <p class="why">ban-state / image-compat / owner-identity / speaker-identity / speech-to-text / video-frames / account-pool / thinking-adapters —— 依赖面都一样窄。</p>
+    <p class="do">逐个搬、逐个启，遇到 <code>api.capability</code> 的改成 <code>ctx.capability</code> 显式注册；遇到 <code>api.thinkingMode</code> 的对照 <b><code>src/kernel/thinking-policy.js</code></b> 的字段名改。</p>
+    <div class="acc">验收：每个插件在设置页有配置项、能力位注册成功、日志无报错</div>
+  </div>
+
+  <div class="step">
+    <h4>攻坚 mem-layered</h4>
+    <p class="why">最大价值也最大风险。策略是"当插件搬，不碰内核"——让它继续管自己的 <code>memory-v3</code>。</p>
+    <p class="do">改 <code>api.capability</code> → <code>ctx.capability</code>；确认它能拿到 <code>data</code> 根路径；把 5.5 MB <code>memory-v3</code> 整目录拷进新 data 根。<b>不要试图把它的记忆导进 0.5 的 memory/</b>。</p>
+    <div class="acc">验收：拿一个真实群的历史提问，能检索出 10-22 的旧记忆块，且衰减强度值与洛版一致</div>
+  </div>
+
+  <div class="step">
+    <h4>补 UI：把洛版专属页接回来</h4>
+    <p class="why">洛版的记忆页、用量页、桌宠页在 0.5 里要么没有、要么语义不同。</p>
+    <p class="do">照 <b><code>overrides/30-desktop-extras/</code></b> 的结构写新的追加层：<code>composition.json</code> 声明 <code>ui.panels</code>，<code>assetRoot</code> 指向你的页面，<code>api</code> 白名单只放需要的接口。</p>
+    <div class="acc">验收：侧边栏出现新页，删掉该层目录重启后完全恢复出厂</div>
+  </div>
+
+  <div class="step">
+    <h4>重建回归网</h4>
+    <p class="why">0.5 的测试没随包，迁移后没有任何安全网。</p>
+    <p class="do">优先补洛版 CHANGELOG 里踩过的坑：图片压缩分支、244 万字符请求体、被禁言不烧 token、插件指纹校验。这些是实战验证过的回归点。</p>
+    <div class="acc">验收：至少覆盖"发图 / 长上下文 / 禁言 / 插件重载"四条主链路</div>
+  </div>
+
+</div>
+
+<h2><span class="n">06</span>必须提前接受的四个事实</h2>
+
+<div class="box warn">
+  <div class="t">① 迁移后不是"洛版 0.4.9.1"，是"洛版功能 + 0.5 内核"</div>
+  <p>内核语义会变。洛版那些靠改内核实现的行为（响应档位判定、忙时合批、上下文锚点、峰谷计价），0.5 有自己的实现，细节不一定一致。0.5 的 <code>core-behavior-parity.md</code> 自己就写了"旧活跃 TTL 把 60000 当分钟下限的实现不迁入"——<strong>官方是主动选择不兼容某些旧行为的</strong>。</p>
+</div>
+
+<div class="box warn">
+  <div class="t">② 洛版 298 KB 的实战修复，大部分带不过去</div>
+  <p>那些修复散落在 <code>orchestrator.js</code>、<code>routes.js</code>、<code>app.js</code> 内部，不在插件层。迁移只能带走插件和 UI，<strong>带不走内核里那几百条边角修复</strong>。这是"0.5 更干净但更嫩"的代价。</p>
+</div>
+
+<div class="box">
+  <div class="t">③ 追加层的信任等级 = 改源码</div>
+  <p><code>overrides/</code> 不受市场安装器管控、不走插件权限模型。它换来"什么都能换"，代价是"什么都能坏"，且<strong>必须完整重启</strong>才生效。别把不可信的第三方代码往这里放。</p>
+</div>
+
+<div class="box">
+  <div class="t">④ 双轨过渡是合理的，不必一次切换</div>
+  <p>这个 portable 包里的 <code>50-luoxi-bridge</code> 已经示范了过渡形态：0.4 和 0.5 并存，用 <code>/dsh &lt;任务&gt;</code> 把特定会话交给另一侧，<code>core.ingest</code> 返回 <code>accepted:false</code> 让宿主整链跳过——<strong>同一时刻只有一个主脑</strong>。迁移期间可以两边跑，一条群用旧的、一条群试新的。</p>
+</div>
+
+<h2><span class="n">07</span>一句话回答</h2>
+<div class="verdict">
+  <div class="big">能，但要把问题从"改造底层"改成"迁移能力"</div>
+  <p>数据有官方迁移器（六类），九个插件有官方兼容垫片（compat-04），桌宠壁纸有现成样板（30-desktop-extras）——<strong>这三块占了洛版功能面的大半，且几乎不用自己写</strong>。</p>
+  <p>真正的成本在两处：<strong>mem-layered 只能当插件整体搬、不能融进 0.5 的记忆仓</strong>；<strong>内核语义要重新验收、洛版几百条边角修复带不过去</strong>。</p>
+  <p>如果目标是"长期可维护的洛版"，值得做；如果目标是"原样保留 0.4.9.1 的所有行为细节"，那不该迁移——<strong>继续在 0.4.9.1 上迭代更划算</strong>。</p>
+</div>
+
+<div class="foot">
+  证据来源：<code>G:\QQagent\resources\app</code>（洛版 v0.4.9.1）与 <code>G:\cmp\050\app</code>（0.5.0 解包）；
+  关键文件：<code>src/kernel/migrator.js</code>（238 行）、<code>bundled/compat-04/index.js</code>、<code>bundled/runtime-defaults/components.js</code>（167 行）、
+  <code>src/kernel/orchestrator.js</code>、<code>src/kernel/memory.js</code>、<code>src/kernel/send.js</code>。
+  接口兼容判断基于源码签名比对，未经运行时验证。
+</div>
+
+</div>
+</body>
+</html>

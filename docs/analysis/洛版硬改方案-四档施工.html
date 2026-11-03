@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>洛版硬改方案 · 把 0.5 的模块化装配搬进 0.4.9.1</title>
+<style>
+  :root{
+    --bg:#0d1014; --bg2:#141920; --bg3:#1b222b; --line:#252d38;
+    --txt:#e6edf5; --dim:#9aa7b6; --dim2:#6b7887;
+    --acc:#4ea1ff; --acc2:#7c5cff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:15px/1.75 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1120px;margin:0 auto;padding:56px 32px 96px}
+  header{border-bottom:1px solid var(--line);padding-bottom:32px;margin-bottom:44px}
+  .kicker{font-size:12px;letter-spacing:.18em;color:var(--acc);text-transform:uppercase;margin-bottom:14px;font-weight:600}
+  h1{font-size:34px;line-height:1.25;margin:0 0 16px;font-weight:700;letter-spacing:-.02em}
+  .sub{color:var(--dim);font-size:15px;max-width:790px}
+  .meta{margin-top:22px;display:flex;gap:26px;flex-wrap:wrap;font-size:13px;color:var(--dim2)}
+  .meta b{color:var(--dim);font-weight:600}
+  h2{font-size:22px;margin:62px 0 8px;font-weight:650;letter-spacing:-.01em;display:flex;align-items:center;gap:12px}
+  h2 .n{font-size:12px;color:var(--acc);background:rgba(78,161,255,.1);border:1px solid rgba(78,161,255,.28);
+    border-radius:6px;padding:2px 8px;font-weight:600;letter-spacing:.06em}
+  h3{font-size:16px;margin:34px 0 10px;font-weight:650;color:#cfdae8}
+  p{color:#c4cfdc;margin:12px 0}
+  .lead{color:var(--dim);font-size:14px;margin-bottom:24px;padding-left:14px;border-left:2px solid var(--line)}
+  strong{color:#fff;font-weight:650}
+  code{background:var(--bg3);padding:1.5px 6px;border-radius:4px;font-size:13px;
+    font-family:"Cascadia Code",Consolas,monospace;color:#8fd0ff;border:1px solid var(--line)}
+  pre{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+    overflow-x:auto;font-size:12.5px;line-height:1.7;margin:16px 0}
+  pre code{background:none;border:none;padding:0;color:#b9c6d4}
+  pre .c{color:#5f7386}
+  pre .k{color:#c792ea}
+  pre .s{color:#a5d6a7}
+  pre .n{color:#ffcb6b}
+
+  .verdict{background:linear-gradient(135deg,rgba(63,185,80,.09),rgba(78,161,255,.05));
+    border:1px solid rgba(63,185,80,.32);border-radius:14px;padding:24px 26px;margin:26px 0}
+  .verdict .big{font-size:20px;font-weight:700;color:#fff;margin-bottom:12px;letter-spacing:-.01em}
+  .verdict p{margin:9px 0;font-size:14px}
+
+  table{width:100%;border-collapse:collapse;margin:20px 0;font-size:13.5px}
+  th{text-align:left;padding:11px 13px;background:var(--bg3);color:var(--dim);
+    font-weight:600;font-size:12px;letter-spacing:.05em;border-bottom:1px solid var(--line)}
+  td{padding:11px 13px;border-bottom:1px solid var(--line);vertical-align:top;color:#c4cfdc}
+  tr:hover td{background:rgba(255,255,255,.018)}
+  td.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+  .tag{display:inline-block;font-size:11.5px;padding:1.5px 8px;border-radius:20px;font-weight:600;
+    white-space:nowrap;border:1px solid transparent}
+  .t-ok{color:var(--ok);background:rgba(63,185,80,.1);border-color:rgba(63,185,80,.3)}
+  .t-part{color:var(--warn);background:rgba(210,153,34,.1);border-color:rgba(210,153,34,.3)}
+  .t-bad{color:var(--bad);background:rgba(248,81,73,.1);border-color:rgba(248,81,73,.3)}
+  .t-new{color:var(--acc2);background:rgba(124,92,255,.12);border-color:rgba(124,92,255,.32)}
+
+  .box{background:var(--bg2);border:1px solid var(--line);border-left:3px solid var(--acc);
+    border-radius:0 10px 10px 0;padding:16px 20px;margin:22px 0}
+  .box.warn{border-left-color:var(--warn)}
+  .box.bad{border-left-color:var(--bad)}
+  .box.ok{border-left-color:var(--ok)}
+  .box .t{font-size:13px;font-weight:700;color:#fff;margin-bottom:6px;letter-spacing:.02em}
+  .box p{margin:6px 0;font-size:13.5px;color:#b9c6d4}
+
+  .facts{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:26px 0}
+  .fact{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:20px}
+  .fact .v{font-size:30px;font-weight:700;letter-spacing:-.02em;line-height:1;color:var(--ok)}
+  .fact .k{font-size:13px;color:#fff;margin:10px 0 6px;font-weight:600}
+  .fact .d{font-size:12.5px;color:var(--dim2);line-height:1.6}
+
+  .tier{background:var(--bg2);border:1px solid var(--line);border-radius:12px;margin:16px 0;overflow:hidden}
+  .tier .hd{display:flex;align-items:center;gap:14px;padding:16px 20px;background:var(--bg3);
+    border-bottom:1px solid var(--line)}
+  .tier .lv{font-size:11px;font-weight:700;letter-spacing:.08em;padding:3px 10px;border-radius:6px;
+    background:rgba(78,161,255,.13);border:1px solid rgba(78,161,255,.32);color:var(--acc)}
+  .tier .hd h4{margin:0;font-size:15px;color:#fff}
+  .tier .hd .st{margin-left:auto;font-size:12px;font-weight:600}
+  .tier .bd{padding:16px 20px}
+  .tier .bd p{margin:8px 0;font-size:13.5px}
+  .tier .row{display:grid;grid-template-columns:88px 1fr;gap:12px;font-size:13px;margin:9px 0}
+  .tier .row .lb{color:var(--dim2);font-size:12px;padding-top:2px}
+  .tier .row .vl{color:#c4cfdc}
+  .tier .row .vl b{color:#fff}
+  .tier.stop{border-color:rgba(63,185,80,.38);background:linear-gradient(160deg,rgba(63,185,80,.05),var(--bg2))}
+  .tier.stop .lv{background:rgba(63,185,80,.13);border-color:rgba(63,185,80,.34);color:var(--ok)}
+
+  ul{padding-left:20px;color:#c4cfdc}
+  li{margin:7px 0}
+  li::marker{color:var(--acc)}
+  .foot{margin-top:72px;padding-top:22px;border-top:1px solid var(--line);font-size:12.5px;color:var(--dim2)}
+  @media(max-width:860px){.facts{grid-template-columns:1fr}.wrap{padding:32px 18px}h1{font-size:26px}
+    .tier .row{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">Refactor Plan · 2026-11-03</div>
+  <h1>硬改方案：把 0.5 的装配方式搬进 0.4.9.1</h1>
+  <p class="sub">
+    既然要改，那就不劝了。但先给三个<strong>意外的好消息</strong>——它们让"硬改"从"重写一遍"变成
+    <strong>"改 27 行 + 加 1 个文件"就能拿到 80% 的收益</strong>。下面是分四档的施工方案，每档都能独立停下。
+  </p>
+  <div class="meta">
+    <span><b>切口</b> src/app.js:968–994</span>
+    <span><b>新增</b> 1 个容器文件</span>
+    <span><b>首档风险</b> 极低（行为零变化）</span>
+  </div>
+</header>
+
+<div class="verdict">
+  <div class="big">能改，而且不用先动业务代码</div>
+  <p>洛版的装配点<strong>只有 8 个 <code>new</code>，连续 27 行，集中在一处</strong>（<code>src/app.js:968–994</code>）。这不是"几千处硬编码耦合"，是"一个装配块"。</p>
+  <p>把这块改成从工厂表取，就立刻拥有了 0.5 的核心能力——<strong>不修改源码即可替换任意组件</strong>。业务逻辑一行不动，洛版那 298 KB CHANGELOG 里的实战修复全部保留。</p>
+  <p>之后要不要继续把实现逐个换成 0.5 的，是<strong>独立决策</strong>，不是必选项。</p>
+</div>
+
+<h2><span class="n">01</span>三个让硬改变容易的事实</h2>
+<p class="lead">这三条是我在原方案里判断"不可行"时没量到的，量完之后结论要修正。</p>
+
+<div class="facts">
+  <div class="fact">
+    <div class="v">8</div>
+    <div class="k">个装配点，全在一处</div>
+    <div class="d"><code>app.js:968–994</code>，ChatStore / MemoryStore / SessionRegistry / OneBotClient / SendQueue / ReminderStore / VideoReader / Orchestrator —— 27 行连续代码</div>
+  </div>
+  <div class="fact">
+    <div class="v">2</div>
+    <div class="k">处调用方</div>
+    <div class="d"><code>electron/main.js:2685</code> 和 <code>src/server.js:12</code>。改 <code>createApp</code> 的签名只影响这两个地方</div>
+  </div>
+  <div class="fact">
+    <div class="v">同源</div>
+    <div class="k">数据文件格式</div>
+    <div class="d">两边消息文件都是 <code>{chatKey, nextLocalId, messages: []}</code>，0.5 的迁移器对 messages 只做 <code>cpDir</code> 不转换 —— 这就是证据</div>
+  </div>
+</div>
+
+<p>对比一下两者的装配入口，差异一目了然：</p>
+
+<pre><code><span class="c">// 洛版 —— 自己 new 所有东西，无注入</span>
+<span class="k">export function</span> createApp({ log = console.log, desktopPetHost = <span class="k">null</span> } = {}) {
+  <span class="c">// ... 2500 行之后</span>
+  <span class="k">const</span> store = <span class="k">new</span> ChatStore(cfg.store?.maxMessagesPerChat ?? <span class="n">0</span>);
+  <span class="k">const</span> memory = <span class="k">new</span> MemoryStore();
+  <span class="k">const</span> sessions = <span class="k">new</span> SessionRegistry(cfg.store?.keepSessionFiles ?? <span class="n">0</span>);
+  <span class="c">// ... 8 个 new</span>
+}
+
+<span class="c">// 0.5 —— 全部从组件表取，可被 overrides 替换</span>
+<span class="k">export function</span> createKernel({ components: selectedComponents = {}, lifecycle, ... } = {}) {
+  <span class="k">const</span> components = Object.freeze({ ...defaultComponents, ...selectedComponents });
+  <span class="k">for</span> (<span class="k">const</span> [name, impl] <span class="k">of</span> Object.entries(components))
+    <span class="k">if</span> (<span class="k">typeof</span> impl !== <span class="s">'function'</span>) <span class="k">throw new</span> TypeError(<span class="s">`运行时组件 ${name} 必须是函数`</span>);
+}</code></pre>
+
+<p>洛版缺的只是最后那一层"查表"。而查表这件事，<strong>可以只加在装配块里，不碰任何业务代码</strong>。</p>
+
+<h2><span class="n">02</span>四档方案：每档都能独立停下</h2>
+<p class="lead">按"投入递增 / 收益递减"排列。第 2 档是推荐的终点，第 3 档开始才是真正的"换血"。</p>
+
+<div class="tier stop">
+  <div class="hd">
+    <span class="lv">TIER 1</span>
+    <h4>容器化装配 —— 把 8 个 new 改成查表</h4>
+    <span class="st" style="color:var(--ok)">行为零变化</span>
+  </div>
+  <div class="bd">
+    <div class="row"><div class="lb">改哪里</div><div class="vl"><code>src/app.js:968–994</code>（27 行）+ 新增 <code>src/composition/factories.js</code></div></div>
+    <div class="row"><div class="lb">怎么改</div><div class="vl">把 8 个 <code>new</code> 换成 <code>const store = factories['data.messages']({ cfg, log })</code>；工厂表初始时<strong>全部指向洛版原实现</strong></div></div>
+    <div class="row"><div class="lb">收益</div><div class="vl">拿到"改一个文件就能替换组件"的能力。这是模块化的<strong>核心价值</strong>，不是副产品</div></div>
+    <div class="row"><div class="lb">验证</div><div class="vl">31 个单测全绿；<code>data/messages</code> 文件字节级对比不变；启动后 <code>/api/status</code> 响应一致</div></div>
+    <div class="row"><div class="lb">回滚</div><div class="vl">还原 27 行即可，无数据变更</div></div>
+  </div>
+</div>
+
+<pre><code><span class="c">// src/composition/factories.js —— 新增文件，约 60 行</span>
+<span class="k">import</span> { ChatStore } <span class="k">from</span> <span class="s">'../store.js'</span>;
+<span class="k">import</span> { MemoryStore } <span class="k">from</span> <span class="s">'../memory.js'</span>;
+<span class="c">// ... 其余 6 个</span>
+
+<span class="k">export const</span> defaultFactories = {
+  <span class="s">'data.messages'</span>:      ({ cfg }) =&gt; <span class="k">new</span> ChatStore(cfg.store?.maxMessagesPerChat ?? <span class="n">0</span>),
+  <span class="s">'data.memory'</span>:        () =&gt; <span class="k">new</span> MemoryStore(),
+  <span class="s">'data.sessions'</span>:      ({ cfg }) =&gt; <span class="k">new</span> SessionRegistry(cfg.store?.keepSessionFiles ?? <span class="n">0</span>),
+  <span class="s">'core.send'</span>:          (deps) =&gt; <span class="k">new</span> SendQueue(deps),
+  <span class="s">'data.reminders'</span>:     () =&gt; <span class="k">new</span> ReminderStore(),
+  <span class="s">'core.media'</span>:         ({ onebot }) =&gt; <span class="k">new</span> VideoReader(onebot),
+  <span class="s">'transport'</span>:          (deps) =&gt; <span class="k">new</span> OneBotClient(deps),
+  <span class="s">'core.orchestrator'</span>:  (deps) =&gt; <span class="k">new</span> Orchestrator(deps),
+};
+
+<span class="k">export function</span> createFactories(selected = {}) {
+  <span class="k">const</span> table = { ...defaultFactories, ...selected };
+  <span class="k">for</span> (<span class="k">const</span> [k, v] <span class="k">of</span> Object.entries(table))
+    <span class="k">if</span> (<span class="k">typeof</span> v !== <span class="s">'function'</span>) <span class="k">throw new</span> TypeError(<span class="s">`组件 ${k} 必须是函数`</span>);
+  <span class="k">return</span> table;
+}</code></pre>
+
+<div class="tier stop">
+  <div class="hd">
+    <span class="lv">TIER 2</span>
+    <h4>对齐 0.5 的键名与生命周期 —— 让两层互通</h4>
+    <span class="st" style="color:var(--ok)">推荐终点</span>
+  </div>
+  <div class="bd">
+    <div class="row"><div class="lb">改哪里</div><div class="vl">工厂表键名已对齐 0.5（<code>data.messages</code> / <code>core.send</code> / <code>core.orchestrator</code> / <code>transport</code>…）+ 加 <code>lifecycle.onStop</code> 清理登记 + 支持扫 <code>overrides/&lt;层&gt;/composition.json</code></div></div>
+    <div class="row"><div class="lb">关键收益</div><div class="vl"><strong>0.5 的 overrides 层可以直接在洛版上跑</strong>。包里那个 <code>30-desktop-extras</code>（桌宠+壁纸）就是现成的第一个测试用例</div></div>
+    <div class="row"><div class="lb">验证</div><div class="vl">把 <code>30-desktop-extras</code> 整目录拷进洛版，改 <code>enabled:true</code>，重启看两页是否出现；再删掉看是否完全恢复</div></div>
+    <div class="row"><div class="lb">代价</div><div class="vl">约 200–300 行。要处理洛版没有 <code>composition.json</code> 概念这件事</div></div>
+    <div class="row"><div class="lb">建议</div><div class="vl"><b>停在这里。</b>此时你已经拿到模块化底层的全部实用价值，且没丢掉洛版任何行为</div></div>
+  </div>
+</div>
+
+<div class="box ok">
+  <div class="t">为什么第 2 档就是合理终点</div>
+  <p>"模块化"的实际价值是<strong>四件事</strong>：能加层不改源码、能替换单个实现、能整层卸载回滚、能静态预检冲突。这四件事在第 2 档全部具备。</p>
+  <p>继续往下（换 0.5 的实现）换来的是"代码更干净、少 40% 行数"——但那是<strong>给未来维护者省事</strong>，不是给现在的功能加分。而代价是丢掉洛版所有实战修复。<strong>这笔账在你自己一个人维护的项目里，通常不划算。</strong></p>
+</div>
+
+<div class="tier">
+  <div class="hd">
+    <span class="lv">TIER 3</span>
+    <h4>逐个替换成 0.5 的实现 —— 真正的"换血"</h4>
+    <span class="st" style="color:var(--warn)">可选，按难度排序</span>
+  </div>
+  <div class="bd">
+    <p>前两档是"加装配层"，这一档才开始动实现。好消息是：因为数据格式同源，替换主要是<strong>适配构造参数</strong>，不是数据迁移。</p>
+    <table>
+      <tr><th>顺序</th><th>组件</th><th>洛版签名</th><th>0.5 签名</th><th>难点</th></tr>
+      <tr><td>1</td><td><code>data.messages</code></td><td><code>new ChatStore(maxPerChat)</code></td><td><code>createChatStore({dataDir, log, maxMessagesPerChat})</code></td><td><span class="tag t-ok">易</span> 格式同源，包一层即可</td></tr>
+      <tr><td>2</td><td><code>data.memory</code></td><td><code>new MemoryStore()</code></td><td><code>createMemoryStore({dataDir, log, cfg})</code></td><td><span class="tag t-part">中</span> 公开方法从 18 个变 3 个，<code>formatForPrompt</code> 等要自己补</td></tr>
+      <tr><td>3</td><td><code>data.sessions</code></td><td><code>new SessionRegistry(keep)</code></td><td><code>createSessionRegistry(...)</code></td><td><span class="tag t-part">中</span> 会话状态语义要对齐</td></tr>
+      <tr><td>4</td><td><code>data.reminders</code></td><td><code>new ReminderStore()</code></td><td><code>createReminderStore(...)</code></td><td><span class="tag t-ok">易</span></td></tr>
+      <tr><td>5</td><td><code>core.send</code></td><td><code>sendMedia</code> 存在</td><td>无 <code>sendMedia</code>，多 <code>sendSegments/poke</code></td><td><span class="tag t-part">中</span> 要补 <code>sendMedia</code> 适配</td></tr>
+      <tr><td>6</td><td><code>transport</code></td><td><code>OneBotClient</code></td><td><code>bundled/transport-onebot</code></td><td><span class="tag t-bad">难</span> 插件化改造，事件出口要重接</td></tr>
+      <tr><td>7</td><td><code>core.orchestrator</code></td><td><code>new Orchestrator({8 个依赖})</code></td><td><code>createOrchestrator({20+ 依赖, components})</code></td><td><span class="tag t-bad">最难</span> 见下方警告</td></tr>
+    </table>
+
+    <div class="box bad">
+      <div class="t">第 7 步是唯一真正危险的一刀</div>
+      <p>0.5 的 <code>createOrchestrator</code> 内部会从 <code>components</code> 取 12 个实现：<code>core.prompt.system</code> / <code>core.prompt.user</code> / <code>core.prompt.pastState</code> / <code>core.prompt.anchor</code> / <code>core.prompt.persona</code> / <code>core.agentRunner</code> / <code>core.wake.resolve</code> / <code>core.memory.consolidate</code> / <code>core.text.plain</code> / <code>core.text.split</code> / <code>core.tools.bundle</code> / <code>core.reply.rescue</code>。</p>
+      <p>洛版这 12 个能力全在 <code>orchestrator.js</code> 内部以私有方法形式存在，<strong>没有对应导出</strong>。换掉编排器 = 这 3,700 行里的全部逻辑（含响应档位判定、忙时合批、上下文锚点、峰谷计价、禁言重查、@ 边界）都要重写成 12 个独立组件。</p>
+      <p><strong>这就是洛版 298 KB CHANGELOG 里那几百条实战修复的载体。</strong>换掉它，等于把两年的踩坑记录清零重来。</p>
+    </div>
+  </div>
+</div>
+
+<div class="tier">
+  <div class="hd">
+    <span class="lv">TIER 4</span>
+    <h4>换 UI 与路由层</h4>
+    <span class="st" style="color:var(--bad)">不建议</span>
+  </div>
+  <div class="bd">
+    <div class="row"><div class="lb">涉及</div><div class="vl"><code>routes.js</code>（5,286 行，单函数 <code>createRoutes(deps)</code>）+ <code>ui/app/</code> 20 个编号全局脚本（50,879 行）</div></div>
+    <div class="row"><div class="lb">为什么</div><div class="vl">洛版 UI 的 <code>00-core.js → 20-glass.js</code> 是<strong>共享全局作用域的顺序脚本</strong>，0.5 是每页独立 <code>index.html</code> + iframe 隔离 + API 白名单。<strong>这不是改造，是重画</strong>——洛版 UI 的每一处交互都要重写一遍</div></div>
+    <div class="row"><div class="lb">例外</div><div class="vl">如果只是想要"某个页面能替换"，第 2 档 + 一个 <code>ui.panels</code> 追加层就够了，不需要动现有 UI</div></div>
+  </div>
+</div>
+
+<h2><span class="n">03</span>施工顺序</h2>
+<p class="lead">每步结束都必须能正常启动、跑完 31 个单测。任一步失败就地回滚，不要带着问题往下走。</p>
+
+<table>
+  <tr><th>#</th><th>动作</th><th>文件</th><th>验收标准</th></tr>
+  <tr><td class="num">1</td><td>备份 <code>app.js</code>，跑一遍基线单测记录通过数</td><td>—</td><td>31 个测试文件的基线结果存档</td></tr>
+  <tr><td class="num">2</td><td>新建 <code>src/composition/factories.js</code>，8 个工厂全部指向原实现</td><td>新增</td><td>文件可 import，无副作用</td></tr>
+  <tr><td class="num">3</td><td>把 968–994 的 8 个 <code>new</code> 改成查表</td><td><code>app.js</code></td><td>单测全绿；启动正常；消息文件字节不变</td></tr>
+  <tr><td class="num">4</td><td>给 <code>createApp</code> 加 <code>components</code> 参数（默认空）</td><td><code>app.js</code> + 2 处调用方</td><td>传空对象时行为与第 3 步一致</td></tr>
+  <tr><td class="num">5</td><td>加 <code>overrides/</code> 扫描与 <code>composition.json</code> 解析</td><td>新增</td><td>空目录时无变化；坏清单明确报错不静默</td></tr>
+  <tr><td class="num">6</td><td>拿 <code>30-desktop-extras</code> 做真实验收</td><td>拷目录</td><td>桌宠+壁纸两页出现；删目录重启完全恢复</td></tr>
+  <tr><td class="num">7</td><td>（可选）按第 3 档顺序逐个替换实现</td><td>工厂表</td><td>每换一个跑一遍单测 + 手工验收</td></tr>
+</table>
+
+<div class="box warn">
+  <div class="t">第 6 步是分水岭</div>
+  <p>如果 <code>30-desktop-extras</code> 能直接跑起来，说明你的容器和 0.5 的层格式真的对齐了——<strong>从这一刻起，洛版和 0.5 共用同一套扩展生态</strong>，两边写的层可以互相搬。这才是"改造"最大的回报，而不是代码变干净。</p>
+  <p>如果跑不起来，就停在第 5 步，别再往下走——说明格式还没对齐，硬推第 3 档只会越改越乱。</p>
+</div>
+
+<h2><span class="n">04</span>三条止损线</h2>
+
+<div class="box bad">
+  <div class="t">① 单测红了不许继续</div>
+  <p>洛版那 31 个测试文件是<strong>唯一的安全网</strong>。0.5 的 test/ 没随包，你没有任何外部参照。任何一步让单测变红，先修好再往下——"先记着回头修"在重构里从来没兑现过。</p>
+</div>
+
+<div class="box bad">
+  <div class="t">② 第 3 档第 7 步之前，先写清"为什么要换编排器"</div>
+  <p>如果答案是"为了代码更干净"，<strong>别换</strong>。如果答案是"洛版的编排逻辑有具体缺陷、我要用 0.5 的某个行为"，那就把那个具体行为列出来，只补那一块，不整体替换。</p>
+  <p>整体替换 <code>orchestrator</code> 的收益是抽象的，代价是具体的（3,700 行实战逻辑 + 几百条边角修复）。</p>
+</div>
+
+<div class="box warn">
+  <div class="t">③ 改造期间冻结功能开发</div>
+  <p>容器化和业务改动同时进行，冲突会集中在 <code>app.js</code> 那 27 行附近。要么先改完装配层再恢复功能迭代，要么接受每次合入都要重新验证装配。<strong>两件事别并行。</strong></p>
+</div>
+
+<h2><span class="n">05</span>一句话</h2>
+
+<div class="verdict">
+  <div class="big">先搬"装配方式"，别搬"实现"</div>
+  <p>你要的"模块化底层"，本质是<strong>可替换性</strong>——加层改行为、单点换实现、整层可卸载。这三件事在第 2 档就全拿到了，代价是 27 行改动 + 一个 60 行的新文件 + 200 行容器逻辑，<strong>洛版的行为一行都没丢</strong>。</p>
+  <p>把实现换成 0.5 的，是另一件事：收益是"代码更干净"，代价是"两年踩坑记录清零"。<strong>这两件事应该分开决策，不要捆在一起。</strong></p>
+  <p>真要做第 3 档，就按表里的顺序来，从 <code>data.messages</code> 开始——它格式同源、风险最低，是最合适的第一个实验品。</p>
+</div>
+
+<div class="foot">
+  证据来源：<code>G:\QQagent\resources\app\src\app.js</code>（装配点 968–994 行，<code>createApp</code> 签名第 125 行，返回对象第 2567 行）、
+  <code>src/routes.js:110</code>（<code>createRoutes(deps)</code>）、<code>src/store.js:200</code> 与 <code>src/kernel/store.js:67</code>（数据格式同源）、
+  <code>src/kernel/kernel.js:15</code>（组件表校验）、<code>electron/main.js:2685</code> 与 <code>src/server.js:12</code>（仅有的两个调用方）。
+  行数与签名均为实测，未做运行时验证。
+</div>
+
+</div>
+</body>
+</html>

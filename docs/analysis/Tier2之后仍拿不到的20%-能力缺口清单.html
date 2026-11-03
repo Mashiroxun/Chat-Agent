@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tier 2 之后仍拿不到的 20% · 能力缺口清单</title>
+<style>
+  :root{
+    --bg:#0d1014; --bg2:#141920; --bg3:#1b222b; --line:#252d38;
+    --txt:#e6edf5; --dim:#9aa7b6; --dim2:#6b7887;
+    --acc:#4ea1ff; --acc2:#7c5cff; --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:15px/1.75 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:56px 32px 96px}
+  header{border-bottom:1px solid var(--line);padding-bottom:30px;margin-bottom:40px}
+  .kicker{font-size:12px;letter-spacing:.18em;color:var(--warn);text-transform:uppercase;margin-bottom:14px;font-weight:600}
+  h1{font-size:32px;line-height:1.28;margin:0 0 16px;font-weight:700;letter-spacing:-.02em}
+  .sub{color:var(--dim);font-size:15px;max-width:770px}
+  h2{font-size:21px;margin:58px 0 8px;font-weight:650;display:flex;align-items:center;gap:12px}
+  h2 .n{font-size:12px;color:var(--acc);background:rgba(78,161,255,.1);border:1px solid rgba(78,161,255,.28);
+    border-radius:6px;padding:2px 8px;font-weight:600;letter-spacing:.06em}
+  h3{font-size:15.5px;margin:30px 0 8px;font-weight:650;color:#cfdae8}
+  p{color:#c4cfdc;margin:12px 0}
+  .lead{color:var(--dim);font-size:14px;margin-bottom:22px;padding-left:14px;border-left:2px solid var(--line)}
+  strong{color:#fff;font-weight:650}
+  code{background:var(--bg3);padding:1.5px 6px;border-radius:4px;font-size:12.5px;
+    font-family:"Cascadia Code",Consolas,monospace;color:#8fd0ff;border:1px solid var(--line)}
+
+  .correct{background:linear-gradient(135deg,rgba(248,81,73,.09),rgba(210,153,34,.04));
+    border:1px solid rgba(248,81,73,.32);border-radius:14px;padding:22px 24px;margin:26px 0}
+  .correct .big{font-size:18px;font-weight:700;color:#fff;margin-bottom:10px}
+  .correct p{margin:8px 0;font-size:14px}
+
+  .scale{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:26px 0}
+  .sc{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+  .sc .v{font-size:32px;font-weight:700;letter-spacing:-.03em;line-height:1;font-variant-numeric:tabular-nums}
+  .sc .k{font-size:13px;color:#fff;margin:10px 0 5px;font-weight:600}
+  .sc .d{font-size:12.5px;color:var(--dim2);line-height:1.6}
+  .sc.g .v{color:var(--ok)} .sc.y .v{color:var(--warn)} .sc.r .v{color:var(--bad)}
+
+  table{width:100%;border-collapse:collapse;margin:18px 0;font-size:13.5px}
+  th{text-align:left;padding:10px 12px;background:var(--bg3);color:var(--dim);
+    font-weight:600;font-size:12px;letter-spacing:.05em;border-bottom:1px solid var(--line)}
+  td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top;color:#c4cfdc}
+  tr:hover td{background:rgba(255,255,255,.018)}
+  td.num{font-variant-numeric:tabular-nums;white-space:nowrap;color:var(--dim2);font-size:12.5px}
+  .tag{display:inline-block;font-size:11.5px;padding:1.5px 8px;border-radius:20px;font-weight:600;
+    white-space:nowrap;border:1px solid transparent}
+  .t-ok{color:var(--ok);background:rgba(63,185,80,.1);border-color:rgba(63,185,80,.3)}
+  .t-part{color:var(--warn);background:rgba(210,153,34,.1);border-color:rgba(210,153,34,.3)}
+  .t-bad{color:var(--bad);background:rgba(248,81,73,.1);border-color:rgba(248,81,73,.3)}
+
+  .box{background:var(--bg2);border:1px solid var(--line);border-left:3px solid var(--acc);
+    border-radius:0 10px 10px 0;padding:15px 19px;margin:20px 0}
+  .box.warn{border-left-color:var(--warn)}
+  .box.bad{border-left-color:var(--bad)}
+  .box.ok{border-left-color:var(--ok)}
+  .box .t{font-size:13px;font-weight:700;color:#fff;margin-bottom:6px}
+  .box p{margin:6px 0;font-size:13.5px;color:#b9c6d4}
+
+  .gap{background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:17px 20px;margin:14px 0}
+  .gap .hd{display:flex;align-items:center;gap:11px;margin-bottom:8px}
+  .gap .no{width:24px;height:24px;border-radius:7px;background:rgba(248,81,73,.12);
+    border:1px solid rgba(248,81,73,.3);color:var(--bad);font-size:12px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;flex:none}
+  .gap h4{margin:0;font-size:14.5px;color:#fff}
+  .gap .cnt{margin-left:auto;font-size:12px;color:var(--dim2);font-variant-numeric:tabular-nums}
+  .gap p{margin:7px 0;font-size:13.2px}
+  .gap .why{color:var(--dim);font-size:12.8px;background:var(--bg3);border-radius:6px;padding:7px 11px;margin-top:9px}
+
+  ul{padding-left:20px;color:#c4cfdc}
+  li{margin:6px 0}
+  li::marker{color:var(--acc)}
+  .foot{margin-top:68px;padding-top:20px;border-top:1px solid var(--line);font-size:12.5px;color:var(--dim2)}
+  @media(max-width:820px){.scale{grid-template-columns:1fr}.wrap{padding:32px 18px}h1{font-size:25px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">Correction · Gap Inventory</div>
+  <h1>剩下那 20%，具体是哪些东西</h1>
+  <p class="sub">
+    先纠正一个口径问题：我说的"80%"指的是<strong>实用价值</strong>，不是覆盖率。
+    按组件数算，Tier 2 之后洛版能替换的是 <strong>6 / 60 ≈ 10%</strong>。
+    下面把这 90% 摊开——它们不是"搬不动的功能"，而是<strong>"让搬过来的东西真正生效的机制"</strong>。
+  </p>
+</header>
+
+<div class="correct">
+  <div class="big">先修正上一份里一个过于乐观的判断</div>
+  <p>我说过"第 6 步拿 <code>30-desktop-extras</code> 验收，跑起来就说明对齐了"。<strong>核实后：它跑不起来。</strong></p>
+  <p>它依赖三个组件——<code>console.panels</code>（wrap）、<code>core.tools.bundle</code>（wrap）、<code>ui.panel</code>（页面声明）——<strong>洛版一个都没有</strong>。它唯一能对上的只有 <code>core.send</code> 的 wrap 和 <code>routes</code> 注册。</p>
+  <p>所以 Tier 2 的验收标准要改：<strong>不能拿现成的 0.5 层来验</strong>，只能自己写一个"只依赖那 6 个组件"的最小测试层。</p>
+</div>
+
+<h2><span class="n">01</span>三个尺度的 80 / 20</h2>
+
+<div class="scale">
+  <div class="sc g"><div class="v">80%</div><div class="k">实用价值</div><div class="d">日常最想改的：数据格式、发送行为、编排流程。这 6 个组件恰好覆盖</div></div>
+  <div class="sc y"><div class="v">10%</div><div class="k">组件覆盖率</div><div class="d">0.5 组件表 60 项，洛版能替换 6 项（<code>data.*×4</code> + <code>core.send</code> + <code>core.orchestrator</code>）</div></div>
+  <div class="sc r"><div class="v">≈0</div><div class="k">生态兼容度</div><div class="d">0.5 的追加层几乎全都依赖 <code>console.panels</code> / <code>ui.panel</code> / 细粒度 <code>core.*</code></div></div>
+</div>
+
+<p>这三个数字不矛盾，但必须分清：<strong>Tier 2 拿到的是"可替换这个机制"，不是"能跑 0.5 的扩展生态"</strong>。前者对你的项目有价值，后者基本为零。</p>
+
+<h2><span class="n">02</span>六类拿不到的东西</h2>
+<p class="lead">按"缺了会怎样"排序，不是按重要性。</p>
+
+<div class="gap">
+  <div class="hd"><div class="no">1</div><h4>页面注册机制</h4><div class="cnt">console.panels + ui.panels</div></div>
+  <p>0.5 的页面是数据驱动的：<code>ui.panels</code> 声明 <code>{id, title, entry, assetRoot, permissions, api}</code>，宿主据此渲染侧边栏、挂静态资源、校验 API 白名单。加一页 = 加一个目录 + 一段 JSON。</p>
+  <p>洛版的侧边栏是 <code>ui/index.html</code> 里<strong>硬编码的 <code>#tabs .nav-item</code></strong>（39 KB 静态 HTML），页面切换靠 <code>14-chrome.js</code> 遍历 DOM。</p>
+  <div class="why">后果：<strong>加页要改 HTML + 加脚本，换页要改 3,700 行的 <code>06-settings-render.js</code></strong>。0.5 那种"整页替换、删目录即恢复"做不到。</div>
+</div>
+
+<div class="gap">
+  <div class="hd"><div class="no">2</div><h4>细粒度策略组件</h4><div class="cnt">23 个 core.* / llm.*</div></div>
+  <p>0.5 把业务策略拆成了 23 个独立函数：<code>core.prompt.system</code> / <code>.user</code> / <code>.pastState</code> / <code>.anchor</code> / <code>.persona</code>、<code>core.wake.resolve</code>、<code>core.memory.consolidate</code>、<code>core.text.plain</code> / <code>.split</code>、<code>core.tools.bundle</code> / <code>.parseInline</code>、<code>core.reply.rescue</code>、<code>core.events</code>、<code>core.session.retryable</code>、<code>core.media.forward</code>、<code>core.agentRunner</code>、<code>core.ingest</code>、<code>llm.complete</code> / <code>.target</code> / <code>.thinking</code>。</p>
+  <p>洛版这些<strong>全在 <code>orchestrator.js</code>（3,700 行）和 <code>app.js</code>（3,977 行）内部，以私有方法形式存在，没有任何导出</strong>。</p>
+  <div class="why">后果：<strong>最常想改的东西全都改不了。</strong>想换系统提示词构造、想改唤醒档位判定、想给工具束加一层、想拦截模型调用——只能改源码，没法加覆盖层。</div>
+</div>
+
+<div class="gap">
+  <div class="hd"><div class="no">3</div><h4>wrap 模式（只能换，不能包）</h4><div class="cnt">语义缺失</div></div>
+  <p>0.5 的 <code>mode: "wrap"</code> 导出 <code>(previousFactory, {key, ownerId}) =&gt; nextFactory</code>，可以只增强某个方法、保留其余全部行为。洛版那 8 个是 <code>new Xxx()</code> 出来的<strong>类实例</strong>，工厂表只能"整体换掉构造器"。</p>
+  <div class="why">后果：想"给 <code>SendQueue.sendTextBatch</code> 加个日志"这种小改动，要么写子类覆盖、要么改源码。0.5 里这是一层 10 行 JSON + 5 行 JS 的事。</div>
+</div>
+
+<div class="gap">
+  <div class="hd"><div class="no">4</div><h4>运行时基础设施</h4><div class="cnt">13 个 runtime.*</div></div>
+  <p><code>runtime.capability</code> / <code>permissions</code> / <code>tools</code> / <code>scheduler</code> / <code>storage</code> / <code>plugins</code> / <code>http</code> / <code>sdk</code> / <code>services</code> / <code>serviceLease</code> / <code>fetch</code> / <code>priceUpdates</code> / <code>instanceLock</code>。</p>
+  <p>洛版<strong>有对应的文件</strong>（<code>skills/capabilities.js</code>、<code>tool-guard.js</code>、<code>tool-registry.js</code>、<code>safe-fetch.js</code>、<code>instance-lock.js</code>…），但<strong>没集中成表，而且互相直接 import</strong>。</p>
+  <div class="why">后果：想换 HTTP 安全层、想换调度器、想换权限引擎——要改的是多处调用点，不是一处查表。这层"能换"的价值远大于表面数字。</div>
+</div>
+
+<div class="gap">
+  <div class="hd"><div class="no">5</div><h4>治理机制</h4><div class="cnt">不是组件，是机制</div></div>
+  <p>权限门（<code>net.outbound</code> / <code>proc.exec</code> 声明与授权）、<strong>能力代际</strong>（提供者切换后旧事件不得写入、旧代结果不得进新代）、<strong>服务租约</strong>（<code>serviceLease</code>）、数据重置协调器（<code>runtime.reset.complete</code> / <code>runtime.reset</code>）。</p>
+  <p>洛版有 <code>checkPluginTrust</code> 的指纹校验和 <code>tool-guard.js</code>，是<strong>另一套语义</strong>（按文件 sha1 认模块，不按能力授权）。</p>
+  <div class="why">后果：即使给洛版装上 overrides 层，<strong>层里写的权限声明是装饰性的</strong>——没有东西去执行它。0.5 的"层不能偷偷拿 OneBot 和 console token"这条保证，在洛版上不成立。</div>
+</div>
+
+<div class="gap">
+  <div class="hd"><div class="no">6</div><h4>诊断与归属查询</h4><div class="cnt">2 个工具</div></div>
+  <p>0.5 有 <code>scripts/inspect-composition.mjs</code>（<strong>不启动就静态预检</strong>：显示实际选择、完整来源链、冲突决议、同优先级提示）+ <code>GET /api/composition</code>（运行时查询"这个行为到底是谁提供的"）。</p>
+  <p>洛版两者都没有。</p>
+  <div class="why">后果：层叠冲突只能靠启动报错发现；出问题时无法回答"是出厂实现还是我的覆盖层在起作用"。<strong>层数一多，这个能力比什么都重要。</strong></div>
+</div>
+
+<h2><span class="n">03</span>完整对照：60 个组件里洛版能碰几个</h2>
+
+<table>
+  <tr><th>类别</th><th>组件数</th><th>洛版 Tier2 可替换</th><th>说明</th></tr>
+  <tr><td><code>data.*</code> 数据仓</td><td class="num">6</td><td><span class="tag t-ok">4</span> messages / memory / sessions / reminders</td><td><code>data.usage</code>、<code>data.stickers</code> 在洛版散在 app.js 里</td></tr>
+  <tr><td><code>core.*</code> 业务链与策略</td><td class="num">20</td><td><span class="tag t-part">2</span> send / orchestrator</td><td>其余 18 个是内部私有方法</td></tr>
+  <tr><td><code>llm.*</code> 模型调用</td><td class="num">3</td><td><span class="tag t-bad">0</span></td><td><code>llm.js</code> 直接 import，无注入点</td></tr>
+  <tr><td><code>runtime.*</code> 基础设施</td><td class="num">25</td><td><span class="tag t-bad">0</span></td><td>有对应文件但未成表、互相直接 import</td></tr>
+  <tr><td><code>console.*</code> 控制台</td><td class="num">2</td><td><span class="tag t-bad">0</span></td><td>routes.js 是 5,286 行单函数，UI 无页面注册</td></tr>
+  <tr><td colspan="2" style="color:#fff;font-weight:650">合计</td><td><span class="tag t-part">6 / 60</span></td><td style="color:var(--dim2)">≈ 10%</td></tr>
+</table>
+
+<div class="box warn">
+  <div class="t">但 10% 的覆盖率 ≠ 10% 的价值</div>
+  <p>这 6 个恰好是<strong>数据层全部 + 主链路两端</strong>。日常真正想改的东西——消息怎么存、发出去长什么样、一轮对话怎么编排——都在这 6 个里面。</p>
+  <p>所以"80% 实用价值"这个说法<strong>成立，但只在"你自己维护自己用"的前提下成立</strong>。一旦你想用 0.5 的扩展生态，这个数字立刻变成 0。</p>
+</div>
+
+<h2><span class="n">04</span>如果要把那 20% 也补上</h2>
+<p class="lead">两个机制，代价差一个数量级。</p>
+
+<table>
+  <tr><th>机制</th><th>要改什么</th><th>代价</th><th>值不值</th></tr>
+  <tr>
+    <td><strong>console.panels</strong><br><span style="font-size:12px;color:var(--dim2)">页面顺序 / 注册 / 追加</span></td>
+    <td>把 <code>ui/index.html</code> 里硬编码的 <code>#tabs .nav-item</code> 改成从数组渲染；<code>14-chrome.js</code> 改动态生成；<code>app.js</code> 暴露 <code>/api/panels</code></td>
+    <td><span class="tag t-part">约 300–500 行</span></td>
+    <td>值。做完就能"加页不改源码"</td>
+  </tr>
+  <tr>
+    <td><strong>ui.panels</strong><br><span style="font-size:12px;color:var(--dim2)">整页替换 / iframe 隔离</span></td>
+    <td>洛版是单页 SPA，要做整页替换得引入 iframe 沙箱 + token 校验 + assetRoot 静态服务 + API 白名单</td>
+    <td><span class="tag t-bad">约 800–1500 行</span></td>
+    <td>不太值。会破坏现有页面样式一致性，且 20 个全局脚本共享作用域，隔离做不干净</td>
+  </tr>
+  <tr>
+    <td><strong>细粒度 core.*</strong><br><span style="font-size:12px;color:var(--dim2)">23 个策略函数</span></td>
+    <td>把 <code>orchestrator.js</code> 里的私有方法逐个提取成可导出函数，再接到工厂表</td>
+    <td><span class="tag t-bad">等于重写编排器</span></td>
+    <td>这就是 Tier 3 第 7 步。做完洛版就不是洛版了</td>
+  </tr>
+</table>
+
+<div class="box ok">
+  <div class="t">一个折中：只补 console.panels，不补 ui.panels</div>
+  <p>300–500 行能拿到"<strong>加页自由</strong>"——侧边栏想加多少页都行，每页可以是独立 HTML + 独立 JS，走自己的路由。这覆盖了 0.5 追加层 80% 的实际用途（像 <code>30-desktop-extras</code> 那样加桌宠页、壁纸页）。</p>
+  <p>换页（<code>ui.panels</code> 替换已有页面）放弃——洛版 UI 那个共享全局作用域的结构，硬做隔离得不偿失。<strong>想换页就直接改源码，反正只有你自己维护。</strong></p>
+</div>
+
+<h2><span class="n">05</span>一句话总结</h2>
+
+<div class="correct" style="background:linear-gradient(135deg,rgba(78,161,255,.07),rgba(63,185,80,.04));border-color:rgba(78,161,255,.3)">
+  <div class="big" style="font-size:19px">那 20% 不是"功能"，是"粒度"</div>
+  <p>Tier 2 给你的是<strong>8 个粗粒度替换点</strong>。0.5 给的是 <strong>60 个细粒度替换点 + 一整套治理机制</strong>。</p>
+  <p>差的那 90% 组件里，真正影响日常的是<strong>细粒度策略（23 个）</strong>和<strong>页面注册（2 个）</strong>；剩下的是基础设施和治理——那些东西你平时不会想换，但出事时它们决定你能不能定位问题。</p>
+  <p>所以务实的选择是：<strong>Tier 2 + 补 console.panels</strong>。约 400 行，拿到"数据/发送/编排可替换 + 页面可自由添加"，覆盖你自己维护自己用这个场景的绝大部分需求。<strong>剩下的别补了</strong>——补它的代价是把洛版重写成 0.5，那就绕回原点了。</p>
+</div>
+
+<div class="foot">
+  核实来源：<code>bundled/runtime-defaults/components.js</code>（<code>defaultComponents</code> 共 60 项，逐项提取）、
+  <code>overrides/30-desktop-extras/composition.json</code>（依赖 <code>console.panels</code> / <code>core.tools.bundle</code> / <code>core.send</code> / <code>ui.panel</code>）、
+  <code>ui/index.html</code>（39,952 字节，<code>#tabs .nav-item</code> 硬编码）、<code>ui/app/14-chrome.js:1306</code>（DOM 遍历切换页面）。
+  上一份《硬改方案》第 6 步的验收标准已按本节修正。
+</div>
+
+</div>
+</body>
+</html>
