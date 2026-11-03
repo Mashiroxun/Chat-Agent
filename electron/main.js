@@ -2685,6 +2685,7 @@ app.whenReady().then(async () => {
     // 启动组合（0.4.9.2）：先解析 overrides/ 下的追加层，再交给 createApp。
     // 层加载失败只记录并继续（保证主程序能起来），但每条失败都写进日志，不静默。
     let compositionComponents = {};
+    let compositionReport = null;
     try {
       const { loadComposition } = await import('../src/composition/loader.js');
       const composition = await loadComposition({
@@ -2693,6 +2694,7 @@ app.whenReady().then(async () => {
         warn: (message) => logKey('composition', message),
       });
       compositionComponents = composition.components;
+      compositionReport = composition;
       for (const item of composition.errors) {
         logKey('composition', `层 ${item.dir}${item.key ? ` / ${item.key}` : ''} 加载失败：${item.error}`);
       }
@@ -2703,7 +2705,7 @@ app.whenReady().then(async () => {
     } catch (error) {
       logKey('composition', `启动组合加载失败，按出厂实现继续：${error?.message ?? error}`);
     }
-    core = createApp({ log: (...args) => console.log(...args), desktopPetHost, components: compositionComponents });
+    core = createApp({ log: (...args) => console.log(...args), desktopPetHost, components: compositionComponents, composition: compositionReport });
     // 2026-10-28：界面「开启兼容模式」按钮的落点。
     // 本机实测的唯一出路：软件模式下想让 Live2D 拿到 GL，就必须放 SwiftShader；
     // 而 SwiftShader 与 in-process-gpu 同时存在时，任何沙箱渲染进程都会

@@ -250,7 +250,45 @@ export function createRoutes(deps) {
     };
   };
 
+  // 启动组合信息（0.4.9.3）：/api/composition 用它回答"这个行为是谁提供的"。
+  // 只暴露 id / order / 组件键，**不暴露模块路径**（层目录结构属于本机信息）。
+  const compositionComponents = deps.components ?? {};
+  const compositionReport = deps.composition ?? null;
+
   const builtinRoutes = [
+    // ── 启动组合归属查询（0.4.9.3）──────────────────────────────────────
+    // 层一多就会问"这条提示词是出厂实现还是我的层在起作用"，这个接口回答它。
+    {
+      method: 'GET', pattern: '/api/composition',
+      handler: async ({ res, json }) => {
+        const ownerByKey = new Map();   // 组件键 -> 提供它的层 id
+        const layers = [];
+        if (compositionReport && Array.isArray(compositionReport.layers)) {
+          for (const layer of compositionReport.layers) {
+            const keys = Array.isArray(layer.components) ? layer.components : [];
+            const enabled = layer.enabled !== false;
+            layers.push({ id: layer.id, order: layer.order, enabled, components: keys });
+            if (enabled) for (const key of keys) ownerByKey.set(key, layer.id);
+          }
+        }
+        const components = {};
+        for (const key of Object.keys(compositionComponents).sort()) {
+          const owner = ownerByKey.get(key);
+          components[key] = { owner: owner ? `layer:${owner}` : 'default' };
+        }
+        const errors = Array.isArray(compositionReport?.errors)
+          ? compositionReport.errors.map((item) => ({ dir: item.dir, key: item.key ?? null, error: item.error }))
+          : [];
+        return json(res, 200, {
+          ok: true,
+          // 只列被层覆盖的键；未覆盖的走 default，不逐个罗列以免刷屏
+          layers,
+          overridden: Object.entries(components).filter(([, v]) => v.owner !== 'default').map(([k]) => k),
+          components,
+          errors,
+        });
+      }
+    },
     // ── 系统自检（self-doctor 插件提供的 doctor.report 能力）────────────────
     // 三条路由都是"能力代理"：核心不 import 那个插件，靠能力名问它要结果 ——
     // 关掉 self-doctor 后这些接口会明确报"未启用"，而不是 500 或空数据。
@@ -5289,8 +5327,7 @@ export function createRoutes(deps) {
   // 返回的条目排在**内置路由前面**，所以同 pattern 的层路由会先匹配到，
   // 等于可以覆盖某条内置接口；只声明新 pattern 时就是纯追加。
   // 校验从严：形状不对整批忽略并留痕，不让半张表悄悄生效。
-  const components = deps.components ?? {};
-  const routeLayer = components['console.routes'];
+  const routeLayer = compositionComponents['console.routes'];
   if (typeof routeLayer !== 'function') return builtinRoutes;
   let extra;
   try {
