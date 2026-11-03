@@ -615,7 +615,7 @@ export function createApp({ log = console.log, desktopPetHost = null, components
     if (senderId) {
       const globalBlocked = isGloballyBlocked(senderId);
       if (globalBlocked) return;
-      if (kind === 'group' && (cfgNow.blocklist?.[id] || []).map(String).includes(senderId)) return;
+      if (kind === 'group' && (cfgNow.blocklist?.[id] || []).some((x) => String(x) === senderId)) return;
     }
     const media = segments ? extractMediaFromSegments(segments) : [];
 
@@ -835,7 +835,7 @@ export function createApp({ log = console.log, desktopPetHost = null, components
     // 屏蔽名单对拍一拍同样生效（操作者是被屏蔽群员则丢弃）：全局优先，其次按群
     if (operatorId) {
       if (isGloballyBlocked(operatorId)) return;
-      if (isGroup && (cfgNow.blocklist?.[id] || []).map(String).includes(operatorId)) return;
+      if (isGroup && (cfgNow.blocklist?.[id] || []).some((x) => String(x) === operatorId)) return;
     }
     const targetId = String(event.target_id ?? event.user_id ?? '');
     const selfId = evSelfId;

@@ -27,6 +27,11 @@ import { formatFullTime, formatShortTime, sanitizeMessageBody } from './util.js'
 import { skillManager } from './skills/manager.js';
 import { logger } from './logger.js';
 
+// @提及判定的正则缓存（2026-11-03）：按 QQ 号缓存，上限 16 条。
+// 为什么缓存：这条判断在**每条群消息**上都会跑，而 id 通常只有一两个取值；
+// 之前每次 new RegExp 都要重新编译。上限是防止异常输入把 Map 撑大。
+const atMentionReByQQ = new Map();
+
 // ── 系统提示 ─────────────────────────────────────────────────────────────
 
 /**
@@ -540,7 +545,14 @@ export function isAtMe(text, { selfNickname = '', botName = '', selfId = '' } = 
     while ((m = re.exec(t))) { if (String(m[1]) === id) return true; }
     // 展平形态 @昵称(QQ:123)：要求紧跟在某个 @ 之后 ——
     // 否则「机器人自己发言的那一行 名字(QQ:123)」被别人引用时会被误判成艾特自己。
-    if (new RegExp(`@[^\\n@]{0,60}\\(QQ:${id}\\)`).test(t)) return true;
+    // 正则按 id 缓存（2026-11-03）：这条判断在每条群消息上都会跑，
+    // 之前每次 new RegExp 都要重新编译，而 id 通常只有一两个取值。
+    let atMentionRe = atMentionReByQQ.get(id);
+    if (!atMentionRe) {
+      atMentionRe = new RegExp(`@[^\\n@]{0,60}\\(QQ:${id}\\)`);
+      if (atMentionReByQQ.size < 16) atMentionReByQQ.set(id, atMentionRe);
+    }
+    if (atMentionRe.test(t)) return true;
     // 群名片没解析出来时，segmentsToText 会直接用 QQ 号占位
     if (t.includes(`@${id}`)) return true;
   }
