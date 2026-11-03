@@ -287,11 +287,11 @@ export function createApp({ log = console.log, desktopPetHost = null, components
   let pluginWatcher = null;        // 开发模式热重载 watcher（stop() 时要 close，否则句柄泄漏）
   let obPortPollTimer = null;      // OneBot WS 端口就绪轮询（stop() 时要 clear，start() 里赋值）
   let diskPatrolTimer = null;      // 数据盘空间巡检（stop() 时要 clear，start() 里赋值）
-  // 事件出口（0.4.9.3）：core.events 可整体替换，用于事件过滤/镜像/落盘。
-  // 不传时走原实现。签名必须是 (type, payload) => void。
-  const emit = typeof components['core.events'] === 'function'
-    ? components['core.events']
-    : (type, payload) => {
+  // 事件出口（0.4.9.3）：core.events 可以接管，但**第三个参数是原实现 next**。
+  //   · 想旁路观察（记日志/镜像/统计）：调 next(type, payload) 再返回
+  //   · 想完全接管（过滤/改写）：不调 next
+  // 这样「忘了转发导致桌宠和界面收不到事件」是一个显式选择，而不是静默事故。
+  const emitBase = (type, payload) => {
     // 桌宠只关心"连接状态 / 会话状态"这几类事件（用于状态气泡与成就统计）。
     // 这是直接调用，不是插件 hook —— 桌宠抛错绝不能影响群聊主链路。
     if (type === 'onebot-status' || type === 'status' || String(type).startsWith('session-')) {
@@ -342,6 +342,11 @@ export function createApp({ log = console.log, desktopPetHost = null, components
       }
     }
   };
+
+  // 层接管时把原实现作为 next 传进去，避免"忘了转发 = 事件断流"。
+  const emit = typeof components['core.events'] === 'function'
+    ? (type, payload) => components['core.events'](type, payload, emitBase)
+    : emitBase;
 
   // ── 便携 QQ 进程管理（0.4.9.3：已外提到 src/qq-portable.js）──────────
   // 状态（qqPortableLogs / qqPortableProc / 各种缓存）都在模块闭包里，
