@@ -394,7 +394,17 @@ export function hasFetchProvider() {
 }
 
 export async function safeFetch(urlString, { browseLocked = false, headers = null, maxBytes = TEXT_BODY_DEFAULT, timeoutMs = null, proxy = '' } = {}) {
-  if (fetchProvider) return fetchProvider(urlString, { browseLocked, headers, maxBytes, timeoutMs, proxy });
+  // 启动组合（0.4.9.3）：provider 只接管"怎么发请求"，**安全检查不外包**。
+  // 入口 URL 的浏览锁与 SSRF 校验照做 —— 否则层里写个裸 fetch() 就能读 127.0.0.1
+  // 的内部服务。重定向后的逐跳校验由 provider 自己负责（内核看不到它的跳转）。
+  if (fetchProvider) {
+    if (browseLocked) {
+      const lock = checkBrowseLock(urlString);
+      if (!lock.allowed) throw new Error(`浏览锁定：${lock.host || '该地址'} 不在允许的域名清单内`);
+    }
+    await validateFetchUrl(urlString);
+    return fetchProvider(urlString, { browseLocked, headers, maxBytes, timeoutMs, proxy });
+  }
   // ⚠️ `maxBytes` 必须真的生效（2026-10-08 修，用户报障"联网搜图经常搜不了"）。
   //   此前签名里**没有这个参数**，调用方传进来的 maxBytes 被静默忽略，实际恒为 50KB。
   //   后果有两处：
