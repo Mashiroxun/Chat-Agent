@@ -47,8 +47,7 @@ const ROOT_MUST_EXCLUDE = [
 /** app 目录内不进包的东西（同样是"本机存在正常、但会污染分发"）。 */
 const APP_MUST_EXCLUDE = [
   { name: '.workbuddy', desc: '本项目的智能体工作目录（含对话与记忆）' },
-  { name: 'plugin-data', desc: '插件运行时数据' },
-  { name: '__vision-repro.mjs', desc: '临时复现脚本' }
+  { name: 'plugin-data', desc: '插件运行时数据' }
 ];
 
 /** 打包必须保留的文件（缺了就是打不出能用的包）。 */

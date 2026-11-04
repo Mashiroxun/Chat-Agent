@@ -2522,7 +2522,7 @@ body.switching .view:not(.active) * {
   border: 1px solid var(--line-str);
   background: transparent;
   color: var(--fg-dim);
-  font-size: 12px; font-weight: 700; line-height: 1;
+  font-size: 0; font-weight: 700; line-height: 1;   /* 字形改由 ::after 渲染（见下），便于 transform 亚像素居中 */
   font-family: var(--mono);
   cursor: pointer;
   transition: color .15s ease, border-color .15s ease, background-color .15s ease;
@@ -2533,20 +2533,28 @@ body.switching .view:not(.active) * {
   background: var(--accent-soft);
 }
 .h2-help:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* R184：「?」改由伪元素渲染 —— flex 居中的文字受等宽字体基线影响，会比圆心高约 2px
+   （用户截图实测）。文字落在伪元素后可用 transform 做亚像素位移精确对中。
+   translate 值由 Edge 真实渲染 + 墨迹外接框拟合标定：DPR 1.25/1.5 下偏移≈0。 */
+.h2-help::after {
+  content: '?';
+  font-size: 12px;
+  transform: translate(0.4px, 0.3px);
+}
 
 /* 设置卡片标题旁的同款问号（2026-10-27）：比页头那颗小一号 ——
    一屏可能出现 5~6 张卡，20px 会连成一片图标噪声，16px 刚好"看得见但不抢"。 */
 .h3-help {
   width: 16px; height: 16px; flex: none;
-  padding: 0 0 1px; box-sizing: border-box;   /* 下内边距 1px：把 ? 字形往上提 0.5px，等宽字体基线偏下 */
+  padding: 0; box-sizing: border-box;   /* 不重置就会被浏览器默认 padding 撑成椭圆 */
   margin-left: 6px;
-  position: relative; top: 0.5px;   /* 实测：圆比字形墨迹中心高 0.50px（canvas actualBoundingBox 量的） */
+  position: relative; top: 0.5px;   /* 与标题文字基线对齐（整体位移，不影响字在圈内的居中） */
   display: inline-flex; align-items: center; justify-content: center;
   border-radius: 50%;
   border: 1px solid color-mix(in srgb, var(--fg) 24%, transparent);
   background: transparent;
   color: var(--fg-dim);
-  font-size: 11px; font-weight: 700; line-height: 1;
+  font-size: 0; font-weight: 700; line-height: 1;   /* 字形改由 ::after 渲染（见下） */
   font-family: var(--mono);
   cursor: pointer;
   transition: color .15s ease, border-color .15s ease, background-color .15s ease;
@@ -2557,6 +2565,13 @@ body.switching .view:not(.active) * {
   background: var(--accent-soft);
 }
 .h3-help:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* R184：同 .h2-help —— 伪元素渲染 + 亚像素位移，抵消等宽字体「?」的基线上偏。
+   标定：Edge 真实渲染，DPR 1.25/1.5 下墨迹外接框中心与圆心偏移≈0。 */
+.h3-help::after {
+  content: '?';
+  font-size: 11px;
+  transform: translateY(0.8px);
+}
 
 /* 「?」弹窗正文排版：设置卡片说明用的段落式内容 */
 .page-help-body p {
@@ -3219,7 +3234,7 @@ input.sw[data-pending] { cursor: progress; }
 .auto-icon.is-ok { background: color-mix(in srgb, var(--green) 14%, transparent); color: var(--green); }
 .auto-icon.is-warn { background: color-mix(in srgb, var(--orange) 14%, transparent); color: var(--orange); }
 .auto-icon.is-off { background: var(--inset-bg); color: var(--muted); }
-.auto-icon.is-spin svg { animation: autoSpin 1.1s linear infinite; transform-origin: 50% 50%; }
+.auto-icon.is-spin svg { animation: autoSpin 1.1s linear infinite; transform-origin: 50% 50%; will-change: transform; }
 @keyframes autoSpin { to { transform: rotate(360deg); } }
 
 /* 已连接：头像 + 呼吸的在线点 */
@@ -3236,12 +3251,23 @@ input.sw[data-pending] { cursor: progress; }
   width: 15px; height: 15px; border-radius: 50%;
   background: var(--green);
   border: 2.5px solid var(--layer-1);
-  animation: autoPulse 2.6s ease-out infinite;
 }
-@keyframes autoPulse {
-  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 55%, transparent); }
-  70% { box-shadow: 0 0 0 9px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
+/* 在线呼吸圈（2026-11-04，R173）：
+   原来是 `animation: autoPulse`（box-shadow 从 0 扩散到 9px）—— box-shadow
+   不参与合成，浏览器只能每帧重绘那块区域，而它是 infinite 常驻的。
+   改成伪元素画一个圆环、只动 transform/opacity：走合成器，零重绘。
+   视觉等价（都是"从中心扩散并淡出"），伪元素 absolute 定位不占布局。 */
+.auto-avatar-dot::after {
+  content: ''; position: absolute; inset: -3px; border-radius: 50%;
+  border: 2px solid var(--green);
+  pointer-events: none;
+  animation: autoPulseRing 2.6s ease-out infinite;
+  will-change: transform, opacity;
+}
+@keyframes autoPulseRing {
+  0%   { transform: scale(.55); opacity: .55; }
+  70%  { transform: scale(1.9); opacity: 0; }
+  100% { transform: scale(.55); opacity: 0; }
 }
 
 /* 身份行：昵称 · QQ 号 · 在线时长 */
@@ -3721,7 +3747,7 @@ input.sw[data-pending] { cursor: progress; }
 .uc-value { font-size: 22px; font-weight: 600; font-family: var(--mono); line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .uc-sub { font-size: 11px; color: var(--muted); margin-top: 6px; }
 .usage-bar { height: 6px; background: var(--layer-1); border-radius: 999px; overflow: hidden; margin-top: 8px; box-shadow: var(--inset-edge); }
-.usage-bar-fill { height: 100%; border-radius: 999px; background: var(--accent); }
+.usage-bar-fill { height: 100%; border-radius: 999px; background: var(--accent); transform-origin: left; }
 .usage-bar-fill.ok { background: var(--green); }
 .usage-note {
   font-size: 12px; color: var(--muted); background: var(--layer-1); border: 1px solid var(--border);
@@ -4636,10 +4662,13 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 5px; }
   height: 100%;
   background: var(--accent);
   border-radius: 999px;
-  /* 入场时从 0 展开，比直接画出来更有"生长感" */
+  /* 入场时从 0 展开，比直接画出来更有"生长感"。
+     R183：原 width:0 → 设定宽会触发整条布局重算；改用 transform: scaleX 走合成器，
+     零布局、零重绘。transform-origin:left 保持生长方向仍从左往右。 */
+  transform-origin: left;
   animation: barGrow var(--dur-slower) var(--ease-out-quart);
 }
-@keyframes barGrow { from { width: 0 !important; } }
+@keyframes barGrow { from { transform: scaleX(0); } }
 .tb-n {
   width: 34px;
   flex: none;
@@ -4916,7 +4945,7 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 5px; }
 [data-theme='?'] .theme-option:nth-child(even):hover { transform: translateY(-8px) rotate(3deg) scale(1.14); }
 
 /* ── 进度条：爆炸生长 ── */
-[data-theme='?'] .tb-bar i, [data-theme='?'] .usage-bar-fill { animation: chaosBarBoom .7s steps(6, end); }
+[data-theme='?'] .tb-bar i, [data-theme='?'] .usage-bar-fill { animation: chaosBarBoom .7s steps(6, end); transform-origin: center; }
 @keyframes chaosBarBoom {
   0%   { width: 0 !important; transform: scaleY(.2); }
   60%  { transform: scaleY(2.2); }
@@ -8779,9 +8808,19 @@ code, .mono { font-family: var(--mono); }
 .sl-node.is-on .sl-node-link { background: color-mix(in srgb, var(--green) 45%, var(--border)); }
 .sl-node.is-next .sl-node-idx,
 .sl-node.is-wait .sl-node-idx { border-color: color-mix(in srgb, var(--orange) 60%, var(--border)); color: var(--orange); }
-.sl-node.is-wait .sl-node-idx { animation: sl-pulse 1.6s ease-in-out infinite; }
-@keyframes sl-pulse {
-  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--orange) 16%, transparent); }
+/* 等待中呼吸（2026-11-04，R173）：同 autoPulse，box-shadow 动画改为伪元素圆环 +
+   transform/opacity（合成器处理，不重绘）。.sl-node-idx 需要 relative 作为定位基准。 */
+.sl-node-idx { position: relative; }
+.sl-node.is-wait .sl-node-idx::after {
+  content: ''; position: absolute; inset: -4px; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--orange) 45%, transparent);
+  pointer-events: none;
+  animation: slPulseRing 1.6s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+@keyframes slPulseRing {
+  0%, 100% { transform: scale(1); opacity: .5; }
+  50%      { transform: scale(1.22); opacity: .15; }
 }
 .sl-node-body { flex: 1; min-width: 0; padding: 13px 14px 13px 0; }
 .sl-node-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
@@ -8896,12 +8935,31 @@ code, .mono { font-family: var(--mono); }
    纯平色背景上玻璃 = 白做。给市场页铺两层极淡的 accent 氛围光（radial-gradient，
    亮暗主题都走 --accent / --accent-soft 令牌），玻璃卡滚动时有东西可透。
    ⚠️ 本容器 overflow:hidden 且自身不滚动（滚动在 .mk-list），::before 不用跟着滚。
-   子元素整体抬到 z-index:1，氛围层 0，防止被卡片玻璃"透"出叠影错层。 */
+   子元素整体抬到 z-index:1，氛围层 0，防止被卡片玻璃"透"出叠影错层。
+
+   ⚠️ 2026-11-04（用户报"技能市场左上角颜色有点问题"）：原实现 inset:0 通栏，
+   而内容自 2026-10-23 起已是 .market-page > * { max-width:940px; margin-inline:auto }
+   —— 窗口一宽，左侧几十到几百 px 的留白区没有任何卡片遮挡，左上那层
+   accent-soft（rgba(61,139,253,.16)）直接裸在页面底色上，实测像素 B-R +22、
+   从容器左边缘一直衰减到 x≈560，看着就是"左上角一块偏蓝的污渍"。
+   这与 2026-10-22 人设页记的坑（见下）是同一个根因，只是那次只搬走了人设页。
+   现在氛围层与内容同宽居中：光晕只落在卡片背后，窗再宽也不会溢到留白区。
+   （width 取 min(940px,100%) 而非扣 padding：多出的 14px 落在模糊渐变上不可见。）
+   下方 2026-10-23 注释里"氛围光层是 inset:0 通栏，不受这条影响"一句随之作废。 */
 .market-page::before {
-  content: ''; position: absolute; inset: 0; z-index: 0;
+  content: ''; position: absolute; top: 0; bottom: 0; z-index: 0;
+  left: 50%; transform: translateX(-50%);
+  width: min(940px, 100%);
   pointer-events: none;
+  /* ⚠️ 2026-11-04 二次修复：左上角那层 accent-soft 已**移除**，不是调位置。
+     第一次只把氛围层收窄到内容宽度，左侧留白干净了，但标题行依旧偏蓝 ——
+     因为该渐变的垂直中心在容器上方（at … -8%），能量正好集中在标题/搜索行，
+     而这一行没有卡片遮挡，容器多宽都会裸出来。实测（1636×1000 截图）：
+     标题行 y=62 的 B-R 最高 +26、覆盖 x≈342..960，卡片区 y=300 仅 +5 ——
+     说明这块光对卡片几乎没有贡献，纯粹在给标题区上色，正是用户两次反馈的
+     "左上角颜色不对"。层次感改由右下角那层 7% 淡光承担（卡片 70% 不透明，
+     底下仍透得出来），不再需要左上角这层。 */
   background:
-    radial-gradient(560px 320px at 12% -8%, var(--accent-soft), transparent 68%),
     radial-gradient(640px 380px at 96% 108%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 70%);
 }
 /* 2026-10-23：市场页内容宽度与「已安装」各页对齐（用户反馈原话：市场页"卡片和
@@ -8914,7 +8972,7 @@ code, .mono { font-family: var(--mono); }
    直接子元素统一按 .usage-wrap 同款 940px 居中。
    ⚠️ 刻意不动 16/17-market.js 两个 render* 的 DOM 结构（innerHTML 一行不改）——
    列向 flex 里给子元素 margin-inline:auto 即水平居中；窄屏 width:100% 自然收窄。
-   .market-page::before 的氛围光层是 inset:0 通栏，不受这条影响，照旧。 */
+   氛围光层已同步改成同宽居中（见上方 2026-11-04 注），两者宽度从此一致。 */
 .market-page > * {
   position: relative;
   z-index: 1;
@@ -9483,11 +9541,18 @@ code, .mono { font-family: var(--mono); }
    ──────────────────────────────────────────────────────────────────────────
    背景：R76 为了解决"窗口被遮挡时 Chromium 节流心跳 → 看门狗误判僵死 → 拆窗重建"，
    在 webPreferences 里关掉了 backgroundThrottling。那一刀是对的，但代价是：
-   页面隐藏/被遮挡时，本文件里 **19 处 animation: … infinite** 照样全速跑
+   页面隐藏/被遮挡时，本文件里 **infinite 动画**照样全速跑
    （骨架 shimmer、.loading-spinner、.rdot.wait，以及 ? 主题的 VHS 扫描线 /
-   chaosBgSpin 18s / chaosBrandJitter .9s 等 11 处装饰动画）。
+   chaosBgSpin 18s / chaosBrandJitter .9s 等装饰动画，还有常驻的 auto 连接旋转 /
+   在线呼吸圈）。
    笔记本上是实打实的耗电；集显/低端机上还会与合成器抢资源，表现为界面偶发
    掉帧、看着"像闪了一下"。
+
+   R183 增补：① 原来漏了 `.auto-icon.is-spin svg`（连接中旋转）与
+   `.auto-avatar-dot::after`（在线呼吸圈）—— 这两个是"连上就常驻"的无限动画，
+   后台照样空转，已并入暂停清单；② 修正一处 selector bug：`.sl-node.is-wait
+   .sl-node-idx` 动画其实挂在 `::after` 上，原清单写的是元素本身，等于没暂停，
+   改为 `::after`；③ 顺手把 `.btn.is-loading .btn-spin`（按钮内联加载圈）也纳入。
 
    做法：页面不可见时由 ui/app/00-core.js 的 visibilitychange 给 <html> 挂
    .qa-bg，这里只把**装饰性**动画暂停（animation-play-state: paused）。
@@ -9504,8 +9569,11 @@ html.qa-bg .sk-line::after,
 html.qa-bg .sk-row::after,
 html.qa-bg .sk-col,
 html.qa-bg .sk-chart::after,
-html.qa-bg .sl-node.is-wait .sl-node-idx,
+html.qa-bg .sl-node.is-wait .sl-node-idx::after,
 html.qa-bg .mk-spin,
+html.qa-bg .auto-icon.is-spin svg,
+html.qa-bg .auto-avatar-dot::after,
+html.qa-bg .btn.is-loading .btn-spin,
 html.qa-bg #chaos-vhs .vhs-track,
 html.qa-bg[data-theme='?'] .app-shell::before,
 html.qa-bg[data-theme='?'] .brand,
@@ -9869,8 +9937,16 @@ input.mig-input:focus-visible,
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: color-mix(in srgb, var(--page-bg) 74%, transparent);
-  backdrop-filter: blur(6px);
+  /* 2026-11-04（R181）：去掉 `backdrop-filter: blur(6px)`，遮罩加实到 90% 补偿。
+     这是全屏 fixed 层，而滚动发生在它内部的 .ob-card（overflow-y:auto）——
+     正是第 9055 行那条注释说的场景：本项目是**软件渲染**
+     （main.js 关掉硬件加速 + --disable-gpu + --disable-software-rasterizer），
+     每个 backdrop 层每帧都要在 CPU 上把背后区域读回来做高斯模糊，
+     滚动时背后内容每帧都变、结果无法缓存 → 上下滚动明显卡顿。
+     项目里 .model-modal-overlay / .modal-overlay 早就显式写了
+     `backdrop-filter: none`，只有这个后加的引导层漏了。
+     去掉模糊后靠 90% 的 page-bg 遮罩保持"背景退到后面"的层次，视觉差异很小。 */
+  background: color-mix(in srgb, var(--page-bg) 90%, transparent);
   animation: obFadeIn 0.18s var(--ease-in-out);
 }
 .ob-overlay.closing {

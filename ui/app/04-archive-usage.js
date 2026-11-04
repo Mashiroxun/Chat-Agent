@@ -4,8 +4,18 @@
 async function loadChats({ quiet = false } = {}) {
   try {
     const data = await api('/api/chats');
-    state.chats = data.chats || [];
-    renderChatList();
+    const next = data.chats || [];
+    // 2026-11-04（R174）：签名短路（与 02-sse-sessions.js 的 loadSessions BUG-13 同款）。
+    // 以前 quiet 只用来压 console.error，列表照样整块重绘 —— 切回存档页时
+    // 滚动位置会回到顶部，长列表还会闪一下。
+    // ⚠️ 短路只跳"列表重绘"，**不跳消息刷新**：chats 没变不代表当前群的消息没变，
+    //    两者是独立数据源（消息由 SSE 推、也可以被别处改写）。
+    const sig = JSON.stringify(next);
+    if (!(quiet && state.chatsSig === sig)) {
+      state.chatsSig = sig;
+      state.chats = next;
+      renderChatList();
+    }
     if (state.currentChatKey) {
       // 打开着某群详情时也刷新该群消息。
       // keepView=true：只更新内容，不动分页与滚动位置 ——

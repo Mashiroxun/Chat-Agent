@@ -9,8 +9,8 @@
 //      → 从清单的 prompt.when / prompt.examples 里挖触发话术，标在每条下面。
 //
 //   ② 自动功能（没有指令）—— 只声明了 capabilities 的插件，
-//      比如 media-download（发 B站/抖音链接自动下载）、speech-to-text（语音转文字）、
-//      red-packet-radar（红包雷达）。它们压根不注册工具，listTools() 里永远查不到，
+//      比如 media-download（发 B站/抖音链接自动下载）、speech-to-text（语音转文字）。
+//      它们压根不注册工具，listTools() 里永远查不到，
 //      但确实是机器人"会干的事"。
 //      → 单独一个「自动生效」区，并标明当前是否已启用。
 //
@@ -63,8 +63,8 @@ const CAP_ICONS = [
 
 /** 纯基建、群友感知不到的插件，默认不出现在面板里（可在设置里改）。 */
 const DEFAULT_PASSIVE_EXCLUDE = [
-  'ban-state', 'image-compat', 'thinking-adapters', 'reply-safety',
-  'account-pool', 'speaker-identity', 'conversation-memory'
+  'ban-state', 'image-compat', 'thinking-adapters',
+  'account-pool', 'speaker-identity'
 ];
 
 // ── 纯函数（便于测试） ────────────────────────────────────────────────────
@@ -237,6 +237,9 @@ export function buildGroups(tools, manifests = new Map(), opts = {}) {
       groups.set(key, {
         skillId: sid,
         skillName: sid ? (m?.name || sid) : '内置功能',
+        // 2026-11-04（R180）：标明来源。以前面板把技能和插件混在一起、统一叫"插件"，
+        // 于是 7 个技能（计算器/日程表/文生图…）也被当成插件 —— 用户看不到"技能"这一类。
+        source: m?.dir === 'skills' ? 'skill' : (m?.dir === 'plugins' ? 'plugin' : 'builtin'),
         items: []
       });
     }
@@ -266,7 +269,12 @@ export function buildGroups(tools, manifests = new Map(), opts = {}) {
       g.items[k].examples = [];
     }
   }
-  return [...groups.values()];
+  // 2026-11-04（R180）：技能 → 插件 → 内置 的稳定排序。
+  // 原本用的是 Map 的插入顺序（也就是工具注册顺序），技能恰好在前是因为
+  // skills/ 先于 plugins/ 加载 —— 那是巧合，不是设计。加了来源标签之后，
+  // 分类排列才和标签对得上，不会出现"插件"夹在两个"技能"中间。
+  const RANK = { skill: 0, plugin: 1, builtin: 2 };
+  return [...groups.values()].sort((a, b) => ((RANK[a.source] ?? 3) - (RANK[b.source] ?? 3)));
 }
 
 /**
@@ -294,7 +302,8 @@ export function collectPassive(manifests = new Map(), hasTools = new Set(), opts
       name: m.name,
       desc: shorten(m.description, maxDescLen),
       capabilities: m.capabilities,
-      enabledByDefault: m.enabledByDefault
+      enabledByDefault: m.enabledByDefault,
+      source: m.dir === 'skills' ? 'skill' : 'plugin'
     });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
@@ -312,6 +321,17 @@ export function buildBoardHtml(opts = {}) {
   } = opts;
   const total = groups.reduce((n, g) => n + g.items.length, 0);
 
+  // 2026-11-04（R180）：顶部统计按来源拆开。以前一律写"N 个插件"，
+  // 把 7 个技能也算成了插件 —— 用户因此以为面板里只有插件、没有技能。
+  const SOURCE_LABEL = { skill: '技能', plugin: '插件', builtin: '内置' };
+  const countBy = (s) => groups.filter((g) => g.source === s).length;
+  const headParts = [];
+  if (countBy('skill')) headParts.push(`${countBy('skill')} 个技能`);
+  if (countBy('plugin')) headParts.push(`${countBy('plugin')} 个插件`);
+  if (countBy('builtin')) headParts.push(`${countBy('builtin')} 个内置`);
+  const headLine = `${headParts.join(' · ') || '暂无'} · ${total} 条指令`
+    + `${passive.length ? ` · ${passive.length} 项自动运行` : ''}`;
+
   const trigHtml = (i) => {
     if (!i.when && !i.examples.length) return '';
     const bits = [];
@@ -322,7 +342,7 @@ export function buildBoardHtml(opts = {}) {
 
   const cards = groups.map((g) => `
     <section class="card">
-      <h2>${escapeHtml(g.skillName)}<span class="cnt">${g.items.length}</span></h2>
+      <h2>${escapeHtml(g.skillName)}<span class="tag ${g.source || 'plugin'}">${SOURCE_LABEL[g.source] || '插件'}</span><span class="cnt">${g.items.length} 条</span></h2>
       <ul>${g.items.map((i) => `
         <li>
           <span class="ic">${escapeHtml(i.icon)}</span>
@@ -333,7 +353,7 @@ export function buildBoardHtml(opts = {}) {
 
   const passiveCards = passive.map((p) => `
     <section class="card auto">
-      <h2>${escapeHtml(p.icon)} ${escapeHtml(p.name)}${showState ? `<span class="st ${p.active === false ? 'off' : 'on'}">${p.active === false ? '未启用' : '已启用'}</span>` : ''}</h2>
+      <h2>${escapeHtml(p.icon)} ${escapeHtml(p.name)}<span class="tag ${p.source || 'plugin'}">${SOURCE_LABEL[p.source] || '插件'}</span>${showState ? `<span class="st ${p.active === false ? 'off' : 'on'}">${p.active === false ? '未启用' : '已启用'}</span>` : ''}</h2>
       <p class="d">${escapeHtml(p.desc || '满足条件时自动生效，不需要下指令。')}</p>
     </section>`).join('');
 
@@ -348,12 +368,29 @@ export function buildBoardHtml(opts = {}) {
   .sec { font-size: 15px; font-weight: 700; color: #2b3350; margin: 4px 0 10px; display: flex; align-items: center; gap: 8px; }
   .sec em { font-style: normal; font-size: 12px; font-weight: 400; color: #8b93ad; }
   .sec.mt { margin-top: 20px; }
-  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
-  .card { background: #fff; border-radius: 14px; padding: 14px 16px; box-shadow: 0 2px 10px rgba(31,36,48,.07); }
-  .card h2 { font-size: 16px; color: #2b3350; display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-  .cnt { font-size: 12px; font-weight: 400; color: #fff; background: #8b93ad; border-radius: 10px; padding: 1px 8px; }
+  /* 2026-11-04（R179）：两列等宽 grid → 纵向瀑布流。
+     原来 repeat(2, 1fr) 是「行对齐」：每行高度取两张卡里高的那张，矮卡下面
+     必然留一大片空白 —— 右侧「计算器」下方那块空白就是这么来的。这些卡片
+     高度差异极大（会话管理十几条指令 vs 计算器两三条），行对齐注定浪费。
+     columns 让每张卡按自己内容的高度堆叠，列内不留缝、整页也短一截。 */
+  .grid { column-count: 2; column-gap: 14px; }
+  .card {
+    background: #fff; border-radius: 14px; padding: 13px 15px;
+    box-shadow: 0 2px 10px rgba(31,36,48,.07);
+    /* 跨列截断是 multicol 的默认行为，必须显式避免，否则卡片会被从中间切开 */
+    break-inside: avoid; -webkit-column-break-inside: avoid;
+    margin: 0 0 14px;
+  }
+  .card h2 { font-size: 15px; color: #2b3350; display: flex; align-items: center; gap: 7px; margin-bottom: 6px; }
+  .cnt { font-size: 11px; font-weight: 400; color: #fff; background: #8b93ad; border-radius: 10px; padding: 1px 7px; }
+  /* 来源标签（R180）：技能 / 插件 / 内置。以前两者混在一起统称"插件"，
+     用户看不出哪些是技能。字号刻意小于标题与计数，不抢主信息的注意力。 */
+  .tag { font-size: 10px; font-weight: 400; border-radius: 4px; padding: 0 5px; line-height: 15px; letter-spacing: .3px; }
+  .tag.skill { color: #2f6bd8; background: #e8f0ff; }
+  .tag.plugin { color: #7a6a4a; background: #f5efe3; }
+  .tag.builtin { color: #6b7280; background: #eef0f4; }
   ul { list-style: none; }
-  li { display: flex; gap: 9px; padding: 6px 0; border-top: 1px dashed #e8ebf3; }
+  li { display: flex; gap: 8px; padding: 5px 0; border-top: 1px dashed #e8ebf3; }
   li:first-child { border-top: none; }
   .ic { font-size: 16px; line-height: 1.4; }
   .txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -371,7 +408,7 @@ export function buildBoardHtml(opts = {}) {
   .foot { margin-top: 16px; text-align: center; font-size: 12px; color: #98a0b3; }
 </style></head>
 <body><div class="wrap">
-  <div class="head"><h1>${escapeHtml(title)}</h1><p>${groups.length} 个插件 · ${total} 条指令${passive.length ? ` · ${passive.length} 项自动功能` : ''}</p></div>
+  <div class="head"><h1>${escapeHtml(title)}</h1><p>${headLine}</p></div>
   ${groups.length ? `<div class="sec">可以这样使唤我 <em>照着下面这些话说就行</em></div>
   <div class="grid">${cards}</div>` : ''}
   ${passive.length ? `<div class="sec mt">不用你下指令，自己会跑 <em>条件满足就触发，有些需要去设置里开启</em></div>
@@ -384,19 +421,26 @@ export function buildBoardHtml(opts = {}) {
 export function buildText(opts = {}) {
   const { groups = [], passive = [], subtitle = '', showState = true } = opts;
   const total = groups.reduce((n, g) => n + g.items.length, 0);
+  // 与图表版同一口径（R180）：标明来源，并让顶部统计区分技能 / 插件
+  const label = (s) => (s === 'skill' ? '技能' : (s === 'plugin' ? '插件' : '内置'));
+  const nSkill = groups.filter((g) => g.source === 'skill').length;
+  const nPlugin = groups.filter((g) => g.source === 'plugin').length;
+  const nBuiltin = groups.filter((g) => g.source === 'builtin').length;
+  const head = [nSkill ? `${nSkill} 个技能` : '', nPlugin ? `${nPlugin} 个插件` : '',
+    nBuiltin ? `${nBuiltin} 个内置` : ''].filter(Boolean).join(' / ') || '暂无';
   const lines = [];
   for (const g of groups) {
     const parts = g.items.map((i) => {
       const t = [i.when, ...i.examples].filter(Boolean).join('；');
       return t ? `${i.name}（${t}）` : i.name;
     });
-    lines.push(`【${g.skillName}】${parts.join('、')}`);
+    lines.push(`【${label(g.source)}·${g.skillName}】${parts.join('、')}`);
   }
   for (const p of passive) {
     const st = showState ? (p.active === false ? '（未启用）' : '') : '';
-    lines.push(`【自动】${p.name}${st}：${p.desc}`);
+    lines.push(`【自动·${label(p.source)}】${p.name}${st}：${p.desc}`);
   }
-  return `功能指令一览（${groups.length} 个插件 / ${total} 条指令${passive.length ? ` / ${passive.length} 项自动功能` : ''}）：\n${lines.join('\n')}${subtitle ? `\n${subtitle}` : ''}`;
+  return `功能指令一览（${head} / ${total} 条指令${passive.length ? ` / ${passive.length} 项自动运行` : ''}）：\n${lines.join('\n')}${subtitle ? `\n${subtitle}` : ''}`;
 }
 
 // ── 截图（Electron）──────────────────────────────────────────────────────
@@ -502,7 +546,7 @@ export function setup(api) {
             exclude: Array.isArray(c.passiveExclude) ? c.passiveExclude : DEFAULT_PASSIVE_EXCLUDE,
             include: Array.isArray(c.passiveInclude) ? c.passiveInclude : [],
             maxDescLen: c.maxDescLen ?? 42,
-            iconOverrides: c.passiveIcons ?? { 'red-packet-radar': '🧧' }
+            iconOverrides: c.passiveIcons ?? {}
           });
           if (c.showState !== false) {
             for (const p of passive) {

@@ -117,6 +117,31 @@ async function refreshStatus() {
   }
 }
 
+/**
+ * 合并高频的状态刷新请求（2026-11-04，R171）。
+ *
+ * 为什么需要：SSE 有 7 类事件（session-start / session-update / onebot-status /
+ * status / protocol-status / qq-portable-status …）每一类都直接调 refreshStatus()，
+ * 而群活跃时这些事件一秒能来好几次；再加上用户可以在设置页把「界面刷新间隔」
+ * 调到 1 秒 —— 状态接口被高频打，后端每次都要算 todayUsage / onebot / 磁盘压力。
+ *
+ * 做法：120ms 窗口内只发一次（尾随），窗口内的重复请求直接丢弃。
+ * 数据本身在 refreshStatus 里还有"签名短路"（内容没变就不重绘 DOM），
+ * 所以晚 120ms 刷新对用户完全无感；而 HTTP 请求数从"每个事件一次"降到
+ * "每 120ms 最多一次"。
+ *
+ * ⚠️ 只给 SSE 事件用。用户在设置页点保存、切换页签这类需要立刻看到结果的
+ *    路径仍直接调 refreshStatus()，不要替换。
+ */
+let statusRefreshTimer = null;
+function scheduleStatusRefresh(delay = 120) {
+  if (statusRefreshTimer) return;
+  statusRefreshTimer = setTimeout(() => {
+    statusRefreshTimer = null;
+    try { refreshStatus(); } catch { /* refreshStatus 内部已兜异常 */ }
+  }, delay);
+}
+
 /** 更新顶栏就绪进度指示器（4 圆点 + 未就绪项的红色缩写） */
 function updateReadinessDots(s) {
   const items = $$('#readiness-dots .rdot-item');

@@ -302,7 +302,7 @@ const CREDENTIAL_RE = /account\.json|config\.json|\.env\b|dshProviderKeys|access
  *   早期它静默截断（60 个文件 / 6 层目录），调用方见扫描结果为空就放行，
  *   于是"把危险代码放到第 61 个文件"就能绕过整个闸门（已实测）。
  *   上限本身保留（防止恶意目录树拖死扫描），但**触顶 = 拒绝**而不是放行。
- *   上限设得比任何真实插件都宽：内置最大的 conversation-memory 也只有二十来个 js。
+ *   上限设得比任何真实插件都宽：内置最大的 mem-layered 也只有二十来个 js。
  */
 const SCAN_MAX_FILES = 500;
 const SCAN_MAX_DEPTH = 12;

@@ -538,7 +538,7 @@ function mergeUsageDaily(srcObj, dstObj) {
 }
 
 // ── memory-v2 磁盘级重置（插件未启用时的兜底重建路径）───────────────────────
-// 正常路径走 conversation-memory 的 memory.rebuild 能力（force 巩固）。
+// 正常路径走记忆插件（mem-layered）的 memory.rebuild 能力（force 巩固）。
 // 插件没开时直接清盘：删该会话的块文件 + 倒排摘除 + 水位归零；
 // 插件下次启用时 boot 巩固会从 messages 全量重建（水位 0 = 全部重压）。
 

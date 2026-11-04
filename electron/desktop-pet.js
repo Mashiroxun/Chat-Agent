@@ -196,8 +196,6 @@ export function createDesktopPetHost({ getMainWindow, showMainWindow, getService
   function pushUsage(data) {
     usageData = {
       totals: data.totals || {},
-      chats: Array.isArray(data.chats) ? data.chats.length : 0,
-      models: Array.isArray(data.models) ? data.models.slice(0, 1) : [],
       range: data.range || 'today',
       // 卡片第二行「搜索：N 次」的数据口（2026-10-24 一行式用量串）
       searchCount: Number(data.searchCount) || 0,
@@ -738,12 +736,30 @@ export function createDesktopPetHost({ getMainWindow, showMainWindow, getService
         if (!value || value.modelId !== state?.activeModel?.id) return;
         service()?.onAnimationState?.(value);
       });
+      // 视线跟随：把光标相对桌宠的位置推给渲染进程。
+      //
+      // 2026-11-04（R171，用户反馈"CPU 占用有点高"）：
+      //   原来是 50ms（20Hz）无条件推送 —— 每秒 20 次跨进程调用
+      //   （screen.getCursorScreenPoint 是同步跨进程查询 + getBounds + IPC）。
+      //   而绝大多数字数时间里光标是**静止**的，这 20 次里 20 次都是重复内容。
+      //   两处收紧：
+      //     ① 50ms → 100ms（10Hz）：视线跟随是"感觉"层面的东西，10Hz 与 20Hz
+      //        人眼分不出差别（拖动时另有 32ms 的 dragTimer 单独负责）；
+      //     ② 位置没变就不发：静止时零 IPC、零渲染，CPU 占用接近 0。
+      //   合并后：静止时开销 ≈ 0，移动时 10Hz，峰值减半。
+      let lastGaze = { x: Number.NaN, y: Number.NaN };
       cursorTimer = setInterval(() => {
         if (!alive() || !petWindow.isVisible() || settings().gazeTracking === false) return;
         const position = screen.getCursorScreenPoint();
         const bounds = petWindow.getBounds();
-        send('qqa-pet:cursor', { x: position.x - bounds.x, y: position.y - bounds.y });
-      }, 50);
+        const x = position.x - bounds.x;
+        const y = position.y - bounds.y;
+        // 相对坐标同时覆盖两种情况：光标没动、以及窗口没动 → 不需要重发。
+        // 拖窗口时 bounds 变化会让相对坐标变，那时照常发送（不会漏）。
+        if (x === lastGaze.x && y === lastGaze.y) return;
+        lastGaze = { x, y };
+        send('qqa-pet:cursor', { x, y });
+      }, 100);
       screen.on('display-removed', displaysChanged);
       screen.on('display-metrics-changed', displaysChanged);
       reconcileService();

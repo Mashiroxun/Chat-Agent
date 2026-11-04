@@ -760,7 +760,7 @@
       ['info', 'app', 'QQ Agent 启动完成，数据目录已就绪'],
       ['info', 'app', '[skill] ✅ 加载成功：天气查询（weather-query v1.0.0，api v1）'],
       ['info', 'app', '[skill] ✅ 加载成功：文本工具（text-tools v1.0.0，api v1）'],
-      ['info', 'app', '[skill] ✅ 加载成功：分层会话记忆（conversation-memory v1.0.0，api v1）'],
+      ['info', 'app', '[skill] ✅ 加载成功：分层会话记忆（mem-layered v1.0.0，api v1）'],
       ['info', 'app', '[skill] skills/：9 成功，0 失败'],
       ['info', 'app', '[skill] plugins/：11 成功，0 失败'],
       ['info', 'app', '[skill] 工具集已刷新：41 个工具'],

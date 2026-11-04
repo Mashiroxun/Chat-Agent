@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PERSONAS, LEGACY_XIAOJINGYU_TEXT } from './personas.js';
+import { PERSONAS, LEGACY_XIAOJINGYU_TEXT, PERSONA_TEXT_PATCHES } from './personas.js';
 import { sliderToTier } from './tier-slider.js';   // 零依赖模块，避免循环依赖
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -628,6 +628,30 @@ export function deepMerge(base, override) {
   return out;
 }
 
+/**
+ * 对一份人设文本逐条应用内置补丁（纯函数，可单测）。
+ *
+ * 规则见 personas.js 的 PERSONA_TEXT_PATCHES 注释。这里额外做两件事：
+ *   ① 幂等：已含新句的直接跳过（避免 from 恰好是 to 子串时反复替换）；
+ *   ② 非字符串原样返回 —— roleText 可能是 undefined/用户删空，不能抛。
+ *
+ * @param {string} roleText 配置里的人设全文
+ * @param {Array<{id:string,from:string,to:string}>} [patches] 测试可注入
+ * @returns {string} 打完补丁的文本（无变化时返回原值，调用方可用 !== 判断）
+ */
+export function applyPersonaTextPatches(roleText, patches = PERSONA_TEXT_PATCHES) {
+  if (typeof roleText !== 'string') return roleText;
+  let out = roleText;
+  for (const patch of patches) {
+    if (!patch || typeof patch.from !== 'string' || typeof patch.to !== 'string') continue;
+    if (!patch.from) continue;                       // 空 from 会匹配到任意位置，禁止
+    if (out.includes(patch.to)) continue;            // 幂等
+    if (!out.includes(patch.from)) continue;         // 用户改过这句 → 不动
+    out = out.replace(patch.from, patch.to);
+  }
+  return out;
+}
+
 export function loadConfig() {
   configWriteBlock = null;   // 重新读一次就重算一次降级状态（重置流程会再调本函数）
   try {
@@ -646,6 +670,25 @@ export function loadConfig() {
       if (cfg?.persona && typeof cfg.persona.roleText === 'string'
         && cfg.persona.roleText.trim() === LEGACY_XIAOJINGYU_TEXT.trim()) {
         cfg.persona.roleText = PERSONAS.xiaojingyu.text;
+      }
+    } catch { /* 迁移失败不阻塞启动 */ }
+
+    // ── 内置人设的句子级补丁（2026-11-04，R168）──────────────────────
+    // LEGACY 那条只能救"一个字没改过的旧版全文"（且每版要存 9000 字全文）。
+    // 这里按 personas.js 的 PERSONA_TEXT_PATCHES 逐句打补丁，解决"源码改了、
+    // 用户人设副本没跟着变"这个反复出现的坑（R167 就踩过）。
+    // 仍然只在内存迁移、仍然要求整句精确匹配（用户改过的句子不动）。
+    try {
+      if (cfg?.persona && typeof cfg.persona.roleText === 'string') {
+        const before = cfg.persona.roleText;
+        const after = applyPersonaTextPatches(before);
+        if (after !== before) {
+          cfg.persona.roleText = after;
+          const ids = PERSONA_TEXT_PATCHES
+            .filter((p) => before.includes(p.from) && !before.includes(p.to))
+            .map((p) => p.id).join('、');
+          console.log(`[config] 人设已应用内置更新：${ids}`);
+        }
       }
     } catch { /* 迁移失败不阻塞启动 */ }
     return cfg;

@@ -172,8 +172,8 @@
       "kind": "skill",
       "entry": "index.js",
       "files": {
-        "index.js": "f1a2619662b46eba",
-        "skill.json": "d10796b71e3d0b18"
+        "index.js": "b54886b2ae606c05",
+        "skill.json": "995da85bcd6d36b3"
       }
     },
     {
@@ -213,7 +213,7 @@
       "kind": "skill",
       "entry": "index.js",
       "files": {
-        "index.js": "7e899b2cd98ba3b0",
+        "index.js": "7b93d8a62c2a99a1",
         "skill.json": "2f56eae55c9ab232"
       }
     },
@@ -251,7 +251,7 @@
         "index.js": "5d6cc61b4aaf479d",
         "lib/model-store.js": "548967a9d7ff45d0",
         "lib/service.js": "ab7702bdd26e4a3f",
-        "plugin.json": "46e97023f30e28cf",
+        "plugin.json": "bea60b1d254ca78b",
         "README.md": "fd4c65468ae19fcb"
       }
     }

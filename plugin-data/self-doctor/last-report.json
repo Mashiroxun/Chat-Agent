@@ -1,8 +1,8 @@
 {
- "lastRunAt": 1793061358292,
+ "lastRunAt": 1793762218594,
  "lastReport": {
-  "at": 1793061358292,
-  "ms": 12,
+  "at": 1793762218594,
+  "ms": 14,
   "counts": {
    "critical": 0,
    "warning": 0,
@@ -11,8 +11,8 @@
   "total": 0,
   "issues": [],
   "extension": {
-   "total": 25,
-   "enabledByDefault": 9
+   "total": 21,
+   "enabledByDefault": 10
   },
   "load": {
    "issues": []
