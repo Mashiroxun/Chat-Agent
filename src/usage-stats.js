@@ -1286,7 +1286,33 @@ function priceSignature() {
   return `${cfgSig}|${remoteOverrideCount()}`;
 }
 
-export async function buildUsageStats({ range = '7', force = false } = {}) {
+// 用量统计实现注入（0.4.9.3 / 2026-11-04）
+//
+// 为什么用 provider 而不是改调用点：buildUsageStats / buildUsageBreakdown 一共
+// 30 处引用、散在 13 个文件里，全改成 `usage.xxx()` 风险远大于收益。
+// 这里只在这两个**主入口**最前面加一次短路，调用点零改动。
+//
+// 注意：provider 一旦提供某方法就完全接管它，**包括缓存与价格指纹逻辑**。
+// 实现里若想复用原逻辑，别调本模块的同名导出（会再次进 provider 造成递归），
+// 直接从默认实现里拷需要的那段，或只覆盖最外层的一个方法。
+let usageProvider = null;
+
+/**
+ * 替换用量统计实现。传 null 恢复默认。
+ * @param {null | { buildUsageStats?: Function, buildUsageBreakdown?: Function }} provider
+ */
+export function setUsageProvider(provider) {
+  usageProvider = provider && typeof provider === 'object' ? provider : null;
+}
+
+/** 当前是否注入了统计实现（诊断用）。 */
+export function hasUsageProvider() {
+  return usageProvider !== null;
+}
+
+export async function buildUsageStats(opts = {}) {
+  if (typeof usageProvider?.buildUsageStats === 'function') return usageProvider.buildUsageStats(opts);
+  const { range = '7', force = false } = opts;
   const rangeKey = String(range);
   // 缓存键带上价格指纹：改单价后旧缓存自动作废（见 priceSignature 注释）
   const key = `${rangeKey}#${priceSignature()}`;
@@ -1383,7 +1409,9 @@ export async function buildUsageStats({ range = '7', force = false } = {}) {
  *   dim/key 定位子集，by 决定展开方式
  * 例：dim=chat&key=group:123&by=model → 该群下各模型的成本
  */
-export async function buildUsageBreakdown({ range = '7', dim = '', key = '', by = '' } = {}) {
+export async function buildUsageBreakdown(opts = {}) {
+  if (typeof usageProvider?.buildUsageBreakdown === 'function') return usageProvider.buildUsageBreakdown(opts);
+  const { range = '7', dim = '', key = '', by = '' } = opts;
   const { rows, win } = await collectUsageRows({ range });
   for (const r of rows) r.dayKey = dayKeyOf(r.at);
   // dim/by 为 model 时按复合身份匹配（模型 + 供应商）
