@@ -32,6 +32,34 @@ import { logger } from './logger.js';
 // 之前每次 new RegExp 都要重新编译。上限是防止异常输入把 Map 撑大。
 const atMentionReByQQ = new Map();
 
+// ── 提示词片段的实现注入（0.4.9.3 / 2026-11-04）────────────────────────
+//
+// core.prompt.pastState / core.prompt.anchor：这两个是**用户消息**里【过去状态】段
+// 的构造逻辑（不是系统提示词）。用户消息每轮都变、按全价计费，所以"历史怎么选"
+// 对成本的影响比系统提示词更直接。
+//
+// 用 provider hook 而不是改调用点：buildPastState 在 buildUserPrompt 内部被调，
+// 走 ctx 传参要改 orchestrator 的调用链，成本更高。
+//
+// ⚠️ 两个都必须是**同步**函数：buildPastState 本身同步，返回 Promise 会让调用方
+//    拿到一个 Promise 当 text 用，症状是提示词里出现 "[object Promise]"。
+let pastStateProvider = null;
+let anchorProvider = null;
+
+/**
+ * 替换提示词片段实现。传 null 或省略即恢复默认。
+ * @param {{ pastState?: Function, anchor?: Function }} providers
+ */
+export function setPromptProviders({ pastState, anchor } = {}) {
+  pastStateProvider = typeof pastState === 'function' ? pastState : null;
+  anchorProvider = typeof anchor === 'function' ? anchor : null;
+}
+
+/** 当前注入了哪些片段实现（诊断用）。 */
+export function promptProviderState() {
+  return { pastState: pastStateProvider !== null, anchor: anchorProvider !== null };
+}
+
 // ── 系统提示 ─────────────────────────────────────────────────────────────
 
 /**
@@ -775,11 +803,24 @@ const ANCHOR_MAX_CHUNK = 192;
 const ANCHOR_CHUNK_RATIO = 2.4;
 /** 窗口锚定的 chunk（导出仅供测试）。 */
 export function anchorChunkFor(maxLimit) {
+  // 注入实现优先（core.prompt.anchor）：返回值必须是 >=1 的有限数，否则回落默认。
+  if (anchorProvider) {
+    const injected = anchorProvider(maxLimit);
+    const n = Number(injected);
+    if (Number.isFinite(n) && n >= 1) return Math.floor(n);
+  }
   const n = Math.max(1, Number(maxLimit) || 1);
   return Math.min(ANCHOR_MAX_CHUNK, Math.max(4, Math.round(n * ANCHOR_CHUNK_RATIO)));
 }
 
-export function buildPastState(store, chatKey, { excludeIds = [], limit = null, anchorChunk = null } = {}) {
+export function buildPastState(store, chatKey, opts = {}) {
+  // 注入实现优先（core.prompt.pastState）：必须同步返回 { text, count, messages }，
+  // 形状不对（缺 text 或不是字符串）就回落默认实现，不让半成品进提示词。
+  if (pastStateProvider) {
+    const injected = pastStateProvider(store, chatKey, opts);
+    if (injected && typeof injected === 'object' && typeof injected.text === 'string') return injected;
+  }
+  const { excludeIds = [], limit = null, anchorChunk = null } = opts;
   const cfg = getConfig().store;
   const maxLimit = limit === null ? Math.max(1, Number(cfg.allCount) || 80) : Math.max(0, Number(limit) || 0);
   const exclude = new Set(excludeIds);

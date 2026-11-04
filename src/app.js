@@ -23,7 +23,7 @@ import { createWebuiClient } from './protocol-webui.js';
 import { createProtocolOnboard } from './protocol-onboard.js';
 // isAtMe 是「是否被艾特」的唯一权威实现（含 QQ 号判定，见 prompt.js 注释）。
 // 这里曾经就地抄过一份只认名字的判定，结果群昵称改了就漏判 —— 统一走权威实现。
-import { isAtMe } from './prompt.js';
+import { isAtMe, setPromptProviders } from './prompt.js';
 import { ChatStore } from './store.js';
 import { MemoryStore } from './memory.js';
 import { cacheIncomingImages } from './image-cache.js';
@@ -150,6 +150,14 @@ export function createApp({ log = console.log, desktopPetHost = null, components
   // 日志出口（0.4.9.3）：可换成外部日志系统；接口不对时忽略并警告。
   if (components['runtime.logger']) {
     setLogger(components['runtime.logger']);
+  }
+  // 提示词片段（0.4.9.3）：用户消息里【过去状态】段的构造逻辑。
+  // 两个都必须是同步函数 —— 返回 Promise 会让提示词里出现 "[object Promise]"。
+  if (components['core.prompt.pastState'] || components['core.prompt.anchor']) {
+    setPromptProviders({
+      pastState: components['core.prompt.pastState'],
+      anchor: components['core.prompt.anchor'],
+    });
   }
   const cfg = getConfig();
 
