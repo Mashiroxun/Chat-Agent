@@ -119,7 +119,7 @@ export function myStore({ cfg, log, lifecycle }) {
 `createApp` 的返回值里也有 `lifecycle`，外部（主进程、桌宠宿主）同样可以登记。
 清理时机在 `stop()` **最前面**——那时 onebot / store 都还活着，组件清理时还能访问它们。
 
-## 可替换的组件（27 个）
+## 可替换的组件（28 个）
 
 键名与 0.5 的组件表一致，两边的层可以互相搬。
 
@@ -167,6 +167,7 @@ export default function myRoutes() {
 | `data.memory` | `src/memory.js` `MemoryStore` | 群友长期印象 |
 | `data.sessions` | `src/sessions.js` `SessionRegistry` | 会话运行记录 |
 | `data.reminders` | `src/reminders.js` `ReminderStore` | 提醒任务 |
+| `data.usage` | `src/usage-stats.js` `buildUsageStats` / `buildUsageBreakdown` | 用量统计。**不是实例，是服务对象**：工厂返回 `{ buildUsageStats, buildUsageBreakdown }`。默认返回 `null`（不接管）；覆盖后只替换你提供的那几个方法，没提供的仍走内置实现。 |
 
 ### 传输与发送
 

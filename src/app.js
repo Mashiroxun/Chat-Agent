@@ -62,7 +62,7 @@ import * as instanceLockModule from './instance-lock.js';
 import { logger, setLogger } from './logger.js';
 import { startCommunitySync, isGloballyBlocked, FIXED_PRICE_FEED_URL } from './community.js';
 import { noteMuted, noteUnmuted } from './ban-state-client.js';
-import { buildUsageStats, buildUsageBreakdown, collectUsageRows, dayKeyOf, warmUsageArchive } from './usage-stats.js';
+import { buildUsageStats, buildUsageBreakdown, collectUsageRows, dayKeyOf, warmUsageArchive, setUsageProvider } from './usage-stats.js';
 
 // 全局 fetch（undici）默认连接建立超时只有 10 秒，openrouter.ai 这类海外端点
 // 握手慢时会直接报 "Connect Timeout Error ... timeout: 10000ms"（注意这不是
@@ -396,6 +396,10 @@ export function createApp({ log = console.log, desktopPetHost = null, components
   setOnebotClient(onebot);
   const sender = factories['core.send']({ cfg, log, onebot, store, components, lifecycle });
   const reminders = factories['data.reminders']({ cfg, log, lifecycle });
+  // 用量统计（0.4.9.3）：默认工厂返回 null（不接管）；层覆盖后返回服务对象才设置。
+  // 这里必须判空 —— 把默认实现注册成 provider 会让它自己调自己（无限递归）。
+  const usageService = factories['data.usage']({ cfg, log, lifecycle });
+  if (usageService) setUsageProvider(usageService);
   const videoReader = factories['core.media']({ cfg, log, onebot, lifecycle });
   const orchestrator = factories['core.orchestrator']({
     cfg, log, store, memory, sender, sessions, onebot, emit, reminders, videoReader, components, lifecycle,

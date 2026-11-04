@@ -27,6 +27,14 @@ export const defaultFactories = {
   'data.sessions': ({ cfg }) => new SessionRegistry(cfg.store?.keepSessionFiles ?? 0), // 0 = 不限
   'data.reminders': () => new ReminderStore(),
 
+  // 用量统计（0.4.9.3）：不是实例，是一个「服务对象」——两个主入口打包返回。
+  // 层替换它即可换一套计价/折算口径，不用碰 usage-stats.js 的 1400 行。
+  //
+  // ⚠️ 默认必须返回 null（= 不接管），**不能**返回模块自己的那两个函数 ——
+  //    那样 setUsageProvider 会把默认实现注册成 provider，调用时自己调自己，
+  //    直接无限递归爆栈。null 表示"用内置实现"，app.js 见到 null 就不设置。
+  'data.usage': () => null,
+
   // ── 传输与发送 ─────────────────────────────────────────────
   'transport': ({ cfg, onEvent }) => new OneBotClient({
     wsUrl: cfg.protocol?.wsUrl,

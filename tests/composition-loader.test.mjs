@@ -188,11 +188,11 @@ test('没有 composition.json 的目录被忽略，不报错', async () => {
 
 // ── 工厂表 ────────────────────────────────────────────────────
 
-test('默认工厂表包含 8 个组件且键名对齐 0.5', () => {
+test('默认工厂表包含 9 个组件且键名对齐 0.5', () => {
   const keys = listComponentKeys();
   assert.deepEqual(keys, [
     'core.media', 'core.orchestrator', 'core.send',
-    'data.memory', 'data.messages', 'data.reminders', 'data.sessions',
+    'data.memory', 'data.messages', 'data.reminders', 'data.sessions', 'data.usage',
     'transport',
   ]);
   for (const key of keys) assert.equal(typeof defaultFactories[key], 'function', `${key} 应是函数`);
