@@ -59,7 +59,7 @@ import { createRoutes } from './routes.js';
 import { handleDesktopPetRequest } from './desktop-pet-api.js';
 import { createPetChat } from './pet-chat.js';
 import * as instanceLockModule from './instance-lock.js';
-import { logger } from './logger.js';
+import { logger, setLogger } from './logger.js';
 import { startCommunitySync, isGloballyBlocked, FIXED_PRICE_FEED_URL } from './community.js';
 import { noteMuted, noteUnmuted } from './ban-state-client.js';
 import { buildUsageStats, buildUsageBreakdown, collectUsageRows, dayKeyOf, warmUsageArchive } from './usage-stats.js';
@@ -146,6 +146,10 @@ export function createApp({ log = console.log, desktopPetHost = null, components
   }
   if (typeof components['runtime.fetch'] === 'function') {
     setFetchProvider(components['runtime.fetch']);
+  }
+  // 日志出口（0.4.9.3）：可换成外部日志系统；接口不对时忽略并警告。
+  if (components['runtime.logger']) {
+    setLogger(components['runtime.logger']);
   }
   const cfg = getConfig();
 
