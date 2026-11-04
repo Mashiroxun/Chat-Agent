@@ -213,4 +213,24 @@ class Logger {
   }
 }
 
-export const logger = new Logger();
+// 日志出口（0.4.9.3）：可整体替换（启动组合 runtime.logger）。
+// 用 let + live binding —— 全项目 29 个文件都是 `import { logger }` 直用，
+// 没有一处缓存引用（改前已 grep 确认），所以替换后它们自动看到新实例。
+export let logger = new Logger();
+
+/**
+ * 替换日志出口。传 null 恢复默认。
+ * 接口必须提供 debug / info / warn / error 四个方法（其余可选）；
+ * 形状不对时忽略并记一条警告，避免把日志系统换成一个会抛错的空壳。
+ * @param {null | { debug: Function, info: Function, warn: Function, error: Function }} instance
+ */
+export function setLogger(instance) {
+  if (!instance) { logger = new Logger(); return; }
+  const missing = ['debug', 'info', 'warn', 'error'].filter((k) => typeof instance[k] !== 'function');
+  if (missing.length) {
+    // 此时新实例还没生效，用当前 logger 报错
+    logger.warn('logger', `runtime.logger 缺少方法 ${missing.join('/')}，已忽略`);
+    return;
+  }
+  logger = instance;
+}
