@@ -348,7 +348,34 @@ export function resolveApiKey(cfg) {
 }
 
 /** 返回一个 key 已解析好的 api 配置（不影响配置本体）。 */
+// 目标渠道注入（0.4.9.3 / 2026-11-04）：llm.target。
+// 用途：按群/按时段切渠道、故障转移、灰度。返回对象形状同 cfg.api 且**必须带
+// 非空 baseUrl**，否则回落默认解析（缺 baseUrl 的配置发出去只会得到 400）。
+let apiProvider = null;
+
+/**
+ * 替换「本次请求用哪个 api 目标」的解析。
+ * @param {null | ((cfg: object) => object)} fn
+ */
+export function setApiProvider(fn) {
+  apiProvider = typeof fn === 'function' ? fn : null;
+}
+
+/** 当前是否注入了目标解析（诊断用）。 */
+export function hasApiProvider() {
+  return apiProvider !== null;
+}
+
+/** 测试用：直接拿当前生效的 api 目标（不要在生产代码里用）。 */
+export function __effectiveApiForTest() {
+  return effectiveApi();
+}
+
 function effectiveApi() {
+  if (apiProvider) {
+    const injected = apiProvider(getConfig());
+    if (injected && typeof injected === 'object' && String(injected.baseUrl ?? '').trim()) return injected;
+  }
   const cfg = getConfig();
   // protocol：当前选中提供商的 API 协议；空串 = openai（默认直通，与旧版为同一行为）
   return { ...cfg.api, apiKey: resolveApiKey(cfg), protocol: protocolForProvider(cfg, cfg.api?.provider) };
