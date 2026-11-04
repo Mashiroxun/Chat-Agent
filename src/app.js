@@ -32,7 +32,7 @@ import { SessionRegistry } from './sessions.js';
 import { Orchestrator } from './orchestrator.js';
 import { ReminderStore } from './reminders.js';
 import { VideoReader } from './video-reader.js';
-import { cacheHitRate, estimateCost } from './llm.js';
+import { cacheHitRate, estimateCost, setApiProvider } from './llm.js';
 import { initPriceFeed, stopPriceFeed } from './price-feed.js';
 import { startTelemetryLoop, stopTelemetryLoop } from './telemetry.js';
 import { startCacheWarm, loadPersistedPrefix, seedPrefixFromSessions, warmOnce, markCurrentShapeWarmed } from './cache-warm.js';
@@ -150,6 +150,10 @@ export function createApp({ log = console.log, desktopPetHost = null, components
   // 日志出口（0.4.9.3）：可换成外部日志系统；接口不对时忽略并警告。
   if (components['runtime.logger']) {
     setLogger(components['runtime.logger']);
+  }
+  // 目标渠道（0.4.9.3）：llm.target —— 本次请求用哪个 baseUrl/key/协议。
+  if (typeof components['llm.target'] === 'function') {
+    setApiProvider(components['llm.target']);
   }
   // 提示词片段（0.4.9.3）：用户消息里【过去状态】段的构造逻辑。
   // 两个都必须是同步函数 —— 返回 Promise 会让提示词里出现 "[object Promise]"。

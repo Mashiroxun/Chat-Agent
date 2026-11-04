@@ -119,7 +119,7 @@ export function myStore({ cfg, log, lifecycle }) {
 `createApp` 的返回值里也有 `lifecycle`，外部（主进程、桌宠宿主）同样可以登记。
 清理时机在 `stop()` **最前面**——那时 onebot / store 都还活着，组件清理时还能访问它们。
 
-## 可替换的组件（30 个）
+## 可替换的组件（31 个）
 
 键名与 0.5 的组件表一致，两边的层可以互相搬。
 
@@ -196,6 +196,7 @@ export default function myRoutes() {
 | `core.reply.rescue` | `reply-rescue.js` `rescueUnsentReply` | 发送失败补救 |
 | `core.session.retryable` | `llm.js` `isRetryableError` | 重试判定 |
 | `llm.complete` | `llm.js` `chatCompletionWithRetry` | 模型调用 |
+| `llm.target` | `llm.js` `effectiveApi` | 本次请求用哪个 baseUrl / key / 协议。返回对象形状同 `cfg.api`，**必须带非空 `baseUrl`**，否则回落默认解析（缺 baseUrl 发出去只会得到 400）。用途：按群切渠道、故障转移、灰度。 |
 | `core.tools.bundle` | `tools.js` `buildToolDefs` | 工具列表 |
 | `core.tools.parseInline` | `orchestrator.js` `parseInlineToolCalls` | 内联工具调用解析 |
 | `core.media.forward` | `media-links.js` `dispatchMediaLinks` | 媒体链接转发 |
