@@ -89,6 +89,36 @@ export function systemPrompt(ctx) {
 拿不到 Electron API）只能靠 `worker_threads` 或子进程，那需要重写层规范——
 层就不能再"返回一个函数对象"了。**只装你信任的层**。
 
+## 生命周期：组件自己登记清理
+
+组件工厂拿到的 `deps` 里有 `lifecycle`，覆盖层如果起了定时器、订阅、文件句柄，
+必须登记清理函数——否则 `stop()` 不认识它们，退出后资源还活着
+（headless 或反复重启时表现为：重复推送、端口占用、数据文件写坏）。
+
+```js
+export function myStore({ cfg, log, lifecycle }) {
+  const timer = setInterval(() => { /* ... */ }, 60_000);
+
+  // 登记清理：stop() 时逆序执行（后登记的先跑）
+  const off = lifecycle.onStop(() => clearInterval(timer));
+
+  // 中途自己释放了，可以撤销登记
+  // off();
+
+  return { /* 组件实现 */ };
+}
+```
+
+| 成员 | 说明 |
+|---|---|
+| `lifecycle.onStop(fn)` | 登记清理函数（可 async），返回注销函数。已停止后调用会抛错 |
+| `lifecycle.signal` | `AbortSignal`，`close()` 时 abort。长任务可以据此提前退出 |
+| `lifecycle.close()` | 逆序执行全部清理，幂等；单个清理抛错不阻断其它，最后聚合成 `AggregateError` |
+| `lifecycle.cancel()` | 只 abort，不执行清理 |
+
+`createApp` 的返回值里也有 `lifecycle`，外部（主进程、桌宠宿主）同样可以登记。
+清理时机在 `stop()` **最前面**——那时 onebot / store 都还活着，组件清理时还能访问它们。
+
 ## 可替换的组件（26 个）
 
 键名与 0.5 的组件表一致，两边的层可以互相搬。
