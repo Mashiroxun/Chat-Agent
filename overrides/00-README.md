@@ -119,7 +119,7 @@ export function myStore({ cfg, log, lifecycle }) {
 `createApp` 的返回值里也有 `lifecycle`，外部（主进程、桌宠宿主）同样可以登记。
 清理时机在 `stop()` **最前面**——那时 onebot / store 都还活着，组件清理时还能访问它们。
 
-## 可替换的组件（28 个）
+## 可替换的组件（30 个）
 
 键名与 0.5 的组件表一致，两边的层可以互相搬。
 
@@ -189,6 +189,8 @@ export default function myRoutes() {
 |---|---|---|
 | `core.prompt.system` | `prompt.js` `buildSystemPrompt` | 系统提示词 |
 | `core.prompt.user` | `prompt.js` `buildUserPrompt` | 用户提示词 |
+| `core.prompt.pastState` | `prompt.js` `buildPastState` | 用户消息里【过去状态】段的历史选取。**必须同步**返回 `{ text, count, messages }`；形状不对回落默认。注意它按全价计费，比系统提示词更影响成本。 |
+| `core.prompt.anchor` | `prompt.js` `anchorChunkFor` | 窗口锚定块大小。**必须同步**返回 ≥1 的有限数，非法值回落默认。 |
 | `core.prompt.persona` | `config.js` `personaForChat` | 按会话取人设 |
 | `core.wake.resolve` | `prompt.js` `resolveContextTier` | 响应档位判定 |
 | `core.reply.rescue` | `reply-rescue.js` `rescueUnsentReply` | 发送失败补救 |
