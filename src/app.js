@@ -43,6 +43,7 @@ import { loadPlugins, watchPlugins, setOnebotClient, PLUGINS_DIR, SKILLS_DIR } f
 import { createQqPortable } from './qq-portable.js';
 import { setFetchProvider } from './safe-fetch.js';
 import { createFactories, defaultFactories, listComponentKeys } from './composition/factories.js';
+import { createCompositionLifecycle } from './composition/lifecycle.js';
 // 工具集批量静默期：重扫期间 N 个插件会逐个注册工具，中间态一律不发给模型，
 // 扫描结束一次性生效。详见 tool-registry.js「批量加载静默期」注释。
 import { beginToolsetBatch, endToolsetBatch } from './tool-registry.js';
@@ -131,7 +132,10 @@ function compareSemver(a, b) {
    防止监听器链式递归（见 createApp 内的递归护栏注释）。 */
 const appLogFns = new WeakSet();
 
-export function createApp({ log = console.log, desktopPetHost = null, components = {}, composition = null } = {}) {
+export function createApp({ log = console.log, desktopPetHost = null, components = {}, composition = null, lifecycle: injectedLifecycle = null } = {}) {
+  // 启动组合生命周期（0.4.9.3）：覆盖层组件可以登记清理函数，stop() 时逆序执行。
+  // 允许外部注入（测试用 / 多实例共管）；不传则每个 createApp 独享一份。
+  const lifecycle = injectedLifecycle ?? createCompositionLifecycle();
   // 启动组合注入（0.4.9.3）：这两项必须在读配置之前生效，所以放在最前面。
   // 不传时是 no-op，行为与之前完全一致。
   if (typeof components['runtime.config'] === 'function') {
@@ -368,9 +372,9 @@ export function createApp({ log = console.log, desktopPetHost = null, components
   const factories = createFactories(components);
   const componentKeys = listComponentKeys(factories);
 
-  const store = factories['data.messages']({ cfg, log });
-  const memory = factories['data.memory']({ cfg, log });
-  const sessions = factories['data.sessions']({ cfg, log });
+  const store = factories['data.messages']({ cfg, log, lifecycle });
+  const memory = factories['data.memory']({ cfg, log, lifecycle });
+  const sessions = factories['data.sessions']({ cfg, log, lifecycle });
   // OneBot WS 端口（从 protocol.wsUrl 推导，供端口就绪轮询使用）。
   function protocolWsPort() {
     try {
@@ -382,14 +386,15 @@ export function createApp({ log = console.log, desktopPetHost = null, components
   const onebot = factories['transport']({
     cfg,
     log,
+    lifecycle,
     onEvent: (event) => handleOneBotEvent(event).catch((error) => log('[ingest] 处理事件出错:', error?.message ?? error)),
   });
   setOnebotClient(onebot);
-  const sender = factories['core.send']({ cfg, log, onebot, store, components });
-  const reminders = factories['data.reminders']({ cfg, log });
-  const videoReader = factories['core.media']({ cfg, log, onebot });
+  const sender = factories['core.send']({ cfg, log, onebot, store, components, lifecycle });
+  const reminders = factories['data.reminders']({ cfg, log, lifecycle });
+  const videoReader = factories['core.media']({ cfg, log, onebot, lifecycle });
   const orchestrator = factories['core.orchestrator']({
-    cfg, log, store, memory, sender, sessions, onebot, emit, reminders, videoReader, components,
+    cfg, log, store, memory, sender, sessions, onebot, emit, reminders, videoReader, components, lifecycle,
   });
 
   // ── 协议端进程托管（2026-10-27，R125）────────────────────────────────────
@@ -1291,7 +1296,8 @@ export function createApp({ log = console.log, desktopPetHost = null, components
     protocolOnboard,
     // 启动组合（0.4.9.3）：console.routes 可追加/覆盖路由表；composition 供 /api/composition 查询
     components,
-    composition
+    composition,
+    lifecycle
   });
 
   async function handleHttp(req, res) {
@@ -1922,6 +1928,14 @@ export function createApp({ log = console.log, desktopPetHost = null, components
   }
 
   async function stop() {
+    // 启动组合资源（0.4.9.3）：先让覆盖层组件停掉自己登记的定时器/订阅/句柄。
+    // 放在**最前面** —— 组件清理时可能还要访问 onebot / store，这些此时都还活着。
+    // 清理失败绝不能阻断退出路径（单实例锁必须释放），所以整段包起来只记日志。
+    try {
+      await lifecycle.close();
+    } catch (error) {
+      log?.(`[composition] 资源清理失败：${error?.message ?? error}`);
+    }
     // 先停掉热重载 watcher：否则 stop() 之后文件变动仍会触发重载 + 广播
     try { pluginWatcher?.close?.(); } catch { /* ignore */ }
     pluginWatcher = null;
@@ -1969,6 +1983,8 @@ export function createApp({ log = console.log, desktopPetHost = null, components
 
   return {
     server, onebot, store, memory, sender, sessions, orchestrator, start, stop, emit, getConfig, updateConfig, getRendererAuthToken: () => rendererAuthToken, launchPortableQQ, stopPortableQQ, qqPortableStatus, reloadSkills,
+    // 启动组合生命周期（0.4.9.3）：外部也能登记清理函数，或检查 signal
+    lifecycle,
     // 2026-10-24：桌宠宿主（electron/desktop-pet.js）要反向调用这三个，但一直
     // 没有挂在返回值上 —— 主进程侧 `core?.xxx?.()` 全是 undefined，
     // 于是「模型已加载」上报、角色预览、动作预览、屏幕观察、今日用量卡片、开发工单
