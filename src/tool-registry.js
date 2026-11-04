@@ -226,11 +226,6 @@ function skillLabel(skills, skillId) {
   return st?.name || skillId;
 }
 
-/** 兼容旧调用：给一个只有 toolsCfg 的调用方算"传统可用性"（不含 Skill 层）。 */
-export function isToolEnabledLegacy(def, toolsCfg = {}) {
-  return getToolAvailability(def?.id, { toolsCfg }).enabled;
-}
-
 // ── 工具集粘滞窗（2026-10-19）──────────────────────────────────────────────
 //
 // ── 为什么需要它（全部来自 2026-10-18 的实测日志）──────────────────────────

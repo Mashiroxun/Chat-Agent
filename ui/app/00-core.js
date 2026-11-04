@@ -1180,7 +1180,14 @@ function switchTab(name) {
   });
   state.tab = name;
   if (state.quoteMode && name !== 'chats') exitQuoteMode();   // 离开存档页自动退出金句勾选
-  if (name === 'sessions') loadSessions();
+  // 2026-11-04（R174）：切回会话页用 quiet 加载。
+  // 以前是无参调用，等于每次都走"全量渲染"分支：几百条会话时把列表整块
+  // 推倒重画 —— 滚动位置回到顶部、悬停/拖拽的行被抹掉、还闪一下。
+  // loadSessions 内部本就有签名短路（数据一字未变直接 return），但那道闸门
+  // 只在 quiet=true 时生效；SSE 一直在推，切页时数据通常是没变的。
+  // 传 quiet 后：没变 → DOM 原样保留（滚动位置、悬停状态都在）；变了 → 照常重绘。
+  // 首次进入也能正确渲染：此时 state.sessionsSig 还是 undefined，签名必然不匹配。
+  if (name === 'sessions') loadSessions({ quiet: true });
   // 壁纸页（内置模块 src/wallpaper 前端）：每次进入都重新拉列表，插件热重载换了壁纸能立刻看到。
   // 用 typeof 守卫 —— 14-wallpaper.js 若没装（纯核心部署），这里不能抛错。
   if (name === 'wallpaper' && typeof loadWallpaperPage === 'function') loadWallpaperPage();
@@ -1189,7 +1196,7 @@ function switchTab(name) {
   // typeof 守卫与壁纸页同口径：没装插件时这里不能抛错。
   if (name === 'desktop-pet' && typeof loadDesktopPetPage === 'function') loadDesktopPetPage();
   else if (typeof stopDesktopPetPage === 'function') stopDesktopPetPage();
-  if (name === 'chats') loadChats();
+  if (name === 'chats') loadChats({ quiet: true });   // 同上：没变就不重绘（R174）
   // 群名补底：设置页（人设分群按钮/活跃设置分群下拉）用 chatNameOf 取名字，
   // 依赖 state.chats —— 若用户没先进过存档页这里是空的，会只显示群号。
   // 进设置页时悄悄拉一次（quiet，失败不报错），列表已在就跳过。
@@ -1441,9 +1448,16 @@ function enhanceOneSelect(sel) {
     //    capture=true：滚动事件不冒泡，必须用捕获阶段才能收到任意滚动容器的滚动。
     const closeAllOnMove = () => closeAll();
     window.addEventListener('resize', closeAllOnMove);
+    // 2026-11-04（R182）：这是挂在 document 上、capture=true 的**全局**滚动监听，
+    // 任何页面任何容器滚动都会走到。原先每次滚动都无条件 closeAll()（内含两次
+    // 全 DOM querySelectorAll + 一次 remove），软件渲染下会和合成器抢 CPU。
+    // 加一道短路：没有任何展开的下拉时，滚动根本不需要收起任何东西 ——
+    // 单次 querySelector 找不到就直接返回，99% 的滚动帧到此为止。
+    // 第一次真正滚动时若有展开菜单，仍当场收起，行为和原来一致。
     document.addEventListener('scroll', (e) => {
       // 只处理真正滚动的容器；.sel-menu 自己在菜单内滚动时不该收起
       if (e.target && e.target.closest && e.target.closest('.sel-menu')) return;
+      if (!document.querySelector('.sel.open, .sel-menu.open')) return;
       closeAll();
     }, true);
   }

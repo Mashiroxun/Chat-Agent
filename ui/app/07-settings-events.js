@@ -1283,6 +1283,30 @@ function bindSettingsEvents(c) {
       ssActive = 0;
       ssRenderPanel();
     };
+    /** 高亮目标元素（同页切分区 / 跨页跳转共用）。
+        带重试：跨页时目标页是异步渲染的（loadConnectionPage 要先 await 三个接口），
+        固定延迟撞不上渲染完成，元素还不存在 —— 不重试就只是"跳过去了但没高亮"。 */
+    const ssHighlight = (id, delay, tries = 4) => {
+      if (!id) return;
+      const attempt = (left) => {
+        setTimeout(() => {
+          const el = document.getElementById(id);
+          if (!el) {
+            if (left > 1) attempt(left - 1);
+            return;
+          }
+          // 目标是折叠块（<details>）就先展开 —— 否则用户跳过去只看到一行标题。
+          // 用 DOM 的 open 而不是改 03-connection 里的私有状态：那边的 toggle
+          // 监听器会把 open 写回它自己的变量，两边天然同步，也不跨文件动别人的内部状态。
+          if (el.tagName === 'DETAILS' && !el.open) el.open = true;
+          el.style.boxShadow = '0 0 0 3px var(--accent)';
+          try { el.focus({ preventScroll: true }); } catch { /* 非聚焦元素忽略 */ }
+          el.scrollIntoView({ block: 'nearest' });
+          setTimeout(() => { el.style.boxShadow = ''; }, 2000);
+        }, delay);
+      };
+      attempt(tries);
+    };
     const ssGoto = (i) => {
       const it = ssResults[i];
       if (!it) return;
@@ -1290,19 +1314,23 @@ function bindSettingsEvents(c) {
       ssInput.value = '';
       ssInput.blur();
       flushSettingsSaves();
+
+      // 跨页条目（2026-11-04，R178）：目标不在设置页 —— 先切到那一页再高亮。
+      // 典型是「运行日志」（工具 → 连接）和「自检」（工具）。这类功能以前在设置
+      // 里搜不到，必须事先知道"它在顶部导航的某个页面里"，属于最典型的
+      // "知道在哪才找得到"。索引表里带 goTab 的条目走这条分支。
+      if (it.goTab) {
+        switchTab(it.goTab);
+        // 目标页是异步渲染的（loadConnectionPage 要先 await 三个接口），
+        // 所以 ssHighlight 带重试；它是折叠块时会自动展开（见该函数）。
+        ssHighlight(it.target, 320);
+        return;
+      }
+
       state.settingsSection = it.section;
       renderSettingsSidebar();
       renderSettings();
-      if (it.target) {
-        setTimeout(() => {
-          const el = document.getElementById(it.target);
-          if (!el) return;
-          el.style.boxShadow = '0 0 0 3px var(--accent)';
-          try { el.focus({ preventScroll: true }); } catch { /* 非聚焦元素忽略 */ }
-          el.scrollIntoView({ block: 'nearest' });
-          setTimeout(() => { el.style.boxShadow = ''; }, 2000);
-        }, 120);
-      }
+      ssHighlight(it.target, 120);
     };
     ssInput.addEventListener('input', ssSearch);
     ssInput.addEventListener('keydown', (e) => {

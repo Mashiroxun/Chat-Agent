@@ -25,15 +25,11 @@
       "ban-state",
       "image-compat",
       "thinking-adapters",
-      "reply-safety",
       "account-pool",
-      "speaker-identity",
-      "conversation-memory"
+      "speaker-identity"
     ],
     "passiveInclude": [],
-    "passiveIcons": {
-      "red-packet-radar": "🧧"
-    },
+    "passiveIcons": {},
     "textFallback": true
   },
   "configSchema": {

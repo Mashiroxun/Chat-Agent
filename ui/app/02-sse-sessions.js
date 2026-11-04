@@ -20,7 +20,7 @@ function connectSSE() {
   sseConn = es;
   es.addEventListener('session-start', () => {
     loadSessions();
-    refreshStatus();
+    scheduleStatusRefresh();
     // 自动跟随新会话（等待中/运行中）
     if (state.autoFollowRunning) {
       loadSessions({ quiet: true }).then(() => {
@@ -75,7 +75,7 @@ function connectSSE() {
     try { data = JSON.parse(ev.data); } catch { /* 数据坏了也照常刷列表 */ }
     loadSessions();
     if (state.tab === 'chats') loadChats({ quiet: true });
-    refreshStatus();
+    scheduleStatusRefresh();
     // ⚠️ 会话刚结束必须主动重拉一次详情：轮询只刷 running/waiting 的会话，
     //    最终态（sent / finishReason / error）之后再也不来 —— 不重拉的话，
     //    "已发送到 QQ"徽标和收尾状态只能等用户手动刷新才出现。
@@ -97,7 +97,7 @@ function connectSSE() {
     try {
       if (typeof window.refreshSetupPane === 'function') window.refreshSetupPane();
     } catch { /* 设置页未就绪不阻塞 */ }
-    refreshStatus();
+    scheduleStatusRefresh();
   });
   es.addEventListener('memory-update', (ev) => {
     let data = {};
@@ -151,10 +151,10 @@ function connectSSE() {
     }
   });
   es.addEventListener('onebot-status', () => {
-    refreshStatus();
+    scheduleStatusRefresh();
     if (state.tab === 'connection') loadConnectionPage({ quiet: true });
   });
-  es.addEventListener('status', () => refreshStatus());
+  es.addEventListener('status', () => scheduleStatusRefresh());
   // 2026-10-23：snowluma-status / snowluma-log 两个事件随内置协议端一起删除，
   // 后端不再发射（协议端由用户自装，它的日志归它自己的控制台）。
   //
@@ -169,10 +169,10 @@ function connectSSE() {
     if (typeof connAppendProtocolLog === 'function') connAppendProtocolLog(d.lines);
   });
   es.addEventListener('protocol-status', () => {
-    refreshStatus();
+    scheduleStatusRefresh();
     if (state.tab === 'connection') loadConnectionPage({ quiet: true });
   });
-  es.addEventListener('qq-portable-status', () => { refreshStatus(); if (state.tab === 'connection') loadConnectionPage({ quiet: true }); });
+  es.addEventListener('qq-portable-status', () => { scheduleStatusRefresh(); if (state.tab === 'connection') loadConnectionPage({ quiet: true }); });
   // qq-portable-log 只用于刷新连接页上的状态（日志面板已不再展示 QQ 内核输出）。
   // 仍做 500ms 防抖：协议端启动期这一串日志很密，逐行重绘纯属浪费。
   let qqLogRedrawTimer = 0;
@@ -410,7 +410,7 @@ function startListPoller() {
     if (state.tab === 'chats') loadChats({ quiet: true });
     if (state.tab === 'connection') loadConnectionPage({ quiet: true });
     if (state.tab === 'usage' && !skipUsage) loadUsageView();   // 无 force：只更新数值，不重建 DOM
-    if (state.tab === 'settings') refreshStatus();
+    if (state.tab === 'settings') scheduleStatusRefresh();
   }, refreshIntervalMs());
   // 从后台切回：立刻刷一次用量（刚才跳过的补上），数字不会"停在过去"。
   // ⚠️ 只挂一次：startListPoller 在每次「设置页改动保存」时都会被调用来刷新间隔

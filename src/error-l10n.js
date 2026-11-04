@@ -177,6 +177,34 @@ const CASES = [
     })
   },
 
+  /* ── ②b 内容安全审查（2026-11-04，R169）───────────────────────────
+     实测（用户截图）：某渠道对**请求或模型要回的内容**做安全审查，命中时直接
+     400 + {"error":{"message":"safety check failed","type":"failed_precondition_error",
+     "code":"9"}}。原有 10 条规则没有一条能命中 → 用户看到整串英文 JSON。
+
+     ⚠️ **必须排在下面的 ③（权限）之前**：③ 的判据是 `status === 403`，
+        而内容审查也会用 403 —— 放后面就会被"这个 Key 没权限"抢先，给用户
+        指一条完全错的路（实测：403 + "内容审核未通过" 被 ③ 吃掉）。
+
+     判据只认"审查"这个语义本身，不绑 status：这类拒绝各家不一样（400 / 403 /
+     422 都见过），绑死状态码反而漏识别。
+
+     ⚠️ 关键词都带限定，避免误伤：
+       · `flagged` 必须跟 by/as + safety/moderation/filter/system（"flagged as invalid" 是参数问题）
+       · `sensitive` 后面必须带词边界：`sensitive info` 不加 `\b` 会吃掉
+         "sensitive information"（后者是提示词安全的正常讨论，不是内容审查）—— 实测踩过。 */
+  {
+    test: ({ raw, serverMsg, msg }) =>
+      /safety[\s_-]?check|content[\s_-]?(?:filter|policy|moderation)|safety[\s_-]?system|moderation[\s_-]?(?:blocked|flagged)|flagged[\s_-]?(?:by|as)[\s_-]?(?:the[\s_-]?)?(?:safety|moderation|filter|system)|sensitive[\s_-]?(?:content|word|info)\b|risk[\s_-]?control|内容(?:安全|审核|违规)|审核(?:未通过|失败|拦截)|敏感(?:内容|词|信息)/i
+        .test(`${raw} ${serverMsg} ${msg}`),
+    build: () => ({
+      title: '被内容审核拦下了',
+      what: '服务商的安全审查判定这次内容不合规，把请求直接拒了 —— 不是你配置或网络的问题。',
+      fix: '换个说法、删掉可疑内容再发一次；连续几次都这样就说明这个渠道审查偏严，换一个渠道。',
+      target: null
+    })
+  },
+
   /* ── ③ 没权限 / 余额不足 ─────────────────────────────────────── */
   {
     test: ({ status, msg }) =>

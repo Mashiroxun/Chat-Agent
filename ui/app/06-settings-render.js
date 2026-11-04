@@ -582,7 +582,28 @@ const SETTINGS_SEARCH_INDEX = [
   { keys: ['代理', 'proxy', 'daili'], label: '网络代理', desc: '接入国外 API 时用', section: 'api', target: 'open-model-config-btn', w: 6 },
   { keys: ['自动回复', '只读', 'zidong'], label: '自动回复（快捷开关）', desc: '左侧栏「快捷开关」第一个', section: 'api', w: 5 },
   { keys: ['表情', 'sticker', 'biaoqing'], label: '表情包', desc: '在「聊天与权限」分区', section: 'allow', w: 5 },
-  { keys: ['价格', '单价', '成本', 'jiage', 'chengben'], label: '成本核算与价格', desc: 'token 单价、自定义价格', section: 'api', w: 5 }
+  { keys: ['价格', '单价', '成本', 'jiage', 'chengben'], label: '成本核算与价格', desc: 'token 单价、自定义价格', section: 'api', w: 5 },
+
+  /* 2026-11-04：补四类「重要，但字面上完全猜不到在哪」的入口。
+     起因是逐个模拟用户输入，实测 19 个意图搜不到 —— 其中这四类属于
+     "改它真有影响，却既没有菜单项也没有关键词"：
+       · 安全开关：浏览锁定 / 内网图片 / 外链放行，只是「能力与工具」页里的一个小按钮
+       · 发送与限速：弹窗里藏着思考强度、工具轮数、并发、重试，以及**发网图的执行总开关**
+         （与工具列表里的 send_image 开关不是一回事）
+       · 前缀缓存：在「连接模型」分区末尾，但"缓存"这个词一个 key 都没有
+       · 开机自启 / 托盘：在「界面与应用」分区的「桌面端」小节里
+     target 都指向真实存在的元素 id，跳转沿用既有的"切分区 + 高亮"逻辑，无新增机制。 */
+  { keys: ['安全', '安全开关', '浏览锁定', '锁定', '内网', '外链', '域名白名单', 'ssrf', 'anquan', 'suoding'], label: '安全开关（浏览锁定 / 内网 / 外链）', desc: '限制工具能访问哪些域名，入口在「能力与工具」页', section: 'tools', target: 'tools-security', w: 9 },
+  { keys: ['思考', '思考强度', '推理', 'reasoning', '轮数', '工具轮数', '并发', '同时处理', '重试', '温度', 'temperature', '网图', '发图', '发网图', 'sikao', 'lunshu'], label: '发送与限速 · 思考强度 / 工具轮数 / 并发 / 发网图', desc: '决定回得多快多深；「允许机器人发网图」的执行总开关也在这里', section: 'allow', target: 'open-send-config-btn', w: 9 },
+  { keys: ['缓存', '前缀缓存', '命中率', 'cache', 'huancun'], label: '前缀缓存', desc: '命中率与保活，直接关系到花多少钱', section: 'api', target: 'cfg-cachewarm', w: 6 },
+  { keys: ['开机', '自启', '开机启动', '托盘', '最小化', '关闭窗口', 'kaiji', 'tuopan'], label: '开机自启 / 托盘', desc: '装完设一次就基本不动的两项', section: 'app', target: 'cfg-autostart', w: 7 },
+
+  /* 2026-11-04（R178）：跨页条目 —— 目标不在设置页里的功能。
+     带 `goTab` 的条目由 ssGoto 走"先切页、再高亮"的分支（见 07-settings-events.js）。
+     以前搜"日志"「报错」「自检」在设置里全是零结果，用户必须自己知道
+     这些东西在顶部导航的「工具」里 —— 那是最典型的"知道在哪才找得到"。 */
+  { keys: ['日志', '报错', '出错', '排查', 'log', 'rizhi', '看日志'], label: '运行日志', desc: '在「工具 → 连接 → 应用日志」（这里会直接跳过去并展开）', goTab: 'connection', target: 'conn-logs', w: 8 },
+  { keys: ['自检', '体检', '健康', '诊断', 'doctor', 'zijian', 'tijian'], label: '自检与体检', desc: '在「工具」页：体检单、修复提案、开发工单', goTab: 'harness', w: 7 }
 ];
 
 /* ── 分区内容 → 卡片（照原型 v2 的 fieldset）──
@@ -1544,13 +1565,30 @@ function renderChatSection(c) {
   // 响应档位/峰谷/指令禁言已移入「活跃设置」模态框（openActiveConfigModal），
   // 本区块只剩 主动话题 一个短块 + 两个收纳入口按钮。
   // （屏蔽名单 2026-09-21 已上移到 renderAllowSection，跟白名单作伴）
+
+  // 2026-11-04（R177）：两个入口拆开、各自带一句人话说明 + 关键项当前值。
+  // 以前并排两个按钮，一长句 hint 把两件事混着讲 —— 萌新看不出「发送与限速」
+  // 里装的是思考强度、工具轮数和发网图开关，也看不出它们现在是什么状态。
+  const apiCfg = c.api || {};
+  const THINK_TEXT = { off: '关（最快）', low: '低', medium: '中', high: '高' };
+  const thinkText = apiCfg.thinkingMode === 'off'
+    ? THINK_TEXT.off
+    : (THINK_TEXT[apiCfg.thinkingEffort] || '默认');
+  const imageSendOn = c.security?.imageSend?.enabled === true;
+
 return `
     <h3>回复节奏</h3>
-    <div class="field" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-      <button class="btn" id="open-send-config-btn">📨 发送与限速</button>
+    <div class="field" style="margin-bottom:14px">
       <button class="btn" id="open-active-config-btn">⚡ 回复积极度</button>
+      <div class="hint" style="margin-top:6px">决定它什么时候接话：只在被 @ 时回 / 偶尔接话 / 每条都回。也能按时间段切换。</div>
     </div>
-    <div class="hint" style="margin-bottom:12px">「回复积极度」决定它什么时候接话（只在被 @ 时回 / 偶尔接话 / 每条都回），也能按时间段切换；「发送与限速」是更底层的发送间隔与保护，不确定就别动。</div>
+    <div class="field" style="margin-bottom:12px">
+      <button class="btn" id="open-send-config-btn" title="温度、思考强度、单次最大工具轮数、并发会话数、失败重试次数，以及「允许机器人发送网图」的执行总开关">📨 发送与限速</button>
+      <div class="hint" style="margin-top:6px">
+        当前：思考 <b>${thinkText}</b> · 工具轮数 <b>${Number(apiCfg.maxRounds) || 12}</b> · 并发 <b>${Number(c.maxConcurrentRuns) || 2}</b> · 发网图 <b>${imageSendOn ? '开' : '关'}</b><br>
+        另外还有发送间隔、每分钟上限、失败重试。不确定就别动。
+      </div>
+    </div>
 
     <h3>主动开话题</h3>
     <div class="checkbox-row"><input type="checkbox" class="sw" id="cfg-proactive" ${c.proactive.enabled ? 'checked' : ''} />
@@ -3610,6 +3648,19 @@ function renderToolsSection(c) {
 
   const categoryCards = categories.map((cat) => buildToolCategoryHTML(cat)).join('');
 
+  // 安全开关的当前状态摘要（2026-11-04，R177）。以前这个按钮挤在批量按钮排里，
+  // 既找不到、也看不出现在是开还是关 —— 而它管的是"真执行时放不放行"。
+  const sec = c.security || {};
+  const lock = sec.browseLock || {};
+  const lockHosts = Array.isArray(lock.hosts) ? lock.hosts.length : 0;
+  const secBits = [
+    lock.enabled === true
+      ? `<b style="color:var(--green)">浏览锁定：开</b>（只放行 ${lockHosts} 个域名）`
+      : '浏览锁定：<b>关</b>（可访问任意公网地址）',
+    sec.allowPrivateImageHosts === true ? '允许读内网图片' : '内网图片：禁止',
+    (Array.isArray(sec.externalHosts) && sec.externalHosts.length) ? `外链额外放行 ${sec.externalHosts.length} 个` : ''
+  ].filter(Boolean).join(' · ');
+
   // 完整提示词预览（文本统一走 renderPromptPreviewText，见其注释）
 
   // 页面级左右分栏：左=标题/开关/工具卡（随滚动），右=整块预览（钉住）。
@@ -3630,14 +3681,24 @@ function renderToolsSection(c) {
             <span>启用工具系统（关闭后机器人只能看不能做任何操作）</span>
           </label>
         </div>
-        <div class="tool-actions" style="margin-bottom:16px;display:flex;gap:8px">
+        <div class="tool-actions" style="margin-bottom:12px;display:flex;gap:8px">
           <button class="btn btn-small" id="tools-enable-all">全部启用</button>
           <button class="btn btn-small" id="tools-disable-all">全部禁用</button>
           <button class="btn btn-small" id="tools-reset">恢复默认</button>
-          <!-- 2026-10-20：浏览锁定 / 内网图片 / 外部链接白名单三项只有配置项、
-               此前没有任何界面入口（见 09-community.js openSecurityModal 注释）。
-               放在这一页是因为它们限定的正是"工具能碰到什么"，与上面的开关同一层语义。 -->
-          <button class="btn btn-small" id="tools-security">🛡 安全开关</button>
+        </div>
+        <!-- 2026-11-04（R177）：安全开关从上面那排批量按钮里挪出来单独成块。
+             它和「全部启用 / 全部禁用 / 恢复默认」不是一类东西 —— 那三个改的是
+             "模型看得见哪些工具"，这里改的是"真正执行时放不放行"。挤在一起时
+             萌新既找不到，也容易把它当成又一个批量操作。 -->
+        <div style="border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:16px;background:color-mix(in srgb, var(--card) 55%, transparent)">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <button class="btn btn-small" id="tools-security">🛡 安全开关</button>
+            <span class="hint" style="margin:0">${secBits}</span>
+          </div>
+          <div class="hint" style="margin-top:6px">
+            限制机器人能访问哪些网站、能不能读内网图片、外部链接额外放行。
+            与上面的「工具开关」不是一回事 —— 那些只决定模型看不看得见，这里决定真正执行时放不放行。
+          </div>
         </div>
         ${categoryCards}
       </div>

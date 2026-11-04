@@ -107,7 +107,6 @@ export function probeLaunchDir(dir) {
     ok: true,
     dir: hit.dir,
     indexFile: hit.indexFile,
-    indexMjs: hit.indexFile,   // 兼容旧字段名
     entryName: hit.entryName,
     nodeExe: hasOwnNode ? nodeExe : '',
     hasOwnNode,

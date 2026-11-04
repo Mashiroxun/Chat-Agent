@@ -132,15 +132,45 @@ export function createQqPortable({
   //
   // 3 秒 TTL：UI 状态显示允许 3 秒陈旧；在途共享避免并发调用叠出多个 PowerShell
   // （force=true 只给"刚装完 QQ 要立刻看到结果"这类显式场景用）。
+  //
+  // ── 2026-11-04（R170）：加 stale-while-revalidate ──────────────────────
+  // 实测（bench_status）：缓存命中 5.7ms，但 TTL 一过期就 **735ms**（首次冷启 1161ms）。
+  // 而渲染端是 15s 轮询 —— 意味着每轮轮询都必然跨过 3s TTL、吃一次几百毫秒的
+  // 同步 spawn。机器一忙就顶穿前端 15s 超时，把整条 Promise.all 拖挂
+  // （10-14 那次"用量页一直加载失败"就是这么来的）。
+  //
+  // 现在分三段：
+  //   age < 3s              → 直接返回（与以前一致）
+  //   3s ≤ age < 30s        → **立即返回旧值**，同时后台静默刷新（不阻塞调用方）
+  //   age ≥ 30s 或首次     → 同步查（兜底，保证不会无限期拿不到真值）
+  // 效果：轮询路径恒定为几毫秒；状态最多滞后一个刷新周期（几百毫秒），
+  // 而不是让每个请求去等 PowerShell。
   let qqProcListCache = { at: 0, rows: null };
   let qqProcListInFlight = null;
   const QQ_PROC_LIST_TTL = 3000;
+  /** 陈旧上限：超过它就必须同步查（避免后台刷新一直失败时永远吃旧值）。 */
+  const QQ_PROC_LIST_STALE_MAX = 30000;
+
+  /** 后台刷新：复用 in-flight 槽位，失败静默（下次调用会再试）。 */
+  function kickProcListRefresh() {
+    if (qqProcListInFlight) return;
+    qqProcListInFlight = __listQqProcessesOnce()
+      .then((rows) => { qqProcListCache = { at: Date.now(), rows }; return rows; })
+      .catch(() => null)
+      .finally(() => { qqProcListInFlight = null; });
+  }
 
   async function listQqProcesses({ force = false } = {}) {
     if (process.platform !== 'win32') return [];
     const now = Date.now();
     if (!force) {
-      if (qqProcListCache.rows && now - qqProcListCache.at < QQ_PROC_LIST_TTL) {
+      const age = now - qqProcListCache.at;
+      if (qqProcListCache.rows && age < QQ_PROC_LIST_TTL) {
+        return qqProcListCache.rows;
+      }
+      // 陈旧但还能用：先给旧值，后台补新值 —— 调用方不再等 PowerShell。
+      if (qqProcListCache.rows && age < QQ_PROC_LIST_STALE_MAX) {
+        kickProcListRefresh();
         return qqProcListCache.rows;
       }
       if (qqProcListInFlight) return qqProcListInFlight;   // 已在查 → 共用这一次，别叠 spawn
