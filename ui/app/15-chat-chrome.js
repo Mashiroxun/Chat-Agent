@@ -193,21 +193,21 @@
   }
   function avLabel(name) { return String(name || '?').trim().slice(0, 1) || '?'; }
 
-  /* ═══ 真实 QQ 头像（r34）═══
-     腾讯公开头像 CDN，无需鉴权（与 05-memory-settings.js 的 .mem-card-ava-img、
-     14-chrome.js 的 #sidebar-avatar 同一套路）：
-       群   → https://p.qlogo.cn/gh/<群号>/<群号>/100
-       私聊 → https://q1.qlogo.cn/g?b=qq&nk=<QQ号>&s=100
+  /* ═══ 真实 QQ 头像（r34；2026-11-05 私聊改本地缓存）═══
+       群   → https://p.qlogo.cn/gh/<群号>/<群号>/100（群头像只能走 gh）
+       私聊 → /api/avatar/<QQ号>?s=100（R185 的磁盘缓存端点，与存档 / 记忆页统一）
      ⚠️ 群头像**不能**用 b=qq&nk=群号 —— 那是个人接口，对群号返回 404。
+     ⚠️ /api/avatar 只认 40/100/140/640，非白名单尺寸收敛到 100，避免 404
+        触发首字兜底（群头像的 gh 接口不受此限制）。
      拿不到 id（非纯数字的 key）时返回 ''，由调用方退回首字。 */
   function qqAvatarUrl(chatKey, size) {
     var m = /^(group|private):(\d{5,12})$/.exec(String(chatKey || ''));
     if (!m) return '';
     var id = m[2];
     var s = size || 100;
-    return m[1] === 'group'
-      ? 'https://p.qlogo.cn/gh/' + id + '/' + id + '/' + s
-      : 'https://q1.qlogo.cn/g?b=qq&nk=' + id + '&s=' + s;
+    if (m[1] === 'group') return 'https://p.qlogo.cn/gh/' + id + '/' + id + '/' + s;
+    var localSize = [40, 100, 140, 640].indexOf(Number(s)) >= 0 ? Number(s) : 100;
+    return '/api/avatar/' + id + '?s=' + localSize;
   }
 
   /* 头像方块：<img> + 首字兜底。
@@ -288,7 +288,7 @@
     W_SEARCH.innerHTML =
       '<div class="bp-search" id="cc-search">' +
         '<svg class="bp-mag" viewBox="0 0 1040 1040" aria-hidden="true"><path d="' + ICON_MAG + '"/></svg>' +
-        '<input id="cc-q" type="text" placeholder="搜索群 / 好友（也匹配最近一条消息）" maxlength="50" autocomplete="off" aria-label="搜索会话">' +
+        '<input id="cc-q" type="text" placeholder="搜索群 / 好友" maxlength="50" autocomplete="off" aria-label="搜索会话（也匹配最近一条消息）" title="搜索群 / 好友，也匹配最近一条消息">' +
         '<button class="bp-clear" id="cc-clear" type="button" title="清空" aria-label="清空">' +
           '<svg viewBox="0 0 20 20"><path d="' + ICON_X + '" fill="currentColor" stroke="none"/></svg></button>' +
       '</div>';
@@ -717,9 +717,13 @@
     var mp = /^private:(\d+)$/.exec(keyText);
     if (mg) keyText = '群号 ' + mg[1];
     else if (mp) keyText = 'QQ ' + mp[1];
+    // R191：结构改为「头像 + dh-main（主标题在上、群号副行在下）」——与
+    // 存档 / 记忆页的 .detail-header.is-chat 完全同构（原来群号跟标题挤同一行）。
     return avHtml(st.chat, name, 'chat-av') +
+      '<div class="dh-main">' +
       '<span class="chat-head-t">' + esc2(name) + '</span>' +
-      '<span class="chat-head-s">' + esc2(keyText) + '</span>';
+      '<span class="chat-head-s">' + esc2(keyText) + '</span>' +
+      '</div>';
   }
 
   function cardHead(s) {
@@ -1035,6 +1039,54 @@
     Object.keys(ccUserExpanded).forEach(function (sid) { if (!inList[sid]) delete ccUserExpanded[sid]; });
   }
 
+  // R193：选中卡卡体空置自愈 —— 占位提示被过滤后、或 02 指纹去重跳过渲染时，
+  // 展开的选中卡卡体会真的空着。挂「加载中…」并静默补拉详情。⚠️ 要绕过 R188
+  // 的 selectSession 同会话短路：先把 state.sessionDetail 清掉再调；同时置
+  // ccFromUserClick —— 这是"补内容"不是"切会话"，别让 R122-B 的接管窗口把它跳过。
+  // 5s 节流：接口持续失败时不要无限重试（失败 → 重建 → 再自愈的循环）。
+  // 2026-11-05 审查修复（P1）：原来的 lastBodyHeal = now 写在「卡体是否有内容」
+  //   判断之前，而本函数在 applyRightInner() 每次渲染末尾都会被调用 —— 正常
+  //   渲染（卡体有内容）不断刷新节流窗口，真正空卡体时反而被挡 5 秒，R193
+  //   等于没修。现在只在**确实要自愈**时计时，并按会话分键（A 的失败不挡 B）。
+  var lastBodyHeal = Object.create(null);
+  function healEmptyBody(sel) {
+    if (!sel) return;
+    var cards = DETAIL.querySelector('#cc-cards');
+    // 按值比对而不是把 sel 拼进属性选择器：session id 里出现引号/反斜杠时，
+    // querySelector 会直接抛 SyntaxError，右栏整块渲染中断。
+    var card = null;
+    if (cards) {
+      var all = cards.querySelectorAll('.bp-card[data-sid]');
+      for (var i = 0; i < all.length; i++) {
+        if (all[i].dataset.sid === String(sel)) { card = all[i]; break; }
+      }
+    }
+    var body = card && card.querySelector('.bs-cb');
+    if (!body || body.firstChild) return;
+    var key = String(sel);
+    var now = Date.now();
+    if (now - (lastBodyHeal[key] || 0) < 5000) return;
+    lastBodyHeal[key] = now;
+    var loading = loadingBody();
+    body.appendChild(loading);
+    if (typeof selectSession !== 'function') {
+      try { body.removeChild(loading); } catch (e) { /* 忽略 */ }
+      return;
+    }
+    try { state.sessionDetail = null; } catch (e) { /* 忽略 */ }
+    ccFromUserClick = sel;
+    var p = selectSession(sel);
+    // 02 成功渲染时会自己清空 body（loading 自然被带走）；失败或指纹去重跳过时
+    // 不会动卡体，占位就永久挂在里面，且 body.firstChild 非空让自愈不再触发。
+    // 所以 promise 落地后若 loading 还在，兜底移除，留一个干净的空卡体给下一轮。
+    if (p && typeof p.then === 'function') {
+      var clearLoading = function () {
+        try { if (loading.parentNode === body) body.removeChild(loading); } catch (e) { /* 忽略 */ }
+      };
+      p.then(clearLoading, clearLoading);
+    }
+  }
+
   function applyRightInner() {
     var chatAtEntry = st.chat;   // R122-P2-6：记入口时的聊天对象，末尾只有切换过才重刷左栏
     ccShown = CC_CARD_PAGE;      // R126：全量重建 = 分页归零重来（首屏 50 张，滚底再补）
@@ -1092,6 +1144,14 @@
     //    若它们正躺在离屏暂存区（上一轮从存档 / 记忆切回来），就从那儿取回。
     var nodes = collectSessionNodes();
     if (!nodes.length) nodes = heldNodes();
+    // R193（2026-11-04）：空态占位不是会话内容 —— 「← 选择左侧会话查看完整过程」
+    // （index.html 初始态 / 删除会话后）、「加载中…」（selectSession 延迟占位）混进
+    // nodes 会被 buildCard 塞进选中卡卡体，表现为「点开卡头底下空无一物、只剩提示」
+    // （用户截图反馈）。且 R188 的同会话短路让这张卡不再触发重渲染，提示就永久
+    // 留在卡体里。过滤掉占位；过滤后为空 → 末尾 healEmptyBody 自愈补拉。
+    nodes = nodes.filter(function (n) {
+      return !(n && n.nodeType === 1 && n.classList && n.classList.contains('empty-hint'));
+    });
 
     // ②′ 从「存档 / 记忆」切回「会话」时，必须先把借出去的面板还回原页 ——
     //     否则下面那句 `DETAIL.innerHTML = ''` 会把面板从文档里摘掉、又没人放回去，
@@ -1176,9 +1236,9 @@
         card.classList.remove('collapsed');
         ccUserExpanded[card.dataset.sid] = true;   // R121：用户手动展开 → 记账
         ccUserPickAt = Date.now();                 // R122-B：用户接管，暂停自动跟随
-        ccFromUserClick = card.dataset.sid;        // R122-B：标记这次 selectSession 是用户发起
         var body0 = card.querySelector('.bs-cb');
-        if (!body0) card.appendChild(pullParkedBody(card.dataset.sid) || loadingBody());
+        var parked = null;
+        if (!body0) { parked = pullParkedBody(card.dataset.sid); card.appendChild(parked || loadingBody()); }
         // R121：手风琴——用户点了这张，别的展开卡收起（这是用户动作，明确意图）。
         // 原来只在"新建卡体"时才收，导致点已有卡体的卡时多张同时展开、状态不确定；
         // 现在无论卡体是否已存在都收，语义确定。
@@ -1192,7 +1252,17 @@
             delete ccUserExpanded[c.dataset.sid];   // R121：被手风琴收起的卡销账
           }
         });
-        if (typeof selectSession === 'function') selectSession(card.dataset.sid);
+        // R188：卡体内容现成（就在 DOM 里 / 刚从暂存区捞回）且该卡本来就是
+        // 当前选中会话时，**不走 selectSession** —— 那会全量拉详情 + 整块重渲染
+        // （大会话几百毫秒级主线程阻塞），反复点同一张卡头（展开→收起→再展开）
+        // 就是被这个拖卡的。展开态已由上面的 class 切换同步保证；运行中的会话
+        // 内容由 SSE / loadSessions 轮询照常刷新。只有「换了一条会话」或
+        // 「占位盒还在等内容」才走正式选中。
+        var needSelect = !(String(state.currentSessionId || '') === String(card.dataset.sid || '') && (body0 || parked));
+        if (needSelect) {
+          ccFromUserClick = card.dataset.sid;      // R122-B：标记这次 selectSession 是用户发起
+          if (typeof selectSession === 'function') selectSession(card.dataset.sid);
+        }
       } else {
         card.classList.add('collapsed');
         // R121：用户手动收起 = 销账（并取消这条会话的"待展开"意图，否则连点两下
@@ -1201,6 +1271,9 @@
         if (ccPendingExpand === card.dataset.sid) ccPendingExpand = null;
       }
     });
+
+    // R193：选中卡卡体空置自愈（占位被过滤 / 无内容可搬时补拉详情）
+    if (selId) healEmptyBody(selId);
 
     // R122-P2-6：只有 st.chat 被兜底改过（切换了聊天对象）才需要重刷左栏
     // 选中态；没变就别跑 —— 同一个 tick 里 renderSessionList 包裹层已经跑过
@@ -1569,6 +1642,8 @@
             while (body.firstChild) body.removeChild(body.firstChild);   // 旧内容作废（02 已整块重渲染）
             fresh.forEach(function (n) { body.appendChild(n); });
             skinTools(body);      // 工具卡单行化（幂等）
+          } else if (madeBody) {
+            healEmptyBody(sel);   // R193：02 指纹去重跳过渲染时新建的卡体是空的 —— 自愈
           }
           // R122-P2-8：autoFoldTick 移出 fresh 门 —— 02 指纹未变提前返回
           // （fresh 为空）时也要做运行态迁移检测，否则「跑完自动展开/收起」

@@ -4,6 +4,570 @@
 
 ---
 
+## 未发布 · 0.4.9.2 代码审查修复（2026-11-05，R207，后端改动需重启生效）
+
+> 对当前未提交的 R184–R206 改动做了一轮独立审查。基线是好的：337/337 测试全绿、
+> 12 个改动文件 `node --check` 全过、27 个经典脚本 756 个顶层声明 0 组重名。
+> 但确认了两个会真实影响功能的缺陷，以及几处口径/性能问题，一并修掉。
+
+### 修复
+
+- **头像坏档会连破 7 天**（`src/avatar-cache.js` / `src/routes/system.js`）
+  旧实现读缓存只看 `buffer.length`、下载时丢弃真实 `contentType` 并硬编码
+  `image/jpeg`、`writeFileSync` 直写正式文件 —— CDN 错误页或写到一半断电留下的
+  半截 JPEG 会被当有效图片缓存，叠加 TTL 7 天 + 浏览器 `max-age=604800`，
+  命中即返回，负缓存与重拉都介入不了。现在：下载与读缓存都按**图片魔数**验真
+  （JPEG/PNG/GIF/WebP/BMP），据此返回真实 MIME；坏档删除并按未命中重拉；
+  落盘改「临时文件 + rename」原子替换；prune 顺带清 1 小时以上的 `.tmp` 残留；
+  响应补 `x-content-type-options: nosniff`。
+- **会话卡空体自愈经常不生效**（`ui/app/15-chat-chrome.js`）
+  R193 的 `lastBodyHeal = now` 写在「卡体是否有内容」判断之前，而该函数每次
+  `applyRightInner()` 都会调用 —— 正常渲染不断消耗 5 秒节流窗口，真正空卡体时
+  反而被挡住；与 R188 同会话短路叠加，等于没修。现在只在确实自愈时计时、按会话
+  分键；补拉失败/被跳过时兜底移除「加载中…」占位（否则 `firstChild` 非空会让
+  自愈永不重触发）；卡体查找改按值比对，避免 session id 含引号时
+  `querySelector` 抛错打断整块渲染。
+- **`/api/avatar` 的 HEAD 分支是死代码**（`src/routes/system.js`）
+  分发器按 `method` 严格相等匹配，写 `'GET'` 时 handler 里的 HEAD 判断永远走不到。
+  改 `method: '*'` 并显式对非 GET/HEAD 回 405；尺寸校验移到路由层，不再用
+  `Number(x) || 100` 把 `?s=abc` / `?s=0` / 空串悄悄洗成默认 100 档（注释写的是
+  「其它一律 404」）；尺寸白名单由 `avatar-cache.js` 唯一导出，两处不再各写一份。
+- **击穿归因全量渲染**（`ui/app/13-doctor.js`）
+  R204 把「最近 6 次」改成遍历全部 `a.breaks` 再聚合，「其余 N 类」虽折叠在
+  `<details>` 里，HTML 仍全量生成并插入 DOM（`ATTRIBUTION_MAX_FILES=120`）。
+  现在先 `slice(-60)` 再聚合，上界钉死；同时给 `miss` / `ratio` / `prompt` /
+  `titles` / `excerpt` / `signals` / `chars` / `share` 补缺失字段兜底，避免一组
+  抛错带走整块归因。
+- **用量页「?」帮助弹窗可无限叠加**（`ui/app/04-archive-usage.js`）
+  `openHelpModalShell` 没有幂等，连点两下叠出两个遮罩 + 两个焦点陷阱。现在给
+  overlay 打 `data-help="usage"`，已开时只重新聚焦。
+- **侧栏机器人头像改本地缓存后的 404 破图**（`ui/app/14-chrome.js`，回归防护）
+  全站私聊头像统一走 `/api/avatar` 后，侧栏 `#sidebar-avatar` 原本**没有**加载失败
+  兜底：旧 CDN 直链对无效号回的是 200 默认企鹅图，新端点拉不到是 404，会直接留一张
+  破图。现补一次性 `error` 监听（flag 防重复绑定，CSP 禁内联 onerror），失败时摘掉
+  src 与 `.logged-in` 露出常显的 `#avatar-default`。这正是首页更新报告里
+  「表情包每打开一次就多挂一个失效回调」那条历史 bug 的同型陷阱，按同一套修法处理。
+- **基线自检脚本的 `--check` 是死参数**（`scripts/refresh-builtin-baseline.mjs`）
+  文档一直写着 `--check 只检查不写入`，实现里却没有这个分支，直接被后面的
+  「不是内置模块目录名」拦掉 —— 等于「改了内置模块源码没重算基线」这类历史事故
+  （`/help` 重启后报「触碰了高危能力」）没有自检入口。现补只读比对分支：
+  实测 21 个内置模块 / 85 个文件全部一致。
+
+### 调整
+
+- **全站私聊头像统一走本地缓存**：存档列表/页头（`04`）、记忆列表页头（`05`）、
+  会话页左栏（`15`）、全屏页左栏与侧栏机器人头像（`14`）原先仍直连
+  `q1.qlogo.cn`，本轮一并切到 `/api/avatar`（尺寸收敛到 40/100/140/640 白名单）。
+  **群头像保持 `p.qlogo.cn/gh/` 直链** —— 拿群号套个人接口会 404，不能改。
+  这样 `version.json` 里「头像改本地缓存」的表述才名副其实。
+- **补测试**：新增 `tests/avatar-cache.test.mjs`，用临时 `QQ_AGENT_DATA_DIR`
+  零出网覆盖魔数识别、合法缓存命中（含 PNG 的真实 MIME）、坏档清理、非法 QQ、
+  尺寸白名单与缓存统计 —— 这是这批改动里唯一「出网 + 写盘 + 新 HTTP 端点」
+  的模块，此前 337 个用例对它零覆盖。
+
+### 验证
+
+全量测试 **346/346**（337 原有 + 9 个新增 avatar-cache 用例，零出网）；
+13 个改动 JS `node --check` 全过；27 个经典脚本 756 个顶层声明 0 组重名；
+直接调真实 `systemRoutes` handler 实测 GET/HEAD 200、POST 405、
+`?s=abc` / 空 / 0 / 999 全 404、`nosniff` 生效。
+审查阶段用临时 DATA_DIR 实证过坏档场景（写入 `<!DOCTYPE html>` 后旧实现照样
+以 `image/jpeg` 返回），修复后同一场景返回 null 且坏档被删除。
+
+## 未发布 · 外链拦截落日志 + 0.4.9.2 bug 上报核查结论（2026-11-04，R206，需重启生效）
+
+> 收到一份外部《bug 上报》（两个"缺陷"），逐条对照当前源码核查后：
+> **两个都不是当前版本的真 bug**，但报告里有一条可观测性建议属实，已顺手采纳。
+
+### 核查结论
+**缺陷一（runAction 面板动作通道"宿主从未实现"）→ 不是 bug，是不存在的约定。**
+`runAction` 在本仓（宿主 / 插件 / 文档）**0 命中**；没有任何插件或前端会发
+`POST /api/skills/<id>/action/<key>`，报告声称的故障现象在代码里无来源。
+宿主的插件面板机制是**另一套已实现的通道**：configSchema `{type:'action', panel}`
+→ `manifest.panels` → `/plugin-panel/<id>/…`（宿主代理插件目录，与控制台同源）
++ `@data` 只读数据代理；`src/skills/panel.js:34` 明确写着
+**「只能读，不能写 —— 通道是纯 GET 静态文件，没有任何写接口」**——
+无写接口是有意的安全模型，不是漏实现。`POST /api/skills/x/action/y` 返回
+404「未知 API」是正确兜底（curl 复现属实但非缺陷）。
+→ 报告实质是一个 **0.5 的新通道提案**（写回 REST），其修法（白名单 /
+keyEndpointAllowed / 状态码约定）质量不错，留档给 0.5 评审；**本版不实现**
+（给不存在的调用方加一条能写盘的通道反而扩大攻击面）。
+
+**缺陷二（插件本机管理页"无路可走"）→ 前提不成立，影响范围是空集。**
+报告假设插件自带 `127.0.0.1:端口` 的 HTTP 服务并用 `target="_blank"` 打开
+管理页——当前生态 **0 个插件**自起 HTTP 服务（grep `createServer/listen` 空）；
+面板页由宿主代理、与控制台同源，iframe / 同源打开都不存在它描述的 CSP 问题。
+electron 侧引用（setWindowOpenHandler deny / INTERNAL_HOSTS 拒本机 /
+isLocalConsole 放行本机导航）核实**属实**，但这是两个自洽的威胁模型
+（新窗口逃逸 vs 顶层导航逃逸），不是口径矛盾。
+→ 真正值得记下的小观察：① `isLocalConsole` 放行**任意本机端口**的顶层导航，
+宽于"控制台自己的端口"，记入 0.5 加固备忘；② 外链拦截只进 stdout。
+
+### 本版实际改动（`electron/main.js`）
+- `openExternalChecked` 与小窗导航守卫里被拦的外链，除 console 外改走
+  现成的 `logKey()` 落进 `data/logs`（报告建议 D，1 行级）——
+  「点了没反应」从此有据可查。
+
+### 验证
+`node --check` 通过；测试 337/337。核查过程全部基于当前源码
+（routes 拆分后的 12 个域模块、plugin-loader、skills/panel.js、electron/*）。
+
+## 未发布 · 首页更新报告补全 0.4.9.2（2026-11-04，R205，前端刷新即生效）
+
+> 用户要求「把今天更新的东西写更新报告上去 0.4.9.2」。
+
+### 改动
+- **`ui/app/14-chrome.js` `STAGE_CHANGELOG`**：第 1 条已是 `0.4.9.2 / 2026-11-04`，
+  但 items 只覆盖到 R183 前后。本轮把当天后半段 **R184~R204** 按主题合并成
+  **8 条**口语化条目插在数组最前（渲染按「新增 / 修复 / 优化」前缀分组，
+  新内容自然排各组最上），与已有条目按语义去重；**不升版本号、不动 date**
+  （package.json / version.json 已是 0.4.9.2，沿用 r134/r144/r148 先例）。
+  R189 是本机 Windows 动画开关（系统设置），不是软件改动，不写进面向所有用户的报告。
+- **`version.json`**：notes 补上本轮界面统一与稳定性内容；顺带删掉误混进
+  用户可见文案里的维护提示（「发版时改这里的 version 与 notes…」）。
+
+### 验证
+`node --check` 通过；测试 337/337；无头浏览器渲染首页更新报告卡片，
+确认 0.4.9.2 / 2026-11-04、8 条新条目全部命中、与原有 25 条共 33 条
+按「新增 3 / 优化 20 / 修复 10」分组正常显示，11 个旧版本折叠条目不受影响。
+
+## 未发布 · 击穿归因「一坨重复卡片」治理（2026-11-04，R204，前端刷新即生效）
+
+> 起因：用户截图反馈自检页「击穿归因 + 模块清单 + 静态体检」这一坨不好处理。
+
+### 根因
+`renderAttribution()` 用 `a.breaks.slice(-6).reverse()` 把最近 6 次击穿**逐条
+全量展开**（每条含改前/改后原文两行）。同一原因反复触发时，6 张卡片除时间外
+完全相同（用户截图实测），整屏都是重复内容；再叠加红左边框、蓝色来源胶囊、
+橙色断点、红色 miss、红/灰改前改后标签、模块清单红绿状态等自造混色，
+整体像调试日志 dump 而非 UI。
+
+### 改动
+1. **按原因签名聚合**（`ui/app/13-doctor.js`）：签名 = 段名 / 模块 / 变更类型 /
+   来源 / 断点 / 改前 / 改后 / 摘录 / miss / prompt。同签名合成一组，只渲染一次，
+   时间行写「最新时间 · 共 N 次」，全部时间放进 title（hover 可查）。
+2. **原文默认折叠**：改前/改后收进 `<details>`「查看改前 / 改后原文」，默认收起。
+3. **最多显示 4 组**，其余进 `<details>`「其余 N 类击穿（共 M 次）」，可展开。
+4. **状态统一到 cc-pill**（R194）：未识别来源→`cc-noreply`、miss→`cc-error`、
+   改前/改后→`cc-gray`、模块清单翻字→`cc-waiting` / 稳定→`cc-done`、
+   静态体检→`cc-waiting` + 灰标签；去掉红色左边框、橙色断点、红色 miss、
+   红色段名等重复强调，卡片改 `--line-str` + 8px 圆角。
+5. **静态体检**由「⚠️ + 长句」改成「胶囊 + 说明 + 一行注记」。
+
+### 验证
+`node --check` 通过；测试 337/337；无头 Edge 用 mock 调真实
+`renderCacheSentinel()` 渲染：
+- 6 条完全相同 → **1 组**「共 6 次」、原文 `DETAILS` 且未展开、6 个时间全在
+  title、10 处 cc-pill、模块清单/静态体检状态类正确；
+- 6 类 × 2 次 → 4 组可见 + 「其余 2 类击穿（共 4 次）」折叠 2 组；
+- 截图确认整块从 6 张重复卡压缩为 1 组 + 折叠入口。
+
+## 未发布 · 前缀缓存哨兵卡片风格统一（2026-11-04，R203，前端刷新即生效）
+
+> 起因：用户截图反馈自检页「前缀缓存哨兵」这一块风格比较迥异；按用户选定
+> 的「中度统一」方案实施（保留绿=命中 / 红=未命中的语义色与全部数据）。
+
+### 差异与改动
+1. **状态徽章**（`ui/app/13-doctor.js`）：「偏低」原是手写的描边空心胶囊
+   `.sentinel-badge` → 改用全站 cc-pill 体系（R194）：
+   good→`cc-done`、warn→`cc-waiting`、bad→`cc-error`、unknown→`cc-noreply`。
+2. **图例**（同上）：原「`<i>`命中 `<i>`未命中 ｜ 条长 = …」是终端味的一整句，
+   改成「色块+文字」两个分组 + 常规说明行（`·` 分隔），去掉全角竖线。
+3. **卡片规格**（`ui/style.css` 5895 段）：`padding 13/15`、`radius 10`、`--border`、
+   无投影 → 对齐 `.snowluma-page-card`：`radius 14`、`padding 20px 24px`、
+   `--line-str` 描边、`--lift + --paper-edge` 投影。
+4. **条形颜色**：纯饱和 `--green`/`--red` 实色 → `color-mix(... transparent)`
+   派生半透明色叠在 track 底色上，命中段仍比未命中弱一档；图例色块同源。
+5. **行密度与数字**：行字号 11→12px、行距 4→6px、条高 11→12px、
+   track 圆角 3→6px、列宽 38/46/64→46/50/72px；百分比统一 `--text` 加粗，
+   只有 warn/bad（异常）才染橙/红，健康行不再整列花花绿绿。
+
+### 验证
+`node --check` 通过；测试 337/337；无头 Edge 用 mock 哨兵数据调用真实
+`renderCacheSentinel()` 渲染 12 行并截图，实测徽章类为 `cc-pill cc-waiting`、
+卡片 radius 14px / padding 20px 24px、行字号 12px、行距 6px、条色为
+派生半透明、图例 2 组，整体观感与全站卡片一致。
+
+## 未发布 · 设置页搜索框文字截断 + 不够明显（2026-11-04，R202，前端刷新即生效）
+
+> 起因：用户截图反馈「这边也显示不全，并且搜索框不明显」。
+
+### 根因
+- **截断**：`#set-search-input` 宽 210px，左右 padding 28/10 给放大镜留位，
+  12.5px 字号下可用 **172px**；原 placeholder「搜设置：密钥 / 群 / 令牌 /
+  积极度…」实测 **193.8px**，溢出被裁（与 R201 同类）。
+- **不明显**：边框用 `--line`（深色主题仅 7% 白）、底色用 `--layer-1`
+  （与卡片同色），输入框几乎融进页头；placeholder 与图标用的是最暗的
+  `--fg-mute`。
+
+### 改动
+1. **`ui/app/06-settings-render.js`**：placeholder 缩为「搜设置…」（50px，
+   完整显示），完整说明移到 `title`（hover 气泡）与 `aria-label`（读屏）。
+2. **`ui/style.css` 16.6 段**：边框 `--line` → 控件专用 `--line-str`（15%），
+   底色 `--layer-1` → 输入框专用 `--field-bg`，图标/placeholder 颜色
+   `--fg-mute` → `--fg-dim`；补 hover 边框变化与 focus 的 accent 描边 +
+   `--accent-soft` 光晕（与 .bp-search 同款）。窄屏 140px 规则不变。
+
+### 验证
+`node --check` 通过；测试 337/337；无头 Edge 实测可用宽 172px、旧文案
+193.8px（放不下）、新文案 50px（放得下）；改前/改后截图对比确认文字完整、
+输入框可辨识。
+
+## 未发布 · 会话选择页搜索框占位文字显示不全（2026-11-04，R201，前端刷新即生效）
+
+> 起因：用户截图反馈左栏搜索框「搜索群 / 好友（也匹配最近一条消…」被截断。
+
+### 根因
+`#cc-q` 输入框左右要给放大镜（32px）与清空按钮（40px）留位，13.5px 字号下
+实际可用宽度仅 **197px**；原 placeholder 19 个字符实测 **229.8px**，溢出约
+33px 被浏览器直接裁掉（placeholder 不支持省略号，缩小字号/加省略都不稳）。
+
+### 改动（`ui/app/15-chat-chrome.js` buildStatic）
+- placeholder 缩短为「搜索群 / 好友」（实测 81.3px，完整显示）；
+- 完整说明「也匹配最近一条消息」移到 `title`（hover 气泡，与 .bp-nav 同款）
+  与 `aria-label`（读屏），信息不丢；
+- 不改输入框 padding / 字号 / 左栏宽度，避免牵动 R131 两页左栏对齐。
+
+### 验证
+`node --check` 通过；测试 337/337；无头 Edge 实测可用宽度 197px、
+旧文案 229.8px（放不下）、新文案 81.3px（放得下），截图确认完整显示。
+
+## 未发布 · 四个统计维度块位置统一（2026-11-04，R200，前端刷新即生效）
+
+> 起因：用户截图反馈「按天」这个位置和其他几个位置不太一样。
+
+### 根因（R195 引入）
+R195 把控制条挪进页头后写了 `.usage-head + [data-block] .usage-sec-head
+{ margin-top:12px }` —— 相邻选择器**只命中 DOM 里紧跟页头的第一个块（按天）**。
+用量页是「一次只显示一块」的维度切换（data-udim），切到按会话/按模型/按插件时
+当前块前面有隐藏的兄弟块，不命中该规则，退回 .usage-sec-head 默认 24px。
+无头 Edge 实测标题行 top：按天 **128**、其余 **134** —— 切维度时整块内容
+（标题 / 摘要行 / 图表）上下跳 6px；水平几何四块完全一致（left 258、宽 940）。
+
+### 改动（`ui/style.css`）
+规则改为按状态匹配、不依赖 DOM 顺序：
+`#usage-page[data-udim] > .usage-wrap > [data-block] > .usage-sec-head { margin-top:12px }`
+—— 存在 data-udim（设计上即只显示一块）时四个块统一 12px；未设置 udim
+的多块同屏旧路径仍用默认 24px 保留块间距。
+
+### 验证
+测试 337/337；无头 Edge 四维度实测 title/摘要/图表 top 全部 128/163、
+computed margin-top 全 12px，spread 0；修复后三个维度截图对齐一致。
+
+## 未发布 · 留槽后内容位置回到原位（2026-11-04，R199，前端刷新即生效）
+
+> 起因：R197/R198 之后用户截图反馈「会有像素偏移，位置变了」。
+
+### 根因
+单侧 `scrollbar-gutter: stable` 虽然消除了滚动条跳动，但会**恒定**预留一个
+10px 槽宽 → 940px 居中列整体左移 5px。无头 Edge 实测：修复前 left=258，
+单侧留槽后 left=253，页面所有内容列元素（标题 / 摘要 / 图表 / SVG）齐刷刷
+左移 5px，宽度不变 —— 用户看到的「位置变了」。
+
+### 改动（`ui/style.css`）
+含「max-width:940 + margin auto 居中列」的容器改 **`stable both-edges`**
+（两侧对称留槽，居中列中心不变）：
+- `#usage-page`、`.usage-strip`（R197，两者保持同一规则以维持对齐）；
+- `#skills-page`、`#plugins-page`（r96）；
+- `.usage-pane` 整类（R198，覆盖人设 / 桌宠 / 自检页）。
+**列表 / 弹窗类保持单侧 stable**：`#memory-list` / `#session-list` /
+`.detail-pane` / `.mk-list` / 各弹窗滚动区 / `.bp-scroll`（全屏页双栏，
+r99-A 的左对齐约束）—— 它们内容左对齐，双侧留槽反而会让左边缘右移 10px。
+
+### 验证
+测试 337/337；无头 Edge（`--disable-features=OverlayScrollbar`）实测：
+- 无槽基线 258 / 单侧 stable 253 / **双侧 both-edges 258**（位置完全回到修前）；
+- 双侧下「无滚动条 → 有滚动条 → 复原」内容列、摘要条、图表、SVG 的 left
+  恒为 258（shift 0），两列对齐差 0；
+- 各容器 computed gutter 符合分类（居中列 both-edges，列表单侧 stable）。
+
+## 未发布 · 其余界面滚动条偏移一并修复（2026-11-04，R198，前端刷新即生效）
+
+> 起因：R197 修完用量页后，用户要求「其他界面的这个偏移问题也修一下」。
+
+### 排查
+系统枚举全站滚动容器，对照 R182 留槽名单 / r96 补充 / R197，找出遗漏：
+- **`#memory-list`**（记忆页左栏）——R182 注释里明写的「历史遗漏」；
+- **`.usage-pane` 剩余页面**：人设页 `#personas-page`、桌宠页 `#desktop-pet-page`、
+  自检页 `#harness-page` 内部都是 `.usage-wrap`（940px + auto 居中），滚动条
+  出现/消失时整列会左移约 5px，与 R197 用量页同一根因（这几页没有容器外的
+  居中摘要条，无需 strip 同步补偿）；
+- **`.mk-list`**：三个市场页的卡片列表滚动区（`.market-page` 自身 overflow:hidden）；
+- **长内容弹窗滚动区**：帮助弹窗（R196）、技能弹窗、模型弹窗左右栏、人设预览、
+  加载日志、连接页日志、折叠代码块——滚动条出现时文字重排/右对齐元素会跳。
+
+### 改动（`ui/style.css`）
+1. `#memory-list` 补进 R182 名单（同时自动获得 `--pane-gutter-bleed`，
+   列表头满宽层能正确伸进保留槽——正是 R182 注释预留的做法）；
+2. 新增统一规则给 `.usage-pane` 整类、`.mk-list` 与上述弹窗滚动区
+   `scrollbar-gutter: stable`（已留槽的三页重复命中无副作用）。
+   ⚠️ 刻意不动 `.modal` 弹窗本体（plugin-panel-modal 的 iframe 高度依赖外层
+   无滚动条）、`.model-dd` 等精确尺寸下拉、`.usage-strip`（R197 已单独留槽）、
+   `.bp-left`（已有）。
+
+### 验证
+测试 337/337；无头 Edge（`--disable-features=OverlayScrollbar`）实测：
+- 页面级滚动容器（#session-list / #chat-list / #memory-list / .detail-pane /
+  .settings-pane / .snowluma-pane / #usage-page / .usage-strip / #skills-page /
+  #plugins-page / #personas-page / #harness-page / #desktop-pet-page / .bp-left /
+  .collapsible .coll-body）computed gutter 全为 stable；
+- 8 个动态弹窗类注入验证全部 stable；
+- 人设页居中列「无滚动条 → 有滚动条」left 恒 253（shift 0）；
+- R197 用量页对齐复验：wrap 253 / strip 253 / delta 0，未被整类规则破坏。
+
+## 未发布 · 用量页滚动条出现时中间界面不再偏移（2026-11-04，R197，前端刷新即生效）
+
+> 起因：用户截图反馈「滚动条出来的时候，中间的界面会偏移」。
+
+### 根因
+`#usage-page` 是 `overflow-y:auto` 的滚动容器，里面 `.usage-wrap` 是
+`max-width:940px + margin:0 auto` 的居中列；滚动条出现会占掉约 10px 内容盒
+宽度 → 居中列左移约 5px，消失又移回来。项目 R182 的留槽名单当年**故意跳过
+用量页**：页外的 `.usage-strip`（今日用量/搜索次数）也用 940px 居中，只给
+页内留槽会让两列永久错开 5px（r55 抓过的跳位）。
+
+### 改动（`ui/style.css`）
+1. `#usage-page { scrollbar-gutter: stable; }` —— 恒定预留滚动槽，滚动条
+   出现/消失时内容盒宽度不变；
+2. `.usage-strip { overflow-y: hidden; scrollbar-gutter: stable; }` ——
+   让页外摘要条**也按同一规则留槽**，两个容器的 content box 由浏览器按同一
+   宽度扣减，940px 居中列永远对齐。
+   ⚠️ 不用「给 strip 补固定 10px padding」：覆盖式滚动条不占空间时会永久
+   错开 5px，且实测槽宽（thin ≈10.4px）与 --scrollbar-w(10px) 有亚像素差。
+   strip 用 hidden 只为成为 scroll container 吃到 gutter，不会冒空滚动条。
+3. 更新 R182 段注释：说明 r96 的顾虑已由「两侧同步留槽」消解，仍不把
+   .usage-pane 一刀切（Harness 页无此居中列）。
+
+### 验证
+测试 337/337；无头 Edge（`--disable-features=OverlayScrollbar`）实测：
+两个容器 computed gutter 均为 stable，无条→有条→复原三种状态下
+`.usage-wrap` 与 `.usage-strip-inner` 的 left 恒为 253、互差 0；
+反转去掉留槽后两列恒为 258 —— 两组相差的 5px 正是槽宽一半，
+即真机下修复前会在 258↔253 之间跳、修复后恒定 253。
+
+## 未发布 · 用量页「?」帮助钮收纳静态说明（2026-11-04，R196，前端刷新即生效）
+
+> 起因：用户要求页头「用量与成本」右边加设置页同款问号按钮，把说明那一大坨放进去。
+> 用户选定方案：静态说明收进弹窗，动态摘要行留在页面。
+
+### 改动
+1. **`ui/app/04-archive-usage.js`**：
+   - 页头 `<h2>` 加 `.h2-help`（设置页同款 20px 圆形问号，带 aria-label/title）；
+     骨架页头同步加按钮（加载期点开也有效）。
+   - 新增 `openUsageHelpModal()`：复用 `openHelpModalShell`（设置页同款弹窗外壳），
+     内容 = 页头控制条说明 + 四个区块（按天/按会话/按模型/按插件）的原静态说明
+     与「这些数字是怎么算的」全部段落，**原文一字未改**；全局委托绑一次，
+     页面/骨架多次重建按钮都不受影响。
+   - 页面四个区块移除 `.usage-sec-note` 与 `details.usage-details-sub`，
+     **保留 `.usage-sec-sum` 动态摘要**；骨架去掉说明行占位（只留摘要占位），
+     数据回填不跳版。`updateUsagePage` 只写 data-sum，不依赖被删节点。
+2. **`ui/style.css`**：新增弹窗内 `.uh-t` / `.uh-note` 小标题与说明样式；
+   更新四块版式注释（R196 后为「段落头 → 摘要 → 图表 → 数值表」）。
+
+### 验证
+`node --check` 通过；测试 337/337；无头 Edge 实测：问号钮存在、页面静态
+说明 0 处 / 口径折叠 0 处 / 动态摘要 4 条且内容正常，点击弹出 5 章节 19 段
+（约 1900 字）帮助弹窗。
+
+## 未发布 · 用量页控制条挪进页头一行（2026-11-04，R195，前端刷新即生效）
+
+> 起因：用户截图反馈「右侧选项那一堆是不是能往上挪一挪和用量与成本在一排」。
+
+### 改动
+- **`ui/app/04-archive-usage.js`**：renderUsagePage / renderUsageSkeleton 把
+  `.usage-ctrl`（图表指标 / 时间范围 / 刷新 / 数据更新时间）从独立一行挪进
+  `.usage-head`，与标题同排（space-between，标题左 / 选项右）。
+- **`ui/style.css`**：`.usage-ctrl` margin 清零；相邻兄弟选择器从
+  `.usage-ctrl + [data-block]` 改 `.usage-head + [data-block]`（间距行为不变）。
+  ⚠️ 原约束保留：控制条仍是 `[data-block="days"]` 的兄弟节点（住在 .usage-head
+  里），不能进块内 —— 选「今日/24小时」时整块隐藏，进块内会跟着消失（r 时实测 bug）。
+  `.usage-head` 本身 flex-wrap：窄窗口时选项自动折行，不挤压标题。
+
+### 验证
+`node --check` 通过；无头 Edge 实测 h2 与控制按钮同排（top 85.0 / 82.0）、
+刷新按钮存在、截图确认布局正常。
+
+## 未发布 · 全站样式统一第二批：记忆列表 / 胶囊 / 空态 / 时间口径（2026-11-04，R194，前端刷新即生效）
+
+> 起因：用户要求「看看还有哪些地方可以像会话卡那样统一样式」，选定四项全做。
+
+### 改动
+1. **记忆页左栏列表行**（`ui/app/05-memory-settings.js` renderMemoryList）：
+   与存档页左栏（renderChatList）完全同款 —— `.bp-row` + 真实头像
+   （chatHeadAvHtml，群→gh/私聊→q1）+ `.bp-rt` 群名 / `.bp-ri`「N 位群友 ·
+   更新于 HH:MM:SS」+ `.cc-pill` 计数胶囊；选中态 `.selected`→`.on`（与
+   存档 / 会话列表同一套高亮）。**清理掉 `unread-pill` 内联改色 hack**
+   （`style="background:var(--orange)"`），「整理中…」改用 cc-pill 体系的
+   `cc-waiting`（橙色，变体本就存在）。`.chat-item` class 保留（点击委托与
+   入场动画挂在它上，存档行同做法）。
+2. **空态提示统一**（③）：列表空态的 `.list-head muted`（存档 / 记忆各一处）
+   改 `.bp-empty`；`.empty-hint` 字号 12.5px→13px 与 `.bp-empty` 对齐
+   （`.empty-hint` 保留给详情区居中空态，仅文字度量对齐，布局不动）。
+3. **时间口径统一**（④，`ui/app/00-core.js` fmtTime）：今天的时间只显示时钟
+   `HH:MM:SS`（与会话卡头 fmtClock 同格式），非今天的才带日期 `MM-DD HH:mm`。
+   原来一律 `MM-DD HH:mm`，最常见的"今天更新"反而和卡头对不上。
+
+### 验证
+三个文件 `node --check` 全过；测试 337/337；无头 Edge 实测截图：
+记忆列表与存档列表行结构、头像、胶囊、选中高亮完全一致，今天的时间显示时钟。
+
+## 未发布 · 点开会话卡底下空无一物修复（2026-11-04，R193，前端刷新即生效）
+
+> 起因：用户截图反馈「有的时候点开底下空无一物，显示左边选择详细会话」——
+> 展开的会话卡卡体里是「← 选择左侧会话查看完整过程」这类空态占位。
+
+### 根因
+`applyRightInner` 全量重建时，选中卡的卡体内容来自「收集当时 #session-detail
+里的非自建节点」——**空态占位提示（初始「← 选择左侧会话…」、selectSession 的
+「加载中…」延迟占位）也会被当成会话内容收进卡体**。叠加 R188 的同会话短路后，
+这张卡不再触发重渲染，占位就永久留在卡体里。另一来源：02 指纹去重提前返回时
+（fresh 为空），新建的卡体是真空的，也没人补内容。
+
+### 改动（`ui/app/15-chat-chrome.js`）
+1. 重建收集的 nodes **过滤 .empty-hint 占位**——占位不再进卡体；
+2. 新增 `healEmptyBody`：选中卡卡体为空时挂「加载中…」并静默补拉详情
+   （先清 state.sessionDetail 绕过 R188 短路，ccFromUserClick 置位绕过
+   R122-B 接管窗口；5s 节流防接口持续失败时无限重试）；
+3. 两个接入点：applyRightInner 重建末尾（占位被过滤/无内容可搬时）、
+   renderSessionDetail 包裹层（指纹去重导致新建卡体为空时）。
+
+### 验证
+`node --check` 通过；测试 337/337；无头 Edge 预览模式 8 轮点击压力测试
+（换卡展开/同卡收起再展开/手风琴），展开卡均有卡体且无占位混入（0 违规）。
+
+## 未发布 · 页头文字半像素偏移修复（2026-11-04，R192，前端刷新即生效）
+
+> 起因：R190/R191 之后用户反馈新页头「文字像素偏移」。
+
+### 根因
+统一页头的排版参数里有非整数像素：主标题 `line-height: 1.3`（15px×1.3=19.5px
+半像素行盒）、副行字号 11.5px —— flex 垂直居中后文字基线落在半像素上；
+本机处于软件渲染（render-gpu-off.flag），半像素文字的抗锯齿偏移肉眼可见。
+
+### 改动
+`ui/style.css`：页头文字全整数像素 —— 标题 15px/line-height 20px，副行
+12px/line-height 16px（.chat-head-t/.chat-head-s 与 .detail-header.is-chat 的
+h2/.sub 同步）；.chat-head 内边距对齐 .detail-header 的 14px 16px。
+
+### 验证
+无头 Edge 实测：两处页头文字元素 bounding top 全为整数（80/104/164/186），
+字号与行高均为整数值。
+
+## 未发布 · 会话头与存档 / 记忆页头完全对齐（2026-11-04，R191，前端刷新即生效）
+
+> 起因：R190 之后用户截图反馈「多少还是有点不一样」——会话头的群号跟标题挤在
+> 同一行、且没有存档 / 记忆页头那种卡片底。
+
+### 改动
+1. **`ui/app/15-chat-chrome.js` chatHeadHtml**：结构改为「头像 + .dh-main
+   （主标题在上、群号副行在下）」——与 .detail-header.is-chat 完全同构。
+2. **`ui/style.css` .chat-head**：补同款卡片底（layer-1 圆角 10 + 12/16 内边距 +
+   lift 投影），副行改块级 11.5px 灰、颜色统一 var(--muted)；主标题块级 15px/700。
+   验证：node --check 通过；无头 Edge 实测截图，会话头与存档页头逐像素同构
+   （卡片底 / 字号 / 行结构一致）。
+
+## 未发布 · 三处页头版式统一（2026-11-04，R190，前端刷新即生效）
+
+> 起因：用户截图反馈「会话选择」右栏会话头 / 存档页 / 记忆页三处页头风格不统一。
+
+### 差异（改前）
+- 会话头：头像 34px + 主标题 15px/700（纯名字）+ 副行「群号 xxx」——基准；
+- 存档页：无头像，标题 16px 且带（群号），副行只有条数统计；
+- 记忆页：无头像，标题 16px 且带（群号），按钮混在副行里。
+
+### 改动
+1. **`ui/style.css`**：新增 `.detail-header.is-chat` 统一版式（头像 34px 圆角 9 +
+   主标题 15px/700 + 副行 11.5px 灰），与 `.chat-head` 同基准；新增 `.head-btns`
+   （页头下一行按钮行）。头像 DOM 复用左栏行的 `.bp-av/.av-img/.av-l/.av-fb` 全局类。
+2. **`ui/app/04-archive-usage.js`** 存档页页头：加头像（复用本文件已有的
+   qqAvatarUrl 群→gh/私聊→q1 + bindArchiveAvatarFallback 捕获兜底）；主标题改纯
+   名字，群号挪进副行（与条数统计并列）。
+3. **`ui/app/05-memory-settings.js`** 记忆页页头：新增 chatHeadAvHtml（群头像走
+   gh 接口，同 15 号文件规则）+ bindMemHeadAvFallback 兜底；标题改「纯名字 的记忆」，
+   副行「群号 · N 位成员」，按钮行（拉取群成员/添加印象/整理本群记忆/整理状态）
+   挪到页头下一行 `.head-btns`。
+
+### 验证
+- 两个文件 `node --check` 全过；测试套件 337/337 全过；
+- 无头 Edge + 预览模式实测截图：三处页头版式一致（头像/字号/副行对齐），
+  群头像与首字兜底均正常。
+
+## 未发布 · 反复点会话卡头不再卡顿/点不开（2026-11-04，R188，前端刷新即生效）
+
+> 起因：用户截图反馈反复点击会话卡头（时间/轮数/耗时那一行）明显卡顿，卡点不开。
+
+### 根因
+展开一张折叠卡虽然**同步**完成（R117），但每次展开都会调 `selectSession`：
+全量拉 `/api/sessions/:id`（大会话服务端 structuredClone + 网络，几百毫秒起）→
+`renderSessionDetail` 整块重渲染，还顺带清空 `lastDetailFp` 打掉轮询的指纹去重。
+反复点同一张卡头（展开→收起→再展开）时每次点击都排一份这样的重活；且 fetch
+超过 200ms 时 selectSession 的延迟占位 `detail.innerHTML = '加载中…'` 会把整个
+右栏（含 #cc-cards 骨架）擦掉，回填时走全量重建 —— 卡顿叠加，展开态被重建
+覆盖，表现为「点不开」。
+
+### 改动
+1. **`ui/app/02-sse-sessions.js` `selectSession`**：同会话重复选中**直接短路**
+   （`id === state.currentSessionId && state.sessionDetail` 时 return）——选中是
+   纯选择语义，详情已加载就无需 fetch/渲染；运行中会话内容由 SSE / loadSessions
+   轮询照常刷新（两处调用方各有不等守卫/无选中守卫，不受影响）。
+2. **`ui/app/15-chat-chrome.js` 卡头点击**：卡体内容现成（DOM 里或刚从暂存区
+   R122-C5 捞回）且该卡就是当前选中会话时，不再调 `selectSession`——反复展开/
+   收起同一张卡退化为纯 class 切换，零网络零重渲染。仅「换了一条会话」或
+   「占位盒还在等内容」才走正式选中；`ccFromUserClick` 只在真正调用时置位。
+
+### 验证
+两个改动文件 `node --check` 全过；全量测试套件通过（见下）。
+
+## 未发布 · 会话选择页打开时顶栏不再闪一下（2026-11-04，R187，前端刷新即生效）
+
+> 起因：用户截图反馈点「会话选择」时顶栏会"重建"（闪一下/重绘）。
+
+### 根因
+全屏页打开的瞬间，`style.css` 的 `.app-shell:has(> #bigpage:not([hidden])) > #topbar
+{ visibility: hidden }` 在**同一帧**就把真顶栏藏掉；而 `openBigPage()` 的 WAAPI
+淡入作用在整个 `#bigpage` 上，连替代顶栏的 `.bp-head` 也从透明度 0 淡入 ——
+顶栏位置先空一帧、再随 160ms 淡入浮现，看起来就是顶栏闪一下被重建。
+
+### 改动
+`ui/app/14-chrome.js` 的 `openBigPage()`：淡入动画目标从整个 `#bigpage` 收窄到
+标题条下方的 `.bp-body`。`.bp-head` 首帧即 100% 不透明，与真顶栏的隐藏无缝衔接
+（两者同高同渐变底），换装零空帧；下方内容区照旧淡入。语法校验通过。
+
+## 未发布 · 连接页机器人头像同款切本地缓存（2026-11-04，R186，前端刷新即生效）
+
+> 起因：用户截图反馈每次注入后「机器人已上线」卡片上的机器人头像加载慢。
+
+### 改动
+`ui/app/03-connection.js` 的 `connAvatarUrl` 从 q1.qlogo.cn 直链改走
+`/api/avatar/<qq>?s=140`（R185 的本地缓存端点）。注入后重绘不再每次重新走
+DNS+TLS+CDN 往返；磁盘缓存跨重启有效，注入后头像立即可用。仅注释改述兜底
+约束（群头像不可套此接口），行为约束不变。语法校验通过。
+
+## 未发布 · 记忆页头像改走本地缓存，加载不再卡慢（2026-11-04，R185，需重启 QQ Agent）
+
+> 起因：用户截图反馈记忆页「身份证」卡片上 QQ 头像加载慢，先看到彩色圆/首字才补出图。
+
+### 根因
+记忆卡片与记忆档案弹窗的头像**直连 q1.qlogo.cn**：每次渲染都走一遍 DNS + TLS +
+CDN 往返（慢链路下 1~2 秒），而 qlogo CDN 响应不带长期缓存头，Electron 的 HTTP
+缓存帮不上忙 —— 同一个人切几次页签就重拉几次。
+
+### 改动
+1. **新增本地头像缓存 `src/avatar-cache.js`**：先查磁盘缓存（`data/avatar-cache/
+   <qq>_<尺寸>.jpg`，TTL 7 天），未命中才用 safeFetchBinary 拉 q1.qlogo.cn；
+   并发去重（同一头像同时只出网一次）、失败负缓存 10 分钟（不反复打 CDN）、
+   过期清理按 mtime 节流执行。
+2. **新增路由 `GET /api/avatar/:qq`**（`src/routes/system.js`）：只认 5~12 位纯
+   数字 QQ 号与 40/100/140/640 尺寸白名单，命中回 `max-age=604800`（重复渲染
+   连请求都不发），拉不到回 404 —— UI 本来就有首字兜底，正好接住。
+3. **`ui/app/05-memory-settings.js`**：列表卡片与记忆档案弹窗的头像地址改走
+   `/api/avatar/<qq>?s=100`（弹窗 s=140 留高分屏余量），错误兜底逻辑不变。
+
+### 验证
+- 三个改动文件 `node --check` 全过；
+- 直连模块冒烟：QQ 2519864174 首次网络拉取 251ms（3.3KB），第二次读磁盘缓存 **1ms**；
+  13 位非法号码正确拒绝返回 null。
+
 ## 未发布 · 帮助按钮问号垂直居中修复（2026-11-04，R184，前端刷新即生效）
 
 > 起因：用户截图反馈圆形帮助按钮里的「?」不在圆心，明显偏上。

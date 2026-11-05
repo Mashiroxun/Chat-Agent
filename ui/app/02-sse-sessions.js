@@ -684,6 +684,17 @@ function startWaitTicker() {
 }
 
 async function selectSession(id) {
+  // R188（2026-11-04）：同会话重复选中**直接短路**。
+  // 背景：右栏卡头的展开/收起是纯 class 切换，但每次重新展开都会走一遍这里
+  // —— 全量拉 /api/sessions/:id（大会话服务端 structuredClone + 网络，几百毫秒起）
+  // + renderSessionDetail 整块重渲染，还顺带把 lastDetailFp 清空、把轮询的
+  // 指纹去重也打掉。用户反复点同一张卡头（展开→收起→再展开）时，每次点击
+  // 都排一份这样的重活，主线程被连续阻塞 ——「反复点卡头明显卡顿、点不开」
+  // （2026-11-04 用户复现，32.4k tok 的会话）。
+  // 详情已经在该会话上时，选中是**纯选择语义**（展开态由点击处同步保证），
+  // 无需任何 fetch/渲染；运行中的会话内容照常由 SSE / loadSessions 轮询路径刷新
+  // （02:28 有不等守卫、02:274 有无选中守卫，均不受本短路影响）。
+  if (id && id === state.currentSessionId && state.sessionDetail) return;
   state.currentSessionId = id;
   state.sessionDetail = null;
   lastDetailFp = null;

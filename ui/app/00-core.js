@@ -810,6 +810,13 @@ function fmtTime(ts) {
   if (!ts) return '-';
   const d = new Date(ts);
   const p = (n) => String(n).padStart(2, '0');
+  // R194（2026-11-04）：时间口径统一 —— 今天的只显示时钟（与会话卡头的
+  // fmtClock HH:MM:SS 同格式），非今天的才带日期。原来一律 MM-DD HH:mm，
+  // 列表里"更新于 今天 18:44"这种最常见的场景反而看不出秒、和卡头对不上。
+  const now = new Date();
+  const sameDay = d.getFullYear() === now.getFullYear()
+    && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  if (sameDay) return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 

@@ -9,6 +9,7 @@ import { estimateCost, cacheHitRate } from '../llm.js';
 import { todayKey } from '../util.js';
 import { logger } from '../logger.js';
 import { buildPluginUsage } from '../plugin-usage.js';
+import { getAvatar, AVATAR_SIZES } from '../avatar-cache.js';
 // 探测结果的"可对外"视图：删掉两枚令牌，只留有无标记。
 // 令牌不越过 HTTP 边界的保证在这个纯函数里，路由只负责调它。
 
@@ -205,6 +206,38 @@ export function systemRoutes(deps, shared) {
         const level = String(body.level || 'info');
         logger.setLevel(level);
         return json(res, 200, { ok: true, level: logger.getLevel() });
+      }
+    },
+    {
+      // QQ 头像本地缓存伺服（2026-11-04）：记忆卡片等处的头像不再直连
+      // q1.qlogo.cn（每次渲染 DNS+TLS+CDN 往返，CDN 又不给长期缓存头，慢），
+      // 改走这里：先读磁盘缓存（src/avatar-cache.js），未命中才出网拉一次。
+      // 只认 5~12 位纯数字 QQ 号与固定尺寸档，其它一律 404 —— UI 侧本来就有
+      // 首字兜底，404 触发 img 的 error 事件正好走兜底。
+      // 浏览器缓存 7 天：本地回环虽然快，但 max-age 让重复渲染连请求都不发。
+      // 2026-11-05 审查修复：method 用 '*' 才能同时接住 GET / HEAD —— 分发器
+      //   （src/app.js:1381）是按 method 严格相等的，写 'GET' 时 handler 里的
+      //   HEAD 分支永远走不到；尺寸校验移到路由层，不再用 Number(x)||100
+      //   把非法值悄悄洗成默认档；响应补 nosniff。
+      method: '*', pattern: /^\/api\/avatar\/(\d{5,12})$/,
+      handler: async ({ res, json, match, url, method }) => {
+        if (method !== 'GET' && method !== 'HEAD') {
+          return json(res, 405, { ok: false, error: '仅支持 GET / HEAD' });
+        }
+        const raw = url.searchParams.get('s');
+        const s = raw === null ? 100 : Number(raw);   // 没传才默认；空串/NaN/0 都落入下面的 404
+        if (!AVATAR_SIZES.has(s)) return json(res, 404, { ok: false, error: '头像尺寸不支持' });
+        const r = await getAvatar(match[1], s);
+        if (!r) return json(res, 404, { ok: false, error: '头像不可用' });
+        res.writeHead(200, {
+          'content-type': r.contentType,
+          'content-length': r.buffer.length,
+          'cache-control': 'private, max-age=604800',
+          'x-content-type-options': 'nosniff'
+        });
+        if (method === 'HEAD') { res.end(); return; }
+        res.end(r.buffer);
+        return;
       }
     },
   ];

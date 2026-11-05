@@ -546,7 +546,7 @@ function setPageHeadHtml() {
         <span class="set-head-sub">软件基础设置 · 全局生效 · 改动自动保存</span>
         <div class="set-search" role="search">
           <svg class="set-search-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4a6 6 0 1 0 3.7 10.7L20 21M10 4a6 6 0 1 1 0 12 6 6 0 0 1 0-12z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          <input type="text" id="set-search-input" placeholder="搜设置：密钥 / 群 / 令牌 / 积极度…" autocomplete="off" aria-label="搜索设置项" />
+          <input type="text" id="set-search-input" placeholder="搜设置…" autocomplete="off" aria-label="搜索设置项：密钥 / 群 / 令牌 / 积极度" title="搜设置：密钥 / 群 / 令牌 / 积极度…（直达对应分区并高亮）" />
           <div class="set-search-panel" id="set-search-panel" hidden></div>
         </div>
         <span class="set-save-state" id="set-save-state" role="status" aria-live="polite"></span>
