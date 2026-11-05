@@ -3596,9 +3596,9 @@ input.sw[data-pending] { cursor: progress; }
    取值比 --scrollbar-w 多 2px：实际槽宽来自 `scrollbar-width: thin`（实测 10.4px），
    与 `::-webkit-scrollbar` 的 10px 有亚像素差；多补的部分会被面板的
    `overflow-x: clip`（见 `.list-pane`）裁掉，不会外溢。
-   ⚠️ 注意 `#memory-list` 不在这个名单里（历史遗漏）；它靠默认 0 走安全路径，
-   若哪天补进来，这里会自动带上。 */
-#session-list, #chat-list, .detail-pane, .settings-pane, .snowluma-pane, .modal-list {
+   ⚠️ `#memory-list` 已于 R198 补进本名单（原为历史遗漏，注释见下）——
+   它也是 .list-pane，列表头满宽层同样靠 bleed 变量伸进保留槽。 */
+#session-list, #chat-list, #memory-list, .detail-pane, .settings-pane, .snowluma-pane, .modal-list {
   scrollbar-gutter: stable;
   --pane-gutter-bleed: calc(var(--scrollbar-w, 10px) + 2px);
 }
@@ -3618,13 +3618,56 @@ input.sw[data-pending] { cursor: progress; }
    ⚠️ 这两处不需要 `--pane-gutter-bleed`（没有要通到面板右缘的满宽层），
    所以刻意不并入上面那份名单，只借同一个 scrollbar-gutter。
    ⚠️ 只点名 `#skills-page / #plugins-page`（即这两页的 .usage-pane），
-   **不写 .usage-pane** —— 同类的「用量 / Harness」页也用这个类，而用量页顶部的
-   `.usage-strip` 在 `#usage-page` **外面**（靠同样的 max-width:940px + auto 居中对齐，
-   见 3280 行），给它留槽会让摘要条与页内内容错开 5px，正是 r55 抓过的那类跳位。
-   那两页没有会变高变矮的卡片，暂不动。
+   **不写 .usage-pane** —— 同类的「用量 / Harness」页也用这个类，当年不给
+   用量页留槽的原因见下面 R197 注释（页外 .usage-strip 会错开 5px）；
+   现在已用「strip 同步补偿」解决，**仍然只点名 #usage-page**（见 R197 段），
+   不把整类 .usage-pane 一刀切 —— Harness 页没有这个居中列对齐问题。
    ⚠️ headless 下 Chromium 一律用覆盖式滚动条，本页在预览里量不出这个抖动 ——
    probe-r96-cardsize.mjs 因此断言"机制到位 + 无回归"，并用注入反转自证灵敏度。 */
-#skills-page, #plugins-page, .bp-scroll { scrollbar-gutter: stable; }
+/* R199：居中列页面改双侧留槽（位置回到无滚动条时的 258，且仍然不跳）；
+   .bp-scroll 属于全屏页双栏布局（r99-A 的两栏右内缩对齐约束），保持单侧。 */
+#skills-page, #plugins-page { scrollbar-gutter: stable both-edges; }
+.bp-scroll { scrollbar-gutter: stable; }
+
+/* ── R197（2026-11-04）：用量页滚动条留槽，中间界面不再左右偏移 ──
+   症状（用户截图）：内容变长出现滚动条时，中间的 940px 内容列整体偏移。
+   根因：#usage-page 是 overflow-y:auto 的滚动容器，滚动条出现会占掉约 10px
+   内容盒宽度 → 里面 margin:0 auto 的 .usage-wrap 左移约 5px；消失又移回来。
+   解法（两侧都留槽，不硬编码槽宽）：① #usage-page 恒定留槽；② 页外的
+   .usage-strip（今日用量/搜索次数摘要条）也变成滚动容器并同样留槽 ——
+   它的 .usage-strip-inner 与 .usage-wrap 都是 940px + auto 居中，两个容器的
+   content box 由浏览器按同一规则扣槽，永远等宽、永远对齐。
+   ⚠️ 不用「给 strip 补固定 10px padding」：占位式滚动条下能对齐，但覆盖式
+   滚动条不占空间时反而会永久错开 5px；而且实测槽宽（thin ≈10.4px）与
+   --scrollbar-w(10px) 有亚像素差。让两边各自 stable 最稳。
+   ⚠️ strip 用 overflow-y:hidden：它只有一行文字、永不滚动，hidden 就能让它
+   成为 scroll container 从而吃到 scrollbar-gutter，又不会冒出空滚动条。
+   R199：两侧都改 stable both-edges —— 单侧留槽会让两列一起恒定左移 5px
+   （253），双侧对称留槽则两列仍一起停在原来的 258，位置不变且照旧不跳。 */
+#usage-page { scrollbar-gutter: stable both-edges; }
+
+/* ── R198（2026-11-04）：其余界面的滚动条偏移一并修掉 ──
+   用户要求「其他界面的这个偏移问题也修一下」。系统排查后补齐所有**页面级**
+   滚动容器与长内容滚动区（此前只有 R182 名单 + r96 + R197 点名的几处有留槽）：
+   · .usage-pane 整类 —— 用量 / 技能 / 插件 / 桌宠 / 人设 / 自检页共用，
+     后三者内部都是 .usage-wrap(940px + auto 居中)，滚动条出现时整列会左移
+     约 5px（与 R197 用量页同一根因）；已留槽的三页重复命中无副作用。
+     ⚠️ 这些页没有「滚动容器外的居中摘要条」，不需要 strip 那种同步补偿。
+   · .mk-list —— 三个市场页的卡片列表滚动区（.market-page 自身 overflow:hidden）。
+   · 弹窗/长文本滚动区 —— 帮助弹窗（R196 新增，1900 字）、技能弹窗、模型弹窗
+     左右栏、人设预览、加载日志、连接页日志、折叠代码块；滚动条出现时文字
+     会重排/右对齐元素会跳，留槽后恒定。
+   ⚠️ 刻意不动：.modal 弹窗本体（plugin-panel-modal 的 iframe 高度依赖外层
+     无滚动条）、.model-dd 等精确尺寸下拉、.usage-strip（R197 已单独留槽）、
+     .bp-left（已有）。
+   R199：.usage-pane 整类改双侧留槽（居中列位置不变），其余列表/弹窗滚动区
+   保持单侧 —— 它们的内容是左对齐的，双侧会让左边缘平白右移 10px。 */
+.usage-pane { scrollbar-gutter: stable both-edges; }
+.mk-list, .page-help-body, .skill-modal__body,
+.model-modal-left, .model-modal-right, .prompt-preview-content,
+.loading-logs, .snowluma-logs-view, .collapsible .coll-body {
+  scrollbar-gutter: stable;
+}
 
 /* ── 模型目录面板（替代下拉框）：按钮凸起，面板浮起 ── */
 .model-pick { position: relative; flex: 1; }
@@ -3698,19 +3741,31 @@ input.sw[data-pending] { cursor: progress; }
    放在 #usage-page 外（那个容器会被整体重建），所以需要自己对齐页面内容：
    .usage-wrap 是 max-width:940px + margin:0 auto，这里复制同一套约束，左右才对得齐。 */
 #view-usage.active { flex-direction: column; gap: 0; }
-.usage-strip { flex-shrink: 0; padding: 10px 6px 2px; }
+/* R197：strip 也留同样的滚动槽 —— 与 #usage-page 的 content box 等宽，
+   940px 居中列才不会在滚动条出现/消失时相对页面内容偏移。 */
+.usage-strip { flex-shrink: 0; padding: 10px 6px 2px; overflow-y: hidden; scrollbar-gutter: stable both-edges; }
 .usage-strip-inner { max-width: 940px; margin: 0 auto; display: flex; align-items: center; gap: 12px; font-size: 12px; }
 .usage-pane { flex: 1; overflow-y: auto; padding: 8px 6px 18px; }
 .usage-wrap { max-width: 940px; margin: 0 auto; }
 .usage-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; gap: 12px; flex-wrap: wrap; }
 .usage-head h2 { font-size: 17px; font-weight: 600; display: flex; align-items: center; min-width: 0; }
 .usage-days { display: flex; gap: 6px; }
-/* 图表控制条：右对齐，紧贴第一张图上方。
-   ⚠️ 它必须是 [data-block="days"] 的兄弟节点，不能放进块内 —— 选「今日/24小时」时
-      后端 mode ≠ 'days'，整块会被隐藏，控制条住在里面就会跟着消失。 */
-.usage-ctrl { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin: 14px 0 0; }
-/* 第一块的段落头紧贴控制条，上边距收窄（.usage-h3 的 margin 已交给 .usage-sec-head） */
-.usage-ctrl + [data-block] .usage-sec-head { margin-top: 12px; }
+/* 图表控制条：页头一行（R195 挪进 .usage-head，标题左 / 选项右，flex-wrap
+   窄窗自动换行）。
+   ⚠️ 它必须是 [data-block="days"] 的兄弟节点（住在 .usage-head 里），不能放进
+      块内 —— 选「今日/24小时」时后端 mode ≠ 'days'，整块会被隐藏，控制条住
+      在里面就会跟着消失。 */
+.usage-ctrl { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin: 0; }
+/* R200（2026-11-04）：维度切换时四个块的位置统一。
+   R195 这条原写 `.usage-head + [data-block]` —— 只命中 DOM 里紧跟页头的
+   **第一个块（按天）**；切到按会话/按模型/按插件时，那些块前面有（隐藏的）
+   兄弟块，不命中相邻选择器，退回 .usage-sec-head 默认 24px 上边距 ——
+   实测标题行 top：按天 128、其余 134，切维度时整块内容上下跳 6px
+   （用户截图反馈「这个位置和其他几个位置不太一样」）。
+   改为按 data-udim 状态统一：存在 data-udim 时（设计上就是「一次只显示一块」）
+   所有块都用 12px，不再依赖 DOM 顺序；未设置 udim 的旧路径（多块同屏）
+   仍用默认 24px 保留块间距。 */
+#usage-page[data-udim] > .usage-wrap > [data-block] > .usage-sec-head { margin-top: 12px; }
 /* 五张统计卡片固定一行排开。minmax(0,1fr) 防止长数字把列撑爆。
    ⚠️ 整排已从「标题下方」挪到「三张图表之后」（先看趋势再看精确数字，首屏更简洁）。
    现在它是页面最后一个元素，所以上边留白 + 一条细分割线，下边不再需要 margin。 */
@@ -3756,15 +3811,23 @@ input.sw[data-pending] { cursor: progress; }
 }
 .usage-h3 { font-size: 13px; font-weight: 600; margin: 22px 0 8px; color: var(--muted); }
 
+/* R196：静态说明与「这些数字是怎么算的」收进页头「?」弹窗（openUsageHelpModal），
+   页面骨架少一段，但「左标题 + 右计量 → 摘要行 → 图表 → 数值表」的对齐不变。 */
+.uh-t { font-size: 13px; font-weight: 600; color: var(--fg); margin: 0 0 6px; }
+.uh-note { font-size: 12px; color: var(--muted); line-height: 1.7; margin: 0 0 6px; }
+.uh-note b { color: var(--text); }
+.uh-note code { padding: 0 4px; border-radius: 4px; font-size: 11px; background: var(--inset-bg); color: var(--text); }
+
 /* ══════════════════════════════════════════════════════════════
    用量页「四个维度块」的统一版式（2026-10-19）
    按天 / 按会话 / 按模型 / 按插件 之前各长各的：只有「按插件」有说明卡、
    摘要行和按钮行，另外三块只有一行灰标题就直奔图表，叠在一起看像是两套设计。
    现在四块共用同一副骨架，顺序固定：
      ① .usage-sec-head   左标题 + 右侧计量（或本块专属的小按钮）
-     ② .usage-sec-note   一行说明：这块在说什么
-     ③ .usage-sec-sum    摘要行：一句结论（数字加粗、等宽对齐）
-     ④ .usage-chart      图表 → 下面接折叠的数值表与口径说明
+     ② .usage-sec-sum    摘要行：一句结论（数字加粗、等宽对齐）
+     ③ .usage-chart      图表 → 下面接折叠的数值表
+   （2026-11-04 R196：原 ② 的静态说明行与「这些数字是怎么算的」折叠块
+     已收进页头「?」帮助弹窗，页面只留动态摘要。）
    字号/颜色全部走既有变量，不再引入新色值，换主题自动跟随。
    ══════════════════════════════════════════════════════════════ */
 .usage-sec-head {
@@ -5833,56 +5896,59 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 5px; }
    命中率是"系统健康"里唯一**每天在变、且直接等于钱**的指标，所以它值得
    占自检第一屏，而不是埋在某个报告的深层。
    条形用 flex 堆叠（每轮两根 div），不用 canvas/SVG：尺寸随容器走，
-   没有重绘逻辑，窗口缩放也不会糊。 */
+   没有重绘逻辑，窗口缩放也不会糊。
+
+   R203（2026-11-04）：用户反馈「这一块风格比较迥异」，按 R190–R194 建立
+   的全站基准做中度统一（语义色与数据全保留）：
+     · 卡片规格对齐 .snowluma-page-card（radius 14 / 20·24 内边距 / lift 投影）；
+     · 状态徽章改全站 cc-pill（JS 侧输出 cc-done/cc-waiting/cc-error/cc-noreply）；
+     · 绿/红条由纯饱和实色改 color-mix 派生半透明，叠在 track 底色上更柔和；
+     · 行字号 11→12、行距 4→6、条高 11→12、圆角与列宽同步放宽；
+     · 图例改「色块+文字」分组 + 常规说明行，去掉终端味的全角竖线；
+     · 百分比数字统一 --text 加粗，只有 warn/bad（异常）才染状态色。 */
 .doctor-sentinel-wrap { margin-top: 22px; }
 
 .sentinel-card {
-  border: 1px solid var(--border); border-radius: 10px;
-  background: var(--layer-1); padding: 13px 15px;
+  border: 1px solid var(--line-str); border-radius: 14px;
+  background: var(--layer-1); padding: 20px 24px;
+  box-shadow: var(--lift), var(--paper-edge);
 }
 
 .sentinel-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--text); }
-.sentinel-badge {
-  padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600;
-  border: 1px solid currentColor;
-}
-.sentinel-badge.good { color: var(--green); }
-.sentinel-badge.warn { color: var(--orange); }
-.sentinel-badge.bad { color: var(--red); }
-.sentinel-badge.unknown { color: var(--muted); }
 .sentinel-dim { color: var(--muted); font-size: 12px; }
 
 .sentinel-legend {
-  margin: 9px 0 8px; font-size: 11.5px; color: var(--muted);
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin: 12px 0 10px; font-size: 12px; color: var(--muted);
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
 }
-.sentinel-legend i { display: inline-block; width: 10px; height: 8px; border-radius: 2px; margin-right: 3px; }
+.sentinel-legend-item { display: inline-flex; align-items: center; gap: 5px; color: var(--fg-dim); }
+.sentinel-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 0; }
 
-.sentinel-bars { display: flex; flex-direction: column; gap: 4px; }
-.sentinel-row { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
-.sentinel-t { width: 38px; flex: none; font-variant-numeric: tabular-nums; }
+.sentinel-bars { display: flex; flex-direction: column; gap: 6px; }
+.sentinel-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); }
+.sentinel-t { width: 46px; flex: none; font-variant-numeric: tabular-nums; }
 .sentinel-track {
-  flex: 1; min-width: 0; height: 11px; display: flex;
-  background: var(--layer-2); border-radius: 3px; overflow: hidden;
+  flex: 1; min-width: 0; height: 12px; display: flex;
+  background: var(--layer-2); border-radius: 6px; overflow: hidden;
 }
-/* 命中段压暗：它是"已经省下来的钱"，不该比未命中更抢眼 */
-.sentinel-hit { background: var(--green); opacity: .5; }
-.sentinel-miss { background: var(--red); }
-.sentinel-pct { width: 46px; flex: none; text-align: right; font-variant-numeric: tabular-nums; }
-.sentinel-pct.ok { color: var(--green); }
+/* 命中段仍比未命中弱一档（已经省下来的钱不抢眼），但改用派生半透明色
+   叠在 track 上，随主题变量走，不再是刺眼的纯饱和绿/红。 */
+.sentinel-hit { background: color-mix(in srgb, var(--green) 55%, transparent); }
+.sentinel-miss { background: color-mix(in srgb, var(--red) 65%, transparent); }
+.sentinel-pct { width: 50px; flex: none; text-align: right; font-variant-numeric: tabular-nums; color: var(--text); font-weight: 600; }
 .sentinel-pct.warn { color: var(--orange); }
 .sentinel-pct.bad { color: var(--red); }
-.sentinel-out { width: 64px; flex: none; text-align: right; font-variant-numeric: tabular-nums; }
+.sentinel-out { width: 72px; flex: none; text-align: right; font-variant-numeric: tabular-nums; }
 
 .sentinel-prefix { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border); }
 
-.sentinel-suspect { margin-top: 10px; font-size: 12px; color: var(--text); line-height: 1.8; }
-.sentinel-tag {
-  display: inline-block; margin: 0 4px 2px 0; padding: 1px 7px;
-  border-radius: 999px; border: 1px solid var(--warn-line, var(--border));
-  background: var(--warn-bg, var(--layer-2)); color: var(--orange); font-size: 11.5px;
+/* R204：静态体检改成「胶囊 + 说明」一条，标签并回 cc-pill 体系 */
+.sentinel-suspect {
+  margin-top: 10px; font-size: 12px; color: var(--text); line-height: 1.8;
+  display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap;
 }
-.sentinel-note { color: var(--muted); font-size: 11.5px; margin-top: 3px; line-height: 1.6; }
+.sentinel-tag { font-size: 11px; }
+.sentinel-note { flex-basis: 100%; color: var(--muted); font-size: 11.5px; margin-top: 3px; line-height: 1.6; }
 
 .sentinel-verdict {
   margin-top: 11px; padding: 10px 12px;
@@ -5913,27 +5979,26 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 5px; }
   font-size: 11.5px; color: var(--text);
 }
 
+/* R204（2026-11-04）：击穿归因「一坨重复卡片」治理 ——
+   同一原因反复触发时只显示一组（JS 侧按签名聚合），原文默认折叠；
+   状态徽章统一交给 cc-pill（R194），去掉红左边框 / 橙断点 / 红 miss /
+   红蓝改前改后标签这套自造混色，回到全站卡片语言。 */
 .sentinel-break-list { display: flex; flex-direction: column; gap: 6px; }
 .sentinel-break {
-  border: 1px solid var(--border); border-left: 3px solid var(--red);
-  border-radius: 0 7px 7px 0; padding: 7px 10px; background: var(--layer-2);
+  border: 1px solid var(--line-str); border-radius: 8px;
+  padding: 9px 12px; background: var(--layer-2);
 }
 .sentinel-break-top {
-  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
-  font-size: 11.5px; color: var(--muted);
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 12px; color: var(--muted);
 }
-.sentinel-break-time { font-variant-numeric: tabular-nums; }
+.sentinel-break-time { font-variant-numeric: tabular-nums; color: var(--fg-dim); }
 .sentinel-break-sec { color: var(--text); font-weight: 500; }
-.sentinel-break-mod {
-  color: var(--accent); border: 1px solid var(--accent-soft);
-  background: var(--accent-soft); border-radius: 999px; padding: 0 7px; font-size: 11px;
-}
+.sentinel-break-top .sentinel-break-mod { font-size: 11px; }
 .sentinel-break-how { color: var(--muted); }
-.sentinel-break-pos { color: var(--orange); font-variant-numeric: tabular-nums; }
-.sentinel-break-miss {
-  margin-left: auto; color: var(--red); font-variant-numeric: tabular-nums; font-weight: 500;
-}
-/* 变点原文：用等宽字体，让"到底换了哪几个字"能对齐着看 */
+.sentinel-break-pos { color: var(--fg-dim); font-variant-numeric: tabular-nums; }
+.sentinel-break-top .sentinel-break-miss { margin-left: auto; font-size: 11px; }
+/* 变点原文：等宽字体，让"到底换了哪几个字"能对齐着看 */
 .sentinel-break-ex {
   margin-top: 4px; font-family: var(--mono, ui-monospace, monospace);
   font-size: 11px; line-height: 1.6; color: var(--muted);
@@ -5944,31 +6009,44 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 5px; }
   color: var(--muted); border: 1px dashed var(--border);
   border-radius: 999px; padding: 0 7px; font-size: 10.5px;
 }
-/* 改前/改后：并排两行，"换的是什么"一眼可见 */
-.sentinel-break-ba { margin-top: 5px; display: flex; flex-direction: column; gap: 3px; }
-.sentinel-break-ba-row { display: flex; gap: 7px; align-items: baseline; font-size: 11px; }
-.sentinel-break-ba-tag {
-  flex: none; width: 30px; text-align: center; border-radius: 4px;
-  font-size: 10px; padding: 1px 0; color: var(--muted); border: 1px solid var(--border);
+/* 改前/改后：默认折叠，点开才看原文（R204） */
+.sentinel-break-ba { margin-top: 6px; }
+.sentinel-break-ba > summary {
+  cursor: pointer; font-size: 11.5px; color: var(--accent-hi);
+  list-style: none; user-select: none;
 }
-.sentinel-break-ba-tag.is-after { color: var(--red); border-color: var(--red); }
+.sentinel-break-ba > summary::-webkit-details-marker { display: none; }
+.sentinel-break-ba > summary::before { content: '▸ '; }
+.sentinel-break-ba[open] > summary::before { content: '▾ '; }
+.sentinel-break-ba-row {
+  display: flex; gap: 7px; align-items: baseline; font-size: 11px; margin-top: 5px;
+}
+.sentinel-break-ba-row .sentinel-break-ba-tag { flex: none; font-size: 10px; }
 .sentinel-break-ba-text {
   color: var(--muted); font-family: var(--mono, ui-monospace, monospace);
   word-break: break-all; line-height: 1.6;
 }
+/* 聚合后超过 4 组的其余项：可展开，不丢信息 */
+.sentinel-break-more { margin-top: 4px; }
+.sentinel-break-more > summary {
+  cursor: pointer; font-size: 11.5px; color: var(--accent-hi); padding: 3px 0;
+  list-style: none; user-select: none;
+}
+.sentinel-break-more > summary::-webkit-details-marker { display: none; }
+.sentinel-break-more > .sentinel-break-list { margin-top: 6px; }
 /* 模块清单：哪个模块带来了什么（段名/归属/体量/稳定性） */
 .sentinel-inv { margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--border); }
 .sentinel-inv-head { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 5px; }
 .sentinel-inv-row {
-  display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
   font-size: 11.5px; color: var(--muted); padding: 3px 0;
 }
-.sentinel-inv-row.is-flip .sentinel-inv-sec { color: var(--red); }
+/* R204：翻字状态由右侧 cc-pill 表达，段名不再重复染红 */
+.sentinel-inv-row.is-flip .sentinel-inv-sec { color: var(--text); }
 .sentinel-inv-sec { color: var(--text); }
 .sentinel-inv-mod { color: var(--accent); }
 .sentinel-inv-chars { font-variant-numeric: tabular-nums; }
-.sentinel-inv-flips { margin-left: auto; color: var(--red); }
-.sentinel-inv-flips.is-clean { color: var(--green); }
+.sentinel-inv-row .sentinel-inv-flips { margin-left: auto; font-size: 10px; }
 
 .sentinel-attr-tail {
   margin-top: 9px; padding-top: 8px; border-top: 1px dashed var(--border);
@@ -6630,7 +6708,7 @@ fieldset {
 .mem-imp { box-shadow: none; }
 
 /* 空态 */
-.empty-hint { color: var(--fg-mute); font-size: 12.5px; }
+.empty-hint { color: var(--fg-mute); font-size: 13px; }
 
 /* ══════════ 4. 按钮（PCL MyButton：透明底 + 同色描边）══════════ */
 .btn {
@@ -7601,9 +7679,10 @@ code, .mono { font-family: var(--mono); }
    「滚动条贴边」名单里（`#session-list, #chat-list, .detail-pane, ...` 那条规则，
    槽宽实测 10px），本栏没留，于是两栏右内缩差 10px。
    留槽后两栏的同一批控件右内缩一致；顺带消掉「白名单变长 → 出现滚动条 →
-   内容盒窄掉一个槽宽 → 整栏内容左跳 10px」的抖动
-   （与 .bp-scroll / #skills-page 同一处理，见那条
-   `#skills-page, #plugins-page, .bp-scroll { scrollbar-gutter: stable; }`）。 */
+   内容盒窄掉一个槽宽 → 整栏内容左跳 10px」的抖动。
+   R199 后 `.bp-scroll` 仍保持单侧 stable（双栏布局要保住左对齐），
+   #skills-page / #plugins-page 与其余 .usage-pane 改双侧 both-edges
+   （居中列位置不变，见 R198/R199 段）。 */
 .bp-left { width: 286px; flex: 0 0 286px; min-height: 0; overflow-y: auto; padding: 2px 2px 8px; scrollbar-gutter: stable; }
 .bp-right { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .bp-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 4px 12px; }
@@ -7854,7 +7933,7 @@ code, .mono { font-family: var(--mono); }
   color: var(--fg); font-size: 13px; font-weight: 700;
 }
 .bp-av .av-l { line-height: 1; }
-/* 真实 QQ 头像（r34）：群 → p.qlogo.cn/gh/<群号>/，私聊 → q1.qlogo.cn/g?nk=。
+/* 真实 QQ 头像（r34）：群 → p.qlogo.cn/gh/<群号>/，私聊 → /api/avatar/<QQ号>（2026-11-05 起走本地缓存）。
    .av-fb 是首字兜底，加载失败时由 15-chat-chrome.js 的 bindAvatarFallback 揭开。 */
 .bp-av .av-img {
   position: absolute; inset: 0; width: 100%; height: 100%;
@@ -7923,10 +8002,33 @@ code, .mono { font-family: var(--mono); }
 .chat-status .session-status .dot { flex: 0 0 7px; }
 
 /* 会话头：头像 + 聊天对象名 + chatKey（逐值照原型 .chat-head / .chat-av：34 方 / 9 圆角 / right 9） */
-.chat-head { display: flex; align-items: center; gap: 8px; margin: 0 2px 2px; }
-.chat-head .chat-av { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 9px; font-size: 14px; margin-right: 9px; }
-.chat-head-t { font-size: 15px; font-weight: 700; color: var(--fg); }
-.chat-head-s { font-size: 11.5px; color: var(--fg-mute); }
+/* R192（2026-11-04）：页头文字全整数像素 —— R190/R191 里 line-height:1.3
+   （15px×1.3=19.5px 半像素行盒）与 11.5px 字号让文字基线落在半像素上，
+   软件渲染（render-gpu-off.flag 开着）下抗锯齿偏移肉眼可见（用户反馈
+   「文字像素偏移」）。行高/字号统一取整：标题 15px/20px，副行 12px/16px；
+   .chat-head 内边距对齐 .detail-header 的 14px 16px。 */
+.chat-head { display: flex; align-items: center; gap: 9px; margin: 0 0 8px; padding: 14px 16px;
+  background: var(--layer-1); border-radius: 10px; box-shadow: var(--lift), var(--paper-edge); }
+.chat-head .chat-av { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 9px; font-size: 14px; margin-right: 0; }
+.chat-head .dh-main { flex: 1; min-width: 0; }
+.chat-head-t { display: block; font-size: 15px; font-weight: 700; color: var(--fg); line-height: 20px; }
+.chat-head-s { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 16px; }
+
+/* R190（2026-11-04）：三处页头统一版式 —— 会话选择页右栏会话头（.chat-head）、
+   存档页（.detail-header.is-chat）、记忆页（.detail-header.is-chat）同为
+   「头像 34px 圆角 9 + 主标题 15px/700 + 副行 11.5px 灰」。
+   存档 / 记忆页头原来无头像、标题带（群号）且字号 16，与右栏会话头不一致
+   （用户截图反馈「这几个界面风格能不能统一一下」）。
+   .bp-av / .av-img / .av-l / .av-fb 直接复用左栏行那套头像样式（7847 段），
+   结构与 15-chat-chrome.js 的 avHtml 逐字同款（捕获兜底见各自文件）。 */
+.detail-header.is-chat { display: flex; align-items: center; gap: 9px; }
+.detail-header.is-chat .bp-av { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 9px; font-size: 14px; }
+.detail-header.is-chat .dh-main { flex: 1; min-width: 0; }
+.detail-header.is-chat h2 { font-size: 15px; margin-bottom: 2px; line-height: 20px; }
+.detail-header.is-chat .sub { font-size: 12px; gap: 10px; line-height: 16px; }
+/* 页头下一行的按钮行（记忆页原来把按钮混在副行 .sub 里；存档页的 .chat-toolbar
+   本来就是独立一行，这里给它同一套观感基准） */
+.head-btns { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 2px 8px; }
 .chat-sec { margin: 14px 4px 6px 7px; padding: 0; }
 
 /* ── 右栏：会话卡（逐值照原型 .bp-card / .bp-ch：5 圆角 / margin 15 / 卡头 36 高 / padding 0 16 0 15；
@@ -8476,20 +8578,26 @@ code, .mono { font-family: var(--mono); }
 
 /* ── 16.6 设置搜索（2026-10-23 萌新化 P4）──
    页头右侧一个搜索框：输入"密钥 / 群 / 令牌"直达对应分区并高亮目标元素。
-   面板为绝对定位浮层（.set-head 是定位锚点），深色玻璃底。 */
+   面板为绝对定位浮层（.set-head 是定位锚点），深色玻璃底。
+   R202（2026-11-04）：用户反馈「字显示不全 + 搜索框不明显」——
+     · placeholder 缩为「搜设置…」，完整说明移到 title / aria-label（见 06 号文件）；
+     · 原边框用 --line（深色主题仅 7% 白）几乎看不见、底色 --layer-1 与卡片同色，
+       改成控件专用 --line-str（15%）+ 输入框底 --field-bg，并补 hover/focus 反馈。 */
 #settings-form .set-head { position: relative; }
 .set-search { position: relative; margin-left: auto; }
 .set-search-ico {
   position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
-  width: 14px; height: 14px; color: var(--fg-mute); pointer-events: none;
+  width: 14px; height: 14px; color: var(--fg-dim); pointer-events: none;
 }
 .set-search input {
   width: 210px; padding: 6px 10px 6px 28px; font-size: 12.5px;
-  border: 1px solid var(--line); border-radius: 8px;
-  background: var(--layer-1); color: var(--fg);
+  border: 1px solid var(--line-str); border-radius: 8px;
+  background: var(--field-bg); color: var(--fg);
+  transition: border-color var(--dur-base) var(--ease-in-out), box-shadow var(--dur-base) var(--ease-in-out);
 }
-.set-search input:focus { outline: none; border-color: var(--accent); }
-.set-search input::placeholder { color: var(--fg-mute); }
+.set-search input:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line-str)); }
+.set-search input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.set-search input::placeholder { color: var(--fg-dim); }
 .set-search-panel {
   position: absolute; top: calc(100% + 6px); right: 0; z-index: 60;
   width: 300px; max-height: 340px; overflow: auto;
@@ -10317,7 +10425,7 @@ input.mig-input:focus-visible,
   width: 12px; height: 12px; border-width: 2px;
   border-color: var(--card); right: -1px; bottom: -1px;
 }
-/* 机器人头像：真实 QQ 头像（q1.qlogo.cn 直链）叠在原来那层「按号取色」的渐变上。
+/* 机器人头像：真实 QQ 头像（/api/avatar 本地缓存）叠在原来那层「按号取色」的渐变上。
    渐变 + 昵称首字保留为兜底 —— 断网、CDN 抽风、或者 QQ 号不是纯数字时，
    img 会被 bindConnAvatarFallback 藏掉，露出下面这一层，不会是空白圆。 */
 .cx-av-fb {

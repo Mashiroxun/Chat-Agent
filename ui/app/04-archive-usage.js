@@ -27,12 +27,13 @@ async function loadChats({ quiet = false } = {}) {
 
 /**
  * 真实 QQ 头像 URL（2026-10-17，用户要求存档列表读取群聊真实头像）：
- * 腾讯公开 CDN，无需鉴权 ——
- *   群   → https://p.qlogo.cn/gh/<群号>/<群号>/100
- *   私聊 → https://q1.qlogo.cn/g?b=qq&nk=<QQ号>&s=100
+ *   群   → https://p.qlogo.cn/gh/<群号>/<群号>/100（群头像只能走 gh 接口）
+ *   私聊 → /api/avatar/<QQ号>?s=100（2026-11-05 起改走本地磁盘缓存，R185 同款）
  * ⚠️ 群头像**不能**用 b=qq&nk=群号（那是个人接口，对群号返回 404）。
  * 与 15-chat-chrome.js 会话页左栏、05-memory-settings.js 记忆卡片同一套路
  * （15-chat-chrome 的实现闭在 IIFE 里拿不到，这里按同款规则再写一份）。
+ * ⚠️ /api/avatar 只接受 40/100/140/640 四档尺寸，传别的会 404 并触发首字兜底，
+ *    所以这里把非白名单尺寸收敛到 100（群头像的 gh 接口不受此限制）。
  * key 不是纯数字 ID 时返回 ''，由调用方退回首字。
  */
 function qqAvatarUrl(chatKey, size) {
@@ -40,9 +41,9 @@ function qqAvatarUrl(chatKey, size) {
   if (!m) return '';
   const id = m[2];
   const s = size || 100;
-  return m[1] === 'group'
-    ? `https://p.qlogo.cn/gh/${id}/${id}/${s}`
-    : `https://q1.qlogo.cn/g?b=qq&nk=${id}&s=${s}`;
+  if (m[1] === 'group') return `https://p.qlogo.cn/gh/${id}/${id}/${s}`;
+  const localSize = [40, 100, 140, 640].indexOf(Number(s)) >= 0 ? Number(s) : 100;
+  return `/api/avatar/${id}?s=${localSize}`;
 }
 
 /**
@@ -92,7 +93,7 @@ function renderChatList() {
         </span>
         ${pill}
       </div>`;
-  }).join('') || '<div class="list-head muted">还没有消息存档（等白名单里的群/好友来消息）</div>';
+  }).join('') || '<div class="bp-empty">还没有消息存档（等白名单里的群/好友来消息）</div>';
   for (const c of state.chats) state.seenChatKeys.add(c.key);
   bindArchiveAvatarFallback(box);
   // 2026-10-23：改事件委托（与 02-sse-sessions.js 的会话列表同一套做法）。
@@ -183,13 +184,27 @@ function renderChatMessages() {
   // 切换会话时重置分页（每个会话独立从第一页开始）
   state.chatMsgLimit = CHAT_MSG_PAGE;
 
-  const name = formatChatTitle(key, chatNameOf(key));
+  // R190（2026-11-04）：页头与「会话选择」右栏会话头（.chat-head）统一版式：
+  //   主标题 = 纯名字（拿不到真名才退回 formatChatTitle 的「群 群号」），
+  //   群号挪进副行（原来标题里带（群号），两处两套格式）；头像复用列表行同款
+  //   bp-av 结构（qqAvatarUrl 群→gh / 私聊→q1），加载失败揭首字（下方捕获兜底）。
+  const name = chatNameOf(key) || formatChatTitle(key, '');
   const meta = state.chats.find((c) => c.key === key) || {};
+  const km = /^(group|private):(\d+)$/.exec(String(key || ''));
+  const keyText = km ? (km[1] === 'group' ? '群号 ' + km[2] : 'QQ ' + km[2]) : '';
+  const headFb = String(name || '?').trim().slice(0, 1) || '?';
+  const headAvUrl = qqAvatarUrl(key, 100);
+  const headAv = headAvUrl
+    ? `<span class="bp-av" data-avk="${esc(key)}"><img class="av-img" src="${esc(headAvUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" /><span class="av-l av-fb" hidden>${esc(headFb)}</span></span>`
+    : `<span class="bp-av"><span class="av-l">${esc(headFb)}</span></span>`;
 
   detail.innerHTML = `
-    <div class="detail-header">
-      <h2>${esc(name)} ${meta.unread ? `<span class="unread-pill">${meta.unread} 未读</span>` : ''}</h2>
-      <div class="sub"><span data-field="chat-msg-count"></span></div>
+    <div class="detail-header is-chat">
+      ${headAv}
+      <div class="dh-main">
+        <h2>${esc(name)} ${meta.unread ? `<span class="unread-pill">${meta.unread} 未读</span>` : ''}</h2>
+        <div class="sub">${keyText ? `<span>${esc(keyText)}</span>` : ''}<span data-field="chat-msg-count"></span></div>
+      </div>
     </div>
     <div class="chat-toolbar">
       <button class="btn btn-small" id="chat-wake-btn">唤醒一次处理</button>
@@ -207,6 +222,10 @@ function renderChatMessages() {
     </div>
     <table class="archive-table"><tbody id="chat-msg-body"></tbody></table>
     <div class="list-more muted" id="chat-msg-more"></div>`;
+
+  // R190：页头头像的首字兜底（捕获委托，#chat-detail 容器长期存在、绑一次即可；
+  // 与列表行的 bindArchiveAvatarFallback 同一函数，flag 防重复绑定）
+  bindArchiveAvatarFallback(detail);
 
   // 工具栏事件：只在这里绑一次
   // 2026-10-23 修复：这三个按钮此前完全没有错误处理 —— 后端未连接 / 白名单未配时，
@@ -768,6 +787,84 @@ function bindUsageResize() {
   }, { passive: true });
 }
 
+/* ══════════ R196（2026-11-04）：用量页「?」帮助弹窗 ══════════
+   用户要求：页头「用量与成本」右边加设置页同款问号钮（.h2-help），
+   把四个维度块的静态说明 + 「这些数字是怎么算的」一大坨收进弹窗，
+   页面只留动态摘要行（.usage-sec-sum）和图表。
+   外壳直接用 06-settings-render.js 的 openHelpModalShell（设置页同款），
+   内容全是原来平铺在页面上的原文，一处不改、不丢信息。 */
+function openUsageHelpModal() {
+  if (typeof openHelpModalShell !== 'function') return;   // 设置页模块未加载时不弹（不报错）
+  // 2026-11-05 审查修复：全局委托会在按钮重建后重复触发，openHelpModalShell
+  //   本身没有幂等 —— 连点两下会叠出两个遮罩 + 两个焦点陷阱，Esc 只关掉最后
+  //   注册的那个。已开时只重新聚焦，不再新建。
+  const existing = document.querySelector('.modal-overlay[data-help="usage"]');
+  if (existing) {
+    try { existing.focus(); } catch (e) { /* 忽略 */ }
+    return;
+  }
+  const { body, overlay } = openHelpModalShell('用量与成本 · 怎么读这些数字');
+  overlay.dataset.help = 'usage';
+  body.innerHTML = `
+    <div class="help-sec">
+      <div class="help-sec-t">页头控制条</div>
+      <div class="hint help-sec-b">
+        「图表」切换三张图显示的指标（调用次数 / 成本 / Token），数值表始终给全量；
+        「今日 / 近 7 天 / 近 30 天 / 全部」切时间范围；「刷新」立即重算（跳过 3 小时缓存），
+        右侧「数据更新于」标明这份统计的时刻。每个区块上方那一行<b>动态摘要</b>仍留在页面上，
+        这里收的是各区块的说明文字与计算口径。
+      </div>
+    </div>
+    <div class="help-sec">
+      <div class="uh-t">按天</div>
+      <div class="uh-note">一天一个点。看整体趋势和峰值，单日高低主要取决于那天聊得多不多。</div>
+      <div class="up-howto-body">
+        <p><b>哪一天</b>：按每次模型调用的<b>发生时刻</b>归日（本地时区）。一个跨零点的会话会被拆到两天，不会整段记在结束那天。</p>
+        <p><b>缓存命中</b>：输入里命中前缀缓存、按折扣价计费的那部分；命中率 = 命中 ÷ 输入 token。</p>
+        <p><b>成本</b>：各模型单价 × 用量。价格取「设置 → 模型与搜索 → 当前模型单价」，模型没有内置单价时按 0 计 —— 那是缺价，不是统计失败。</p>
+        <p><b>图表画什么</b>：由上方「图表」按钮决定（调用次数 / 成本 / Token）；数值表始终给全量，不受指标切换影响。</p>
+      </div>
+    </div>
+    <div class="help-sec">
+      <div class="uh-t">按会话</div>
+      <div class="uh-note">一个会话一条。排在前面的是消耗大户——聊得越久，每轮重发的历史越贵。</div>
+      <div class="up-howto-body">
+        <p><b>一个「会话」</b>＝一次完整对话（群聊、私聊各算一个），名字取会话标题。它的 token 与成本是所有模型调用的累加。</p>
+        <p><b>为什么有的会话特别贵</b>：每次对话都要把这段历史重发一遍。同一句话在第 2 轮和第 40 轮的成本差几十倍——贵的是历史，不是新消息。</p>
+        <p><b>排序</b>按上方「图表」指标（调用次数 / 成本 / Token）；点任意一根条或表格里的行，可以看这个会话逐步花在哪。</p>
+        <p><b>更早的会话</b>：本地只保留最近 120 个会话明细（<code>store.keepSessionFiles</code>），被裁掉的那些仍按天记在账本里、照样计入合计，只是在这张按会话表里看不到明细。</p>
+      </div>
+    </div>
+    <div class="help-sec">
+      <div class="uh-t">按模型</div>
+      <div class="uh-note">同一个模型走不同渠道算两个——官方、中转站、<code>:free</code> 版本的价格可能差好几倍。</div>
+      <div class="up-howto-body">
+        <p><b>为什么写成「渠道：模型 id」</b>：同一个 id 走官方直连和中转站是不同的商品，单价可能差几倍，混在一起会算错账，所以拆成两行。</p>
+        <p><b>成本</b>：用量 × 「设置 → 模型与搜索 → 当前模型单价」里匹配到的单价。匹配不到单价时显示 ¥0 —— 那表示缺价，可以去那里补一条。</p>
+        <p><b>命中率</b>：命中缓存 ÷ 输入 token。不同渠道的提示词前缀不一样，命中率会各自算，不要横向直接比。</p>
+        <p><b>超过 20 行</b>时数值表默认只显示前 20 行，点「展开全部」看其余（求和与图不受影响，后端从不截断）。</p>
+      </div>
+    </div>
+    <div class="help-sec">
+      <div class="uh-t">按插件</div>
+      <div class="uh-note">每次对话都会把<b>插件说明 + 工具说明 + 聊天记录</b>一起发给模型。最后一行「对话内容」是参照系——它不属于任何插件，但同样在花钱。</div>
+      <div class="up-howto-body">
+        <p><b>对话内容</b>（排行最后一行）：不是插件，是「这次输入里除了插件和工具说明之外剩下的部分」——聊天记录、人设、当前状态。它的口径是「每次真实输入 − 插件与工具说明」，用减法倒推，所以它一定和总数对得上。</p>
+        <p><b>那"每轮新说的话"呢？</b>新消息本身很小（通常几十 token，见摘要行末尾的提示），但它会进入聊天记录，<b>之后每一次对话都要把它重发一遍</b>——所以聊得越久，单次输入越贵。要省钱，缩短历史比少说一句话有用得多。</p>
+        <p><b>每次固定</b>：这个插件每次对话固定要付的 token = 说明文字 + 工具说明。即使没被调用也在付。</p>
+        <p><b>区间使用</b>：这段时间里它的功能被真正调用了几次；「未使用」表示装了但一次都没用过，却仍在付固定消耗。</p>
+        <p><b>结果 token</b>：功能返回的内容会存进对话历史，之后每一轮都会重新发给模型，是容易被忽视的一笔。</p>
+        <p><b>缓存影响</b>：插件的说明里有一部分每轮都会变（比如当前状态），这部分无法命中缓存，只能按原价重算。没有这类内容的插件显示「无」。</p>
+        <p>token 为估算值（字符 ÷ 2.5），用于横向比较大小，不适合拿去对账。</p>
+      </div>
+    </div>`;
+}
+
+/* 全局委托：renderUsagePage / 骨架会多次重建按钮，绑一次即可（含加载占位期）。 */
+document.addEventListener('click', (e) => {
+  if (e.target?.closest?.('#usage-help-btn')) openUsageHelpModal();
+});
+
 function renderUsageSkeleton() {
   const card = '<div class="usage-card skeleton"><div class="sk-line"></div><div class="sk-line short"></div></div>';
   // 图表占位：一排参差小柱 + 扫光（暗示"这里会出现折线/条形图"）
@@ -775,22 +872,23 @@ function renderUsageSkeleton() {
     .map((h) => `<i class="sk-col" style="height:${h}%"></i>`).join('');
   const chart = (h) => `<div class="sk-chart" style="height:${h}px">${cols}</div>`;
   const h3 = '<div class="sk-line" style="width:64px;height:15px;margin:22px 0 10px"></div>';
-  // 说明行 + 摘要行占位：正式版式里每块都有这两条（2026-10-19 统一版式），
-  // 不占位的话数据回来时整页会往下跳约 200px。
-  const note = '<div class="sk-line" style="width:58%;height:11px;margin:0 0 10px"></div>';
+  // 说明行占位已随 R196 撤掉（静态说明收进「?」弹窗）；只留摘要行占位 ——
+  // 正式版式每块都有这一条，不占位的话数据回来时整页会往下跳。
   const sum = '<div class="sk-line" style="width:86%;height:30px;margin:0 0 11px;border-radius:9px"></div>';
   // 顺序与正式页面一致（控制条 → 三块图 → 统计卡），加载完成时布局不跳。
   // 提示文案（R49）：大数据下统计可能要几秒，让用户知道页面没死。
   return `
     <div class="usage-wrap">
       <div class="usage-head">
-        <h2>用量与成本</h2>
+        <h2>用量与成本<button class="h2-help" id="usage-help-btn" type="button"
+          aria-label="查看用量与成本各区块的说明与计算口径"
+          title="这页的数字怎么算的？点开看说明">?</button></h2>
         <span class="muted" style="font-size:12px">正在统计…历史数据较多时可能需要几秒</span>
+        <div class="usage-ctrl"><span class="sk-line" style="width:280px;height:26px;margin:0"></span></div>
       </div>
-      <div class="usage-ctrl"><span class="sk-line" style="width:280px;height:26px;margin:0"></span></div>
-      ${h3}${note}${sum}${chart(190)}
-      ${h3}${note}${sum}${chart(150)}
-      ${h3}${note}${sum}${chart(150)}
+      ${h3}${sum}${chart(190)}
+      ${h3}${sum}${chart(150)}
+      ${h3}${sum}${chart(150)}
       <div class="usage-cards" style="margin-top:22px">${card.repeat(5)}</div>
     </div>`;
 }
@@ -802,24 +900,26 @@ function renderUsagePage(stats, st, prices) {
 
   box.innerHTML = `
     <div class="usage-wrap">
+      <!-- R195（2026-11-04）：控制条挪进页头一行（标题左 / 选项右，用户要求）。
+           ⚠️ 它必须是 [data-block="days"] 的兄弟节点（现在住在 .usage-head 里），
+              不能放进块内 —— 选「今日 / 24 小时」时后端 mode ≠ 'days'，
+              updateUsagePage 会把整个 [data-block="days"] 隐藏（那时光图表本来
+              就没数据）——控制条若住在里面会跟着一起消失（实测 bug：
+              点「今日」后所有按钮都不见了）。 -->
       <div class="usage-head">
-        <h2>用量与成本</h2>
-      </div>
-
-      <!-- 控制条（指标 + 时间范围 + 刷新）贴着第一张图放，但要**独立于 [data-block="days"]**：
-           ⚠️ 选「今日 / 24 小时」时后端 mode ≠ 'days'，updateUsagePage 会把整个
-              [data-block="days"] 隐藏（那时光图表本来就没数据）——控制条若住在里面
-              会跟着一起消失（实测 bug：点「今日」后所有按钮都不见了）。
-           所以它必须是 days 块的**兄弟节点**，位置仍紧贴图表上方。 -->
-      <div class="usage-ctrl">
-        <span class="usage-metrics" title="选择三张图表显示的指标">
-          <span class="usage-metrics-label">图表</span>
-          ${USAGE_METRICS.map(([k, label]) => `<button class="btn btn-small" data-metric="${k}">${label}</button>`).join('')}
-        </span>
-        <span class="usage-sep"></span>
-        ${USAGE_RANGES.map(([v, label]) => `<button class="btn btn-small" data-range="${v}">${label}</button>`).join('')}
-        <button class="btn btn-small" id="usage-refresh-btn" title="立即重算（跳过 3 小时缓存）">刷新</button>
-        <span class="usage-fresh" id="usage-updated"></span>
+        <h2>用量与成本<button class="h2-help" id="usage-help-btn" type="button"
+          aria-label="查看用量与成本各区块的说明与计算口径"
+          title="这页的数字怎么算的？点开看说明">?</button></h2>
+        <div class="usage-ctrl">
+          <span class="usage-metrics" title="选择三张图表显示的指标">
+            <span class="usage-metrics-label">图表</span>
+            ${USAGE_METRICS.map(([k, label]) => `<button class="btn btn-small" data-metric="${k}">${label}</button>`).join('')}
+          </span>
+          <span class="usage-sep"></span>
+          ${USAGE_RANGES.map(([v, label]) => `<button class="btn btn-small" data-range="${v}">${label}</button>`).join('')}
+          <button class="btn btn-small" id="usage-refresh-btn" title="立即重算（跳过 3 小时缓存）">刷新</button>
+          <span class="usage-fresh" id="usage-updated"></span>
+        </div>
       </div>
 
       <div data-block="days" class="usage-sec">
@@ -827,7 +927,8 @@ function renderUsagePage(stats, st, prices) {
           <h3 class="usage-h3">按天</h3>
           <span class="usage-sec-meta" data-meta="days"></span>
         </div>
-        <p class="usage-sec-note" data-note="days">一天一个点。看整体趋势和峰值，单日高低主要取决于那天聊得多不多。</p>
+        <!-- R196：静态说明与「这些数字是怎么算的？」已收进页头「?」弹窗，
+             页面只留动态摘要行（data-sum）——updateUsagePage 仍往这里填结论。 -->
         <p class="usage-sec-sum" data-sum="days"></p>
         <!-- 时间序列 → 折线图（看趋势） -->
         <div class="usage-chart" data-chart="days"></div>
@@ -839,15 +940,6 @@ function renderUsagePage(stats, st, prices) {
             <tbody></tbody>
           </table>
         </details>
-        <details class="usage-details usage-details-sub">
-          <summary>这些数字是怎么算的？</summary>
-          <div class="up-howto-body">
-            <p><b>哪一天</b>：按每次模型调用的<b>发生时刻</b>归日（本地时区）。一个跨零点的会话会被拆到两天，不会整段记在结束那天。</p>
-            <p><b>缓存命中</b>：输入里命中前缀缓存、按折扣价计费的那部分；命中率 = 命中 ÷ 输入 token。</p>
-            <p><b>成本</b>：各模型单价 × 用量。价格取「设置 → 模型与搜索 → 当前模型单价」，模型没有内置单价时按 0 计 —— 那是缺价，不是统计失败。</p>
-            <p><b>图表画什么</b>：由上方「图表」按钮决定（调用次数 / 成本 / Token）；数值表始终给全量，不受指标切换影响。</p>
-          </div>
-        </details>
       </div>
 
       <div data-block="chats" class="usage-sec">
@@ -855,7 +947,6 @@ function renderUsagePage(stats, st, prices) {
           <h3 class="usage-h3">按会话</h3>
           <span class="usage-sec-meta" data-meta="chats"></span>
         </div>
-        <p class="usage-sec-note" data-note="chats">一个会话一条。排在前面的是消耗大户——聊得越久，每轮重发的历史越贵。</p>
         <p class="usage-sec-sum" data-sum="chats"></p>
         <!-- 分类排名 → 横向条形（折线会暗示"前后有趋势"，反而误导） -->
         <div class="usage-chart" data-chart="chats"></div>
@@ -866,15 +957,6 @@ function renderUsagePage(stats, st, prices) {
             <tbody></tbody>
           </table>
         </details>
-        <details class="usage-details usage-details-sub">
-          <summary>这些数字是怎么算的？</summary>
-          <div class="up-howto-body">
-            <p><b>一个「会话」</b>＝一次完整对话（群聊、私聊各算一个），名字取会话标题。它的 token 与成本是所有模型调用的累加。</p>
-            <p><b>为什么有的会话特别贵</b>：每次对话都要把这段历史重发一遍。同一句话在第 2 轮和第 40 轮的成本差几十倍——贵的是历史，不是新消息。</p>
-            <p><b>排序</b>按上方「图表」指标（调用次数 / 成本 / Token）；点任意一根条或表格里的行，可以看这个会话逐步花在哪。</p>
-            <p><b>更早的会话</b>：本地只保留最近 120 个会话明细（<code>store.keepSessionFiles</code>），被裁掉的那些仍按天记在账本里、照样计入合计，只是在这张按会话表里看不到明细。</p>
-          </div>
-        </details>
       </div>
 
       <div data-block="models" class="usage-sec">
@@ -882,7 +964,6 @@ function renderUsagePage(stats, st, prices) {
           <h3 class="usage-h3">按模型</h3>
           <span class="usage-sec-meta" data-meta="models"></span>
         </div>
-        <p class="usage-sec-note" data-note="models">同一个模型走不同渠道算两个——官方、中转站、<code>:free</code> 版本的价格可能差好几倍。</p>
         <p class="usage-sec-sum" data-sum="models"></p>
         <div class="usage-chart" data-chart="models"></div>
         <details class="usage-details">
@@ -895,15 +976,6 @@ function renderUsagePage(stats, st, prices) {
             <thead><tr><th>模型（渠道：模型 id）</th><th class="r">调用</th><th class="r">输入</th><th class="r">输出</th><th class="r">命中率</th><th class="r">成本</th></tr></thead>
             <tbody></tbody>
           </table>
-        </details>
-        <details class="usage-details usage-details-sub">
-          <summary>这些数字是怎么算的？</summary>
-          <div class="up-howto-body">
-            <p><b>为什么写成「渠道：模型 id」</b>：同一个 id 走官方直连和中转站是不同的商品，单价可能差几倍，混在一起会算错账，所以拆成两行。</p>
-            <p><b>成本</b>：用量 × 「设置 → 模型与搜索 → 当前模型单价」里匹配到的单价。匹配不到单价时显示 ¥0 —— 那表示缺价，可以去那里补一条。</p>
-            <p><b>命中率</b>：命中缓存 ÷ 输入 token。不同渠道的提示词前缀不一样，命中率会各自算，不要横向直接比。</p>
-            <p><b>超过 20 行</b>时数值表默认只显示前 20 行，点「展开全部」看其余（求和与图不受影响，后端从不截断）。</p>
-          </div>
         </details>
       </div>
 
@@ -928,7 +1000,6 @@ function renderUsagePage(stats, st, prices) {
           </span>
         </div>
 
-        <p class="usage-sec-note" data-note="plugins">每次对话都会把<b>插件说明 + 工具说明 + 聊天记录</b>一起发给模型。最后一行「对话内容」是参照系——它不属于任何插件，但同样在花钱。</p>
         <p class="usage-sec-sum" data-sum="plugins"></p>
         <div class="usage-chart" data-chart="plugins"></div>
 
@@ -947,19 +1018,6 @@ function renderUsagePage(stats, st, prices) {
             </tr></thead>
             <tbody></tbody>
           </table>
-        </details>
-
-        <details class="usage-details usage-details-sub">
-          <summary>这些数字是怎么来的？</summary>
-          <div class="up-howto-body">
-            <p><b>对话内容</b>（排行最后一行）：不是插件，是「这次输入里除了插件和工具说明之外剩下的部分」——聊天记录、人设、当前状态。它的口径是「每次真实输入 − 插件与工具说明」，用减法倒推，所以它一定和总数对得上。</p>
-            <p><b>那"每轮新说的话"呢？</b>新消息本身很小（通常几十 token，见摘要行末尾的提示），但它会进入聊天记录，<b>之后每一次对话都要把它重发一遍</b>——所以聊得越久，单次输入越贵。要省钱，缩短历史比少说一句话有用得多。</p>
-            <p><b>每次固定</b>：这个插件每次对话固定要付的 token = 说明文字 + 工具说明。即使没被调用也在付。</p>
-            <p><b>区间使用</b>：这段时间里它的功能被真正调用了几次；「未使用」表示装了但一次都没用过，却仍在付固定消耗。</p>
-            <p><b>结果 token</b>：功能返回的内容会存进对话历史，之后每一轮都会重新发给模型，是容易被忽视的一笔。</p>
-            <p><b>缓存影响</b>：插件的说明里有一部分每轮都会变（比如当前状态），这部分无法命中缓存，只能按原价重算。没有这类内容的插件显示「无」。</p>
-            <p>token 为估算值（字符 ÷ 2.5），用于横向比较大小，不适合拿去对账。</p>
-          </div>
         </details>
       </div>
 
@@ -1291,11 +1349,12 @@ function fmtRate(rate) {
    四个维度块统一的「段落计量 + 摘要行」
    （2026-10-19 用户要求：按天 / 按会话 / 按模型 / 按插件 四块风格统一）
 
-   每块固定四段，顺序不再各自发挥：
+   R196 起每块固定三段，顺序不再各自发挥：
      ① .usage-sec-head   左标题 + 右侧计量（data-meta）
-     ② .usage-sec-note   一行说明（静态文案，写在骨架里）
-     ③ .usage-sec-sum    摘要行（本函数按数据生成；「按插件」由 renderPluginUsage 填）
-     ④ .usage-chart      图表 —— 再往下是折叠的数值表与口径说明
+     ② .usage-sec-sum    摘要行（本函数按数据生成；「按插件」由 renderPluginUsage 填）
+     ③ .usage-chart      图表 —— 再往下是折叠的数值表
+   静态说明文案与「这些数字是怎么算的」已收进页头「?」帮助弹窗
+   （openUsageHelpModal），页面不再平铺，但内容一字未丢。
 
    摘要行只写「不看数字就不知道的事」：平均、最大、占比、命中率。
    合计/占比这类图里已经有的（.uc-rest 脚注）不再重复 ——

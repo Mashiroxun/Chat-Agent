@@ -1864,7 +1864,9 @@ function createWindow(port) {
   const openExternalChecked = (raw, where) => {
     const r = checkExternalUrl(raw, externalAllowHosts());
     if (!r.ok) {
-      console.warn(`[外链拦截] ${where}：${r.reason} → ${String(raw ?? '').slice(0, 200)}`);
+      // R206：被拦的外链落进 data/logs（原先只进主进程 stdout，打包后用户侧
+      // 完全无从取证 —— 外部 bug 报告实测「点了没反应」时日志里 0 条）。
+      logKey('外链拦截', `${where}：${r.reason} → ${String(raw ?? '').slice(0, 200)}`);
       return false;
     }
     shell.openExternal(r.url);
@@ -2491,7 +2493,7 @@ function createWidgetWindow(keepBounds) {
     try {
       const r = checkExternalUrl(url, externalAllowHosts());
       if (r.ok) shell.openExternal(r.url);
-      else console.warn(`[外链拦截] widget：${r.reason} → ${String(url).slice(0, 200)}`);
+      else logKey('外链拦截', `widget：${r.reason} → ${String(url).slice(0, 200)}`);
     } catch { /* 拦截失败也不该让导航继续 */ }
   };
   win.webContents.on('will-navigate', guardWidgetNav);

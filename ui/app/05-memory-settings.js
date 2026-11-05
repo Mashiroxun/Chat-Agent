@@ -27,7 +27,7 @@ async function loadMemoryView() {
     if (state.currentMemoryChatKey) loadMemoryDetail(state.currentMemoryChatKey);
   } catch (e) {
     console.error('加载记忆视图失败:', e);
-    $('#memory-items').innerHTML = '<div class="list-head muted">加载失败</div>';
+    $('#memory-items').innerHTML = '<div class="bp-empty">加载失败</div>';
   }
 }
 
@@ -75,33 +75,38 @@ function renderMemoryList() {
   const names = {};
   for (const c of state.chats || []) names[c.key] = formatChatTitle(c.key, chatNameOf(c.key));
   if (!files.length) {
-    box.innerHTML = '<div class="list-head muted">还没有任何记忆（等机器人使用记忆工具后才会出现）</div>';
+    // R194：列表空态统一用 .bp-empty（与存档列表、会话卡区同一套）
+    box.innerHTML = '<div class="bp-empty">还没有任何记忆（等机器人使用记忆工具后才会出现）</div>';
     return;
   }
+  // R194（2026-11-04）：列表行与存档页左栏（renderChatList）完全同款 ——
+  //   .bp-row + 真实头像（chatHeadAvHtml，群→gh/私聊→q1）+ .bp-rt 群名 /
+  //   .bp-ri 统计 + .cc-pill 计数胶囊。旧 .chat-item 三行结构没有头像、
+  //   计数用 unread-pill 内联改色（hack），选中态类名也不同（.selected vs .on）。
+  //   ⚠️ .chat-item class 保留：点击委托与入场动画都挂在它上（存档行同做法）。
   box.innerHTML = files.map((f) => {
     const key = f.chatKey;
     const busy = !!state.consolidating[key];
-    // 整理中：在列表项上直接标出，切页签回来也能一眼看到
-    const busyHtml = busy
-      ? `<span class="unread-pill" style="background:var(--orange)">整理中…</span>`
-      : '';
-    const sub = busy
-      ? '正在整理本群记忆'
+    const name = names[key] || formatChatTitle(key, '');
+    const pill = busy
+      ? `<span class="cc-pill cc-waiting">整理中…</span>`
+      : (f.impressionCount ? `<span class="cc-pill cc-gray">${f.impressionCount} 条印象</span>` : '');
+    const sub = busy ? '正在整理本群记忆'
       : (f.memberCount
-        ? `${f.memberCount} 位群友 · ${f.impressionCount} 条印象`
+        ? `${f.memberCount} 位群友 · 更新于 ${fmtTime(f.updatedAt || 0)}`
         : '暂无群友印象');
     const delBtn = (f.memberCount || f.impressionCount)
       ? `<button class="btn btn-small btn-danger mem-del-chat" data-key="${esc(key)}" title="删除本会话的全部记忆（所有群友的印象）">删除</button>`
       : '';
     return `
-      <div class="chat-item ${key === state.currentMemoryChatKey ? 'selected' : ''}" data-key="${esc(key)}">
-        <div class="chat-item-title">
-          <span class="session-chat">${esc(names[key] || key)}</span>
-          ${busyHtml}
-          ${delBtn}
-        </div>
-        <div class="chat-item-sub">${esc(sub)}</div>
-        <div class="session-meta"><span>更新于 ${fmtTime(f.updatedAt || 0)}</span></div>
+      <div class="bp-row chat-row chat-item${key === state.currentMemoryChatKey ? ' on' : ''}" data-key="${esc(key)}">
+        ${chatHeadAvHtml(key, name)}
+        <span class="bp-rl">
+          <span class="bp-rt">${esc(name)}</span>
+          <span class="bp-ri">${esc(sub)}</span>
+        </span>
+        ${pill}
+        ${delBtn}
       </div>`;
   }).join('');
   // 2026-10-23：改事件委托（列表每次重绘都重建行，逐行绑定会产生 N 个闭包）。
@@ -144,6 +149,36 @@ function renderMemoryList() {
   }
 }
 
+/* R190（2026-11-04）：页头头像 —— 与 15-chat-chrome.js 的 avHtml、04-archive-usage.js
+   的页头头像同一套结构（.bp-av + .av-img + 首字兜底），群/私聊都能用：
+     群   → https://p.qlogo.cn/gh/<群号>/<群号>/100
+     私聊 → /api/avatar/<QQ号>?s=100（2026-11-05 起与记忆卡片统一走本地缓存）
+   ⚠️ 群头像不能用 b=qq&nk=群号（个人接口，对群号 404，15 号文件里踩过）。
+   ⚠️ 不能用内联 onerror（CSP script-src 'self' 拦）—— 兜底用下面的捕获委托。 */
+function chatHeadAvHtml(chatKey, name) {
+  const m = /^(group|private):(\d{5,12})$/.exec(String(chatKey || ''));
+  const fb = esc(String(name || '?').trim().slice(0, 1) || '?');
+  if (!m) return `<span class="bp-av"><span class="av-l">${fb}</span></span>`;
+  const url = m[1] === 'group'
+    ? `https://p.qlogo.cn/gh/${m[2]}/${m[2]}/100`
+    : `/api/avatar/${m[2]}?s=100`;
+  return `<span class="bp-av" data-avk="${esc(chatKey)}"><img class="av-img" src="${esc(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" /><span class="av-l av-fb" hidden>${fb}</span></span>`;
+}
+
+/** 页头头像加载失败 → 揭首字（error 不冒泡，捕获委托绑在 #memory-detail 上，
+    容器长期存在、innerHTML 重建不影响；与 bindArchiveAvatarFallback 同款）。 */
+function bindMemHeadAvFallback(box) {
+  if (!box || box.__headAvBound) return;
+  box.__headAvBound = true;
+  box.addEventListener('error', (e) => {
+    const im = e.target;
+    if (!im || im.tagName !== 'IMG' || !im.classList.contains('av-img')) return;
+    const fb = im.parentElement?.querySelector('.av-fb');
+    im.style.display = 'none';
+    if (fb) fb.hidden = false;
+  }, true);
+}
+
 async function loadMemoryDetail(chatKey) {
   const detail = $('#memory-detail');
   if (!detail) return;                       // R76：容器不存在（已切页）直接返回
@@ -165,7 +200,8 @@ async function loadMemoryDetail(chatKey) {
     const membersHtml = kind === 'group' ? '<div id="mem-members"></div>' : '';
     // 每个群友一张「身份证」小卡片（2026-09-21 R31 按用户要求改版）：
     //   · 高度约为初版两倍，容纳两行文字：第一排 = QQ 昵称，第二排 = QQ 号；
-    //   · 头像自动读取 QQ 头像（q1.qlogo.cn，CSP img-src 已放行 https:）；
+    //   · 头像走本地缓存端点 /api/avatar/<qq>（2026-11-04：原来是 q1.qlogo.cn
+    //     直链，每次渲染 DNS+TLS+CDN 往返，慢；现在后端落盘缓存 + max-age 7 天）；
     //     加载失败回退到姓名首字（⚠️ 不能用内联 onerror —— CSP script-src 'self'
     //     会拦内联事件，必须渲染后 addEventListener 绑 error）；
     //   · 底部保留最近一条印象预览；点开卡片才是完整档案（openMemoryCardModal）。
@@ -179,7 +215,7 @@ async function loadMemoryDetail(chatKey) {
       const preview = String(last?.content || '还没有任何印象').replace(/\s+/g, ' ').trim();
       const canAvatar = /^\d{5,12}$/.test(uid);
       const ava = canAvatar
-        ? `<img class="mem-card-ava-img" src="https://q1.qlogo.cn/g?b=qq&nk=${esc(uid)}&s=100" alt="" loading="lazy" referrerpolicy="no-referrer" />`
+        ? `<img class="mem-card-ava-img" src="/api/avatar/${esc(uid)}?s=100" alt="" loading="lazy" referrerpolicy="no-referrer" />`
         : '';
       return `<button type="button" class="mem-card" data-qq="${esc(uid)}" title="点击查看「${esc(who)}」的完整记忆">
         <span class="mem-card-avatar">
@@ -211,19 +247,29 @@ async function loadMemoryDetail(chatKey) {
     } else {
       consolidateStatusHtml = `<span id="mem-consolidate-status" class="muted"></span>`;
     }
+    // R190：页头与「会话选择」右栏会话头（.chat-head）统一版式 —— 头像 + 纯名字
+    // 主标题 + 灰色副行（群号 · N 位成员）；原来标题带（群号）、按钮混在副行里，
+    // 现在按钮挪到页头下一行（.head-btns），观感与存档页的 .chat-toolbar 对齐。
+    const headName = chatNameOf(chatKey) || formatChatTitle(chatKey, '');
+    const keyText = (kind === 'group' ? '群号 ' : 'QQ ') + (chatId || '—');
     detail.innerHTML = `
-      <div class="detail-header">
-        <h2>${esc(formatChatTitle(chatKey, chatNameOf(chatKey)))} 的记忆</h2>
-        <div class="sub">
-          ${membersBtnHtml}
-          <button class="btn btn-small" id="mem-add-imp-btn">＋ 添加印象</button>
-          <button class="btn btn-small" id="mem-consolidate-btn" ${busy ? 'disabled' : ''}>${busy ? '整理中…' : '整理本群记忆'}</button>
-          ${consolidateStatusHtml}
+      <div class="detail-header is-chat">
+        ${chatHeadAvHtml(chatKey, headName)}
+        <div class="dh-main">
+          <h2>${esc(headName)} 的记忆</h2>
+          <div class="sub"><span>${esc(keyText)}</span>${kind === 'group' ? `<span>${members.length} 位成员</span>` : ''}</div>
         </div>
+      </div>
+      <div class="head-btns">
+        ${membersBtnHtml}
+        <button class="btn btn-small" id="mem-add-imp-btn">＋ 添加印象</button>
+        <button class="btn btn-small" id="mem-consolidate-btn" ${busy ? 'disabled' : ''}>${busy ? '整理中…' : '整理本群记忆'}</button>
+        ${consolidateStatusHtml}
       </div>
       ${membersHtml}
       ${rows || '<div class="muted" style="padding:10px">还没有任何群友印象（可点右上角「＋ 添加印象」手动记，或点「整理本群记忆」让模型从聊天记录里提炼）。</div>'}
     `;
+    bindMemHeadAvFallback(detail);
     const loadMembersBtn = $('#mem-load-members-btn');
     if (loadMembersBtn) loadMembersBtn.addEventListener('click', () => loadGroupMembers(chatId, chatKey));
     // 点「身份证」卡片 → 打开这个人的完整记忆（编辑/更新/删除都在弹窗里，
@@ -311,11 +357,11 @@ function openMemoryCardModal(chatKey, member) {
   const who = note || cardName || nickname || uid || '某人';
   const imps = Array.isArray(member?.impressions) ? member.impressions : [];
   const updated = Number(member?.updatedAt) || 0;
-  // 头像读真实 QQ 头像（q1.qlogo.cn，CSP img-src 已放行 https:）。
+  // 头像走本地缓存端点 /api/avatar/<qq>（2026-11-04，同列表卡片；s=140 留高分屏余量）。
   // ⚠️ 不能用内联 onerror（script-src 'self' 会拦），失败回退首字由
   //    bindMemAvatarFallback 在弹窗挂载后用捕获监听兜住。
   const canAvatar = /^\d{5,12}$/.test(uid);
-  const avUrl = canAvatar ? `https://q1.qlogo.cn/g?b=qq&nk=${esc(uid)}&s=100` : '';
+  const avUrl = canAvatar ? `/api/avatar/${esc(uid)}?s=140` : '';
   const avInner = avUrl
     ? `<img class="mf-av-img" src="${avUrl}" alt="" referrerpolicy="no-referrer" />
        <span class="mf-av-fb" hidden>${esc(String(who).trim().slice(0, 1))}</span>`

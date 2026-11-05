@@ -257,14 +257,15 @@ function connAvatarStyle(uin) {
 }
 
 /**
- * 机器人 QQ 的真实头像地址（官方 CDN 直链）。
+ * 机器人 QQ 的真实头像地址（本地缓存端点）。
  *
- * 与全站同一套：15-chat-chrome.js 的 qqAvatarUrl、14-chrome.js 的侧栏头像、
- * 05-memory-settings.js 的记忆卡片都直连 q1.qlogo.cn —— CSP 的 img-src 早已放行
- * `http: https:`，不需要走本地代理，也不需要缓存（CDN 自己带 ETag）。
+ * 2026-11-04（R186）：原来直连 q1.qlogo.cn，每次注入后重绘都重新走 DNS+TLS+CDN
+ * 往返，CDN 又不给长期缓存头 —— 表现为「机器人已上线」卡片头像慢半拍才补出来。
+ * 改走 /api/avatar/<qq>（src/avatar-cache.js 磁盘缓存 + max-age 7 天），首拉之后
+ * 秒出。05-memory-settings.js 的记忆卡片已同款切换。
  *
- * ⚠️ 这里**只能**用 `g?b=qq&nk=` 这个个人接口。群头像走 `p.qlogo.cn/gh/`，
- *    拿群号套个人接口会 404（15-chat-chrome.js 里踩过）。
+ * ⚠️ 这里**只能**用于个人头像：/api/avatar 底层只打 `g?b=qq&nk=` 这个个人接口。
+ *    群头像走 `p.qlogo.cn/gh/`，拿群号套个人接口会 404（15-chat-chrome.js 里踩过）。
  * ⚠️ QQ 号不是 5~12 位纯数字时返回空串 —— 由调用方退回首字 + 渐变兜底，
  *    不要把脏值拼进 URL（CDN 会回一张 100×100 的默认企鹅，比兜底更难看）。
  */
@@ -272,8 +273,8 @@ function connAvatarUrl(uin) {
   const id = String(uin || '').trim();
   if (!/^\d{5,12}$/.test(id)) return '';
   // s=140 而不是全站列表用的 100：卡片头像显示 44px，高分屏要 88px，
-  // 140 留了余量又不像 s=640 那样白拉 20 KB。
-  return `https://q1.qlogo.cn/g?b=qq&nk=${id}&s=140`;
+  // 140 留了余量又不像 s=640 那样白拉 20 KB（也是记忆档案弹窗同用的尺寸档）。
+  return `/api/avatar/${id}?s=140`;
 }
 
 /**

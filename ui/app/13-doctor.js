@@ -1112,10 +1112,10 @@ function renderModuleInventory(a) {
     <div class="sentinel-inv-row${s.flips ? ' is-flip' : ''}">
       <span class="sentinel-inv-sec">「${esc(s.title)}」</span>
       <span class="sentinel-inv-mod">${s.module ? esc(s.name || s.module) : '核心'}</span>
-      <span class="sentinel-inv-chars">${s.chars.toLocaleString()} 字符（${(s.share * 100).toFixed(0)}%）</span>
+      <span class="sentinel-inv-chars">${(Number(s.chars) || 0).toLocaleString()} 字符（${((Number(s.share) || 0) * 100).toFixed(0)}%）</span>
       ${s.flips
-        ? `<span class="sentinel-inv-flips">⚠️ 观测期内翻字 ${s.flips} 次</span>`
-        : '<span class="sentinel-inv-flips is-clean">稳定</span>'}
+        ? `<span class="cc-pill cc-waiting sentinel-inv-flips">观测期内翻字 ${s.flips} 次</span>`
+        : '<span class="cc-pill cc-done sentinel-inv-flips is-clean">稳定</span>'}
     </div>`).join('');
   return `
     <div class="sentinel-inv">
@@ -1147,35 +1147,72 @@ function renderAttribution() {
 
   const HOW = { changed: '段内容变化', added: '新增段', removed: '删除段' };
   const FROM = { session: '会话间对比', drift: '按调用指纹' };
-  // 新的在前：用户最关心"刚才那次是谁"
-  const rows = a.breaks.slice(-6).reverse().map((b) => {
-    const t = b.at ? new Date(b.at).toLocaleTimeString('zh-CN', { hour12: false }).slice(0, 5) : '--:--';
-    const who = b.module ? esc(b.module) : `未识别来源`;
-    // "断点 4513/5507" 比 "断点 82%" 更符合"详细到断点"的诉求；
-    // 后面的损失率才是后果 —— 两者别混：断点说的是位置，损失率说的是代价。
-    const lossPct = b.prompt ? Math.round((b.miss / b.prompt) * 100) : 0;
-    // 改前/改后原文：字节级那半来自会话间 diff；drift 事件只有段名，
-    // 原文取翻字前后的最近存档（来源徽标已经标明精度，不混为一谈）。
+  const fmtAt = (at) => at ? new Date(at).toLocaleTimeString('zh-CN', { hour12: false }).slice(0, 5) : '--:--';
+
+  // R204（2026-11-04）：旧实现把最近 6 次击穿逐条全量展开（含改前/改后原文），
+  // 同一原因反复触发时 6 张卡片只有时间不同 —— 用户截图实测整屏重复。
+  // 改按「原因签名」聚合：每组只渲染一次，次数与全部时间保留在标题/提示里；
+  // 原文收进 <details> 默认折叠，最多先显示 4 组，其余可展开。信息不丢。
+  // 2026-11-05 审查修复：R204 把「最近 6 次」改成遍历全部 a.breaks 再聚合，
+  //   「其余 N 类」虽然折叠在 <details> 里，HTML 却全量生成并插进 DOM ——
+  //   ATTRIBUTION_MAX_FILES=120，breaks 可达上百条，每组还带改前/改后原文。
+  //   视觉折叠了，主线程工作量没少。先按时间截取再聚合，把上界钉死。
+  const MAX_ATTRIBUTION_BREAKS = 60;
+  const titlesOf = (b) => Array.isArray(b.titles) ? b.titles : (b.title ? [b.title] : []);
+  const sigOf = (b) => [
+    titlesOf(b).join('、'), b.module || '', b.change || '', b.source || '',
+    b.atChar, b.totalChars, b.before || '', b.after || '', b.excerpt || '',
+    b.miss || 0, b.prompt || 0
+  ].join('|');
+  const grouped = new Map();
+  a.breaks.slice(-MAX_ATTRIBUTION_BREAKS).forEach((b) => {
+    const k = sigOf(b);
+    if (!grouped.has(k)) grouped.set(k, { b, ats: [] });
+    grouped.get(k).ats.push(b.at);
+  });
+  const newest = (g) => Math.max(0, ...g.ats.map((x) => Number(x) || 0));
+  const groups = [...grouped.values()].sort((x, y) => newest(y) - newest(x));
+
+  const renderGroup = (g) => {
+    const b = g.b;
+    const ats = g.ats.map(fmtAt);
+    const latest = ats[ats.length - 1] || '--:--';
+    const count = g.ats.length;
+    const who = b.module ? esc(b.module) : '未识别来源';
+    // 2026-11-05 审查修复：drift 事件 / 旧存档可能缺 miss、ratio 等字段，
+    // 聚合后一组里抛 TypeError 会带走整块归因渲染，统一按 0 兜底。
+    const miss = Number(b.miss) || 0;
+    const prompt = Number(b.prompt) || 0;
+    const ratio = Number(b.ratio) || 0;
+    const excerpt = String(b.excerpt || '');
+    // "断点 4513/5507" 说的是位置，损失率说的是代价 —— 两者别混。
+    const lossPct = prompt ? Math.round((miss / prompt) * 100) : 0;
     const ba = (b.before || b.after)
-      ? `<div class="sentinel-break-ba">
-          <div class="sentinel-break-ba-row"><span class="sentinel-break-ba-tag">改前</span><span class="sentinel-break-ba-text">${esc(b.before || '（无此段）')}</span></div>
-          <div class="sentinel-break-ba-row"><span class="sentinel-break-ba-tag is-after">改后</span><span class="sentinel-break-ba-text">${esc(b.after || '（段已删除）')}</span></div>
-        </div>`
-      : (b.excerpt ? `<div class="sentinel-break-ex" title="断点附近的原文">…${esc(b.excerpt.slice(0, 90))}…</div>` : '');
+      ? `<details class="sentinel-break-ba">
+          <summary>查看改前 / 改后原文</summary>
+          <div class="sentinel-break-ba-row"><span class="cc-pill cc-gray sentinel-break-ba-tag">改前</span><span class="sentinel-break-ba-text">${esc(b.before || '（无此段）')}</span></div>
+          <div class="sentinel-break-ba-row"><span class="cc-pill cc-gray sentinel-break-ba-tag is-after">改后</span><span class="sentinel-break-ba-text">${esc(b.after || '（段已删除）')}</span></div>
+        </details>`
+      : (excerpt ? `<div class="sentinel-break-ex" title="断点附近的原文">…${esc(excerpt.slice(0, 90))}…</div>` : '');
     return `
       <div class="sentinel-break">
         <div class="sentinel-break-top">
-          <span class="sentinel-break-time">${t}</span>
-          <span class="sentinel-break-sec">「${esc((b.titles || [b.title]).join('、'))}」</span>
-          <span class="sentinel-break-mod">${who}</span>
+          <span class="sentinel-break-time" title="全部发生时间：${esc(ats.join('、'))}">${latest}${count > 1 ? ` · 共 ${count} 次` : ''}</span>
+          <span class="sentinel-break-sec">「${esc(titlesOf(b).join('、'))}」</span>
+          <span class="cc-pill cc-noreply sentinel-break-mod">${who}</span>
           <span class="sentinel-break-how">${esc(HOW[b.change] || b.change)}</span>
           <span class="sentinel-break-src">${FROM[b.source] || ''}</span>
-          <span class="sentinel-break-pos">断点 ${b.atChar}/${b.totalChars}（${(b.ratio * 100).toFixed(0)}%）</span>
-          <span class="sentinel-break-miss">miss ${b.miss.toLocaleString()}（${lossPct}%）</span>
+          <span class="sentinel-break-pos">断点 ${esc(String(b.atChar ?? '?'))}/${esc(String(b.totalChars ?? '?'))}（${(ratio * 100).toFixed(0)}%）</span>
+          <span class="cc-pill cc-error sentinel-break-miss">miss ${miss.toLocaleString()}（${lossPct}%）</span>
         </div>
         ${ba}
       </div>`;
-  }).join('');
+  };
+  const shown = groups.slice(0, 4).map(renderGroup).join('');
+  const rest = groups.length - 4;
+  const more = rest > 0
+    ? `<details class="sentinel-break-more"><summary>其余 ${rest} 类击穿（共 ${groups.slice(4).reduce((n, g) => n + g.ats.length, 0)} 次）</summary><div class="sentinel-break-list">${groups.slice(4).map(renderGroup).join('')}</div></details>`
+    : '';
 
   const board = (a.byModule || []).map((m) => `
     <span class="sentinel-attr-tag" title="涉及段：${esc((m.sections || []).join('、'))}">
@@ -1186,7 +1223,7 @@ function renderAttribution() {
   return `<div class="sentinel-attr">
     ${head}
     ${board ? `<div class="sentinel-attr-board">${board}</div>` : ''}
-    <div class="sentinel-break-list">${rows}</div>
+    <div class="sentinel-break-list">${shown}${more}</div>
     ${renderAttributionTail(a)}
     ${renderModuleInventory(a)}
   </div>`;
@@ -1263,14 +1300,17 @@ function renderCacheSentinel() {
   const rows = (s.rounds.rounds || []).map((r) => sentinelBar(r, maxPrompt)).join('');
   const lvl = s.headline?.level || 'unknown';
   const levelText = { good: '健康', warn: '偏低', bad: '异常', unknown: '未知' }[lvl] || '未知';
+  // R203：状态徽章并入全站 cc-pill 体系（R194），不再用 sentinel-badge 自造的描边空心胶囊
+  const levelCls = { good: 'cc-done', warn: 'cc-waiting', bad: 'cc-error', unknown: 'cc-noreply' }[lvl] || 'cc-noreply';
 
   // 未命中按 token 只占几个百分点，但按价常占一半以上的输入成本 ——
   // 这两个数必须同时出现，否则用户会以为"未命中很少，不用管"。
   const suspect = (s.statics?.sections || []).filter((x) => x.verdict === 'suspect');
   const suspectHtml = suspect.length
-    ? `<div class="sentinel-suspect">⚠️ 静态体检：<b>${suspect.length}</b> 个模块往稳定区注入了疑似会变的段，且没标 <code>volatile</code>：
-        ${suspect.map((x) => `<span class="sentinel-tag" title="命中线索：${esc(x.signals.join('/'))}">${esc(x.name || x.id)}</span>`).join('')}
-        <div class="sentinel-note">这是启发式判断，会误报（例如读配置帧数的段只在设置变更时动）。事实判据是 cache-guard 的漂移记录。</div>
+    ? `<div class="sentinel-suspect"><span class="cc-pill cc-waiting">静态体检</span>
+        <span><b>${suspect.length}</b> 个模块往稳定区注入了疑似会变的段，且没标 <code>volatile</code>：
+        ${suspect.map((x) => `<span class="cc-pill cc-gray sentinel-tag" title="命中线索：${esc((Array.isArray(x.signals) ? x.signals : []).join('/'))}">${esc(x.name || x.id)}</span>`).join('')}</span>
+        <div class="sentinel-note">启发式判断会误报（例如读配置帧数的段只在设置变更时动）。事实判据是 cache-guard 的漂移记录。</div>
       </div>`
     : '';
 
@@ -1279,12 +1319,14 @@ function renderCacheSentinel() {
   return `${bar}
     <div class="sentinel-card">
       <div class="sentinel-head">
-        <span class="sentinel-badge ${lvl}">${levelText}</span>
+        <span class="cc-pill ${levelCls}">${levelText}</span>
         <span>最近 <b>${t.rounds}</b> 轮命中率 <b>${(t.rate * 100).toFixed(1)}%</b></span>
         <span class="sentinel-dim">未命中 ${t.miss.toLocaleString()} tok，按价占输入成本 <b>${(t.missCostShare * 100).toFixed(0)}%</b></span>
       </div>
       <div class="sentinel-legend">
-        <i class="sentinel-hit"></i>命中 <i class="sentinel-miss"></i>未命中 ｜ 条长 = 该轮 prompt 量，右侧「出」= 输出 token
+        <span class="sentinel-legend-item"><i class="sentinel-hit"></i>命中</span>
+        <span class="sentinel-legend-item"><i class="sentinel-miss"></i>未命中</span>
+        <span class="sentinel-dim">条长＝该轮 prompt 量 · 右侧「出」＝输出 token</span>
       </div>
       <div class="sentinel-bars">${rows}</div>
       ${s.prefix ? `<div class="sentinel-dim sentinel-prefix">前缀规模：system ${s.prefix.systemChars.toLocaleString()} 字符（≈${s.prefix.estSystemTokens.toLocaleString()} tok）＋ ${s.prefix.toolNames} 个工具</div>` : ''}
