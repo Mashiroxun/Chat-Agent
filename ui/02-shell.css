@@ -1,0 +1,940 @@
+/* ================================================================
+   02-shell.css — 顶栏 / 窗口控制 / 页签 / 导航 / 布局 / 会话列表 / 会话详情 / 记忆档案
+   由 style.css 拆分而来（原行 631–1563）
+   ⚠️ 正文注释里的「第 N 行」均指拆分前的原 style.css，查阅见 ui/style.css.bak-20261105-split
+   引入顺序不可调换，层叠依赖原始先后
+   ================================================================ */
+
+/* ── 顶栏：亮蓝渐变玻璃条，横跨全宽，同时充当无边框窗口的标题栏 ── */
+/* 三列网格：品牌 | 导航 | 窗口按钮。
+   中列是 auto（宽度 = 导航的自然宽度），两侧 1fr 平分剩余空间，
+   于是导航**正好落在窗口水平中心**上。
+   刻意不用「flex + 两个 flex:1 占位」那种写法：那样居中位置取决于
+   品牌与窗口按钮的宽度差（实测在该窗口下偏右 22px），而且品牌副标题
+   一显隐、窗口按钮一增减（浏览器 vs 桌面壳），导航就会左右漂。 */
+#topbar {
+  grid-area: topbar;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  height: 50px;
+  padding: 0 12px 0 16px;
+  background: linear-gradient(180deg, var(--topbar-1), var(--topbar-2));
+  color: #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, .28);
+  position: relative;
+  z-index: 5;
+}
+.brand {
+  font-weight: 800; font-size: 16px;
+  display: flex; align-items: center; gap: 8px;
+  white-space: nowrap; letter-spacing: .3px;
+  color: #fff; flex-shrink: 0;
+}
+.brand::before {
+  content: 'Q';
+  display: grid; place-items: center;
+  width: 22px; height: 22px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .95);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .2);
+  align-self: center;
+  font-size: 14px; font-weight: 900;
+  color: var(--topbar-2); line-height: 1;
+}
+.brand-sub {
+  color: rgba(255, 255, 255, .72); font-size: 10px; font-weight: 700;
+  letter-spacing: .4px; text-transform: uppercase;
+  background: rgba(255, 255, 255, .18); padding: 2px 6px; border-radius: 6px;
+}
+/* 顶栏原本还有一个「状态区」(.top-status) 胶囊：就绪圆点 / 主题 / 暂停。
+   2026-09-20 这几项全部迁入「会话」页的状态卡（见 .session-status），
+   于是这里 scoped 的白色系覆盖全成了死代码，一并删除。
+   若日后要往顶栏放状态元素，记得同时补回它在新底色下的对比度处理。 */
+
+/* ══════════════════════════════════════════════════════════════
+   无边框窗口（Electron 桌面壳，electron/main.js 里 frame: false）
+   系统标题栏已去掉，顶栏同时充当标题栏：整条可拖拽移动窗口，
+   交互元素逐个豁免，否则按钮点不动。
+   浏览器里打开控制台时这些 app-region 会被忽略，无副作用。
+   ══════════════════════════════════════════════════════════════ */
+#topbar {
+  -webkit-app-region: drag; app-region: drag;
+  /* 拖拽区收不到点击事件，也划不出选区 —— 声明一下更符合"这是标题栏"的直觉 */
+  user-select: none;
+}
+/* 豁免：所有按钮。
+   #tabs 本身不豁免，于是标签之间的空隙、.nav-spacer 空白处仍可拖动窗口。 */
+#topbar button { -webkit-app-region: no-drag; app-region: no-drag; }
+
+/* ── 窗口控制按钮组（最小化 / 最大化 / 关闭）── */
+/* 它落在网格第三列（1fr），默认 stretch 会让这组按钮贴在该列的**左**边，
+   于是离窗口右缘还差半列宽 —— 必须显式靠右。 */
+#topbar > .win-controls { justify-self: end; }
+.win-controls { display: flex; align-items: center; gap: 2px; margin-left: 4px; flex-shrink: 0; }
+/* HTML 默认 hidden，desktop.js 确认在桌面壳里才解除。
+   选择器必须带类名：.win-controls{display:flex} 与 UA 的 [hidden]{display:none}
+   特异性相同，靠顺序分胜负太脆弱。 */
+.win-controls[hidden] { display: none; }
+
+.win-btn {
+  width: 30px; height: 26px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: none; border-radius: 10px; padding: 0;
+  color: rgba(255, 255, 255, .88); cursor: default;
+  transition:
+    background-color var(--dur-fast) var(--ease-in-out),
+    color var(--dur-fast) var(--ease-in-out);
+}
+.win-btn svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.1; stroke-linecap: round; }
+.win-btn:hover { background: rgba(255, 255, 255, .18); color: #fff; }
+.win-btn:active { background: rgba(255, 255, 255, .28); }
+.win-btn:focus-visible { outline: 2px solid rgba(255, 255, 255, .7); outline-offset: -2px; }
+/* 关闭：hover 变红，与 Windows 惯例一致（降低误点代价） */
+.win-btn-close:hover { background: #e04a4a; color: #fff; }
+.win-btn-close:active { background: #c93f3f; }
+/* 图标随最大化状态切换：默认「最大化」单方框，「还原」双方框 */
+.win-btn .ico-restore { display: none; }
+.win-controls.is-maximized .ico-max { display: none; }
+.win-controls.is-maximized .ico-restore { display: block; }
+
+.muted { color: var(--muted); }
+.sep { width: 1px; height: 14px; background: var(--edge); flex-shrink: 0; }
+
+/* 状态点：加描边，亮色主题下更清晰 */
+.dot {
+  width: 9px; height: 9px; border-radius: 50%; display: inline-block;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.dot-on { background: var(--green); box-shadow: 0 0 0 2px var(--bg), 0 0 6px var(--green); }
+.dot-off { background: var(--red); }
+.dot-wait { background: var(--orange); }
+
+/* 就绪进度指示器：4 圆点，凹点=未就绪，凸点发光=已就绪 */
+.readiness-dots {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 999px;
+  box-shadow: var(--inset-edge);
+  transition: box-shadow var(--dur-base) var(--ease-in-out);
+}
+.readiness-dots:hover { box-shadow: var(--inset-edge); }
+.rdot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--bg-3);
+  box-shadow: inset 1px 1px 2px var(--depth);
+  transition: background var(--dur-base) ease, box-shadow var(--dur-base) ease;
+}
+.rdot.on {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green), 1px 1px 2px var(--depth);
+}
+.rdot.wait {
+  background: var(--orange);
+  animation: breathe 1.8s var(--ease-in-out) infinite;
+}
+
+/* ── 页签栏右侧的社区功能按钮（意见收集 / 金句上传）：凸起小按钮 ── */
+.nav-spacer { flex: 1; }
+.nav-btn {
+  background: var(--layer-1);
+  border: none;
+  color: var(--muted);
+  padding: 5px 14px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  border-radius: 6px;
+  margin: 4px 0 6px;
+  margin-left: 6px;
+  white-space: nowrap;
+  box-shadow: var(--lift-sm), var(--paper-edge);
+  transition:
+    color var(--dur-base) var(--ease-in-out),
+    box-shadow var(--dur-base) var(--ease-in-out),
+    transform var(--dur-fast) var(--ease-out-quart),
+    filter var(--dur-base) var(--ease-in-out);
+}
+.nav-btn:hover { color: var(--text); box-shadow: var(--lift), var(--paper-edge); transform: translateY(-1px); }
+.nav-btn:active { box-shadow: var(--inset-edge); transform: translateY(0); }
+.nav-btn.nav-btn-primary { color: var(--accent); }
+.nav-btn.nav-btn-market { color: var(--accent); }
+.nav-btn.nav-btn-persona { color: var(--orange); }
+
+/* 屏蔽名单弹窗：群员行 */
+.bl-member { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+.bl-member:hover { background: var(--hover); box-shadow: var(--inset-edge); }
+.bl-member .bl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 全局屏蔽（所有群+私聊生效）：整行淡红标记 + ⊘ 切换按钮 */
+.bl-member.bl-global { background: color-mix(in srgb, var(--red) 10%, transparent); }
+.bl-member.bl-global .bl-name { text-decoration: line-through; opacity: .65; }
+.bl-global-toggle { flex-shrink: 0; border: 1px solid var(--border); background: var(--bg-2); color: var(--muted); border-radius: 6px; padding: 1px 6px; font-size: 12px; cursor: pointer; line-height: 1.4; box-shadow: var(--lift-sm), var(--paper-edge); }
+.bl-global-toggle:hover { color: var(--red); }
+.bl-global-toggle.on { background: var(--red); color: var(--on-accent); box-shadow: var(--inset-edge); }
+
+/* 群二维码彩蛋样式已移除（2026-10-07 打包发布时按用户要求删除） */
+/* 上传成功浮框（右上角，不自动消失，只能手动关） */
+.upload-toast {
+  position: fixed; top: 14px; right: 14px; z-index: 9999;
+  background: var(--layer-3); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px; min-width: 260px; max-width: 380px;
+  box-shadow: var(--lift-lg), var(--paper-edge);
+  animation: popIn var(--dur-slow, .3s) ease;
+}
+.upload-toast .ut-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.upload-toast .ut-title { font-weight: 600; font-size: 14px; color: var(--text); }
+.upload-toast .ut-close {
+  background: none; border: 1px solid var(--border); color: var(--muted); font-size: 16px;
+  cursor: pointer; line-height: 1; padding: 0 2px; flex-shrink: 0;
+}
+.upload-toast .ut-close:hover { color: var(--text); }
+.upload-toast .ut-link {
+  display: block; margin-top: 6px; font-size: 12px; color: var(--accent);
+  text-decoration: none; overflow-wrap: anywhere;
+}
+.upload-toast .ut-link:hover { text-decoration: underline; }
+
+/* 金句勾选模式：存档消息行前的勾选框与选中行高亮 */
+.q-check { width: 26px; text-align: center; }
+.q-check input { cursor: pointer; accent-color: var(--accent); }
+tr.quote-selected td { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+/* 意见收集：图片九宫格预览 */
+.fb-imgs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
+.fb-img { position: relative; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; aspect-ratio: 1; }
+.fb-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.fb-img .fb-img-del {
+  position: absolute; top: 4px; right: 4px; width: 20px; height: 20px;
+  background: rgba(0,0,0,.65); color: var(--on-accent); border: none; border-radius: 50%;
+  cursor: pointer; font-size: 12px; line-height: 1;
+  box-shadow: 0 2px 6px var(--depth);
+}
+
+/* ── 标签页：凹轨 + 凸起的活动页签 ──
+   页签栏整体是一条与顶栏同底的轨道；未选中的页签"平贴"在轨道里，
+   选中的页签凸起成一颗胶囊 —— 激活态=浮起，符合"触发状态"的物理直觉。 */
+/* ── 顶部导航（在顶栏中列，居中）── */
+/* 不写 flex:1 —— #topbar 已是三列网格，这里是其中的 auto 列（宽度=自然宽度），
+   居中由「两侧 1fr 等分」实现。若哪天顶栏改回 flex，需要把 flex:1 加回来。 */
+#tabs {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+  height: 100%;
+  overflow: visible;
+  background: transparent;
+  padding: 0;
+  position: relative;
+  z-index: 4;
+}
+
+/* ⚠️ .tab 的基础定义必须完整写在这一处。
+   曾经因为在别处又写了一条 `.tab { transition: ... }`，
+   清理重复时被当成"旧版"删掉，页签变成浏览器默认按钮外观。
+   追加属性请合并进下面这条规则，不要另开一条 .tab。 */
+.tab {
+  position: relative;
+  display: inline-flex; align-items: center; gap: 6px;
+  background: transparent; border: none;
+  color: rgba(255, 255, 255, .82);
+  padding: 6px 11px; cursor: pointer;
+  font-size: 12px; font-weight: 500; font-family: inherit;
+  border-radius: 10px; white-space: nowrap; text-align: center; box-shadow: none;
+  transition:
+    color var(--dur-base) var(--ease-in-out),
+    background-color var(--dur-base) var(--ease-in-out),
+    box-shadow var(--dur-base) var(--ease-in-out),
+    transform var(--dur-fast) var(--ease-out-quart);
+}
+/* 顶栏版：不要侧边小方块标记 */
+.tab::before { display: none; }
+.tab:hover { color: #fff; background: rgba(255, 255, 255, .16); }
+.tab.active { color: var(--topbar-2); background: #fff; font-weight: 700; box-shadow: 0 2px 6px rgba(0, 0, 0, .18); }
+
+/* 顶栏内的导航按钮（现仅「确认金句」）：白字胶囊 */
+#tabs .nav-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: rgba(255, 255, 255, .15); color: rgba(255, 255, 255, .95);
+  padding: 5px 10px; cursor: pointer;
+  font-size: 12px; font-weight: 500; font-family: inherit;
+  border-radius: 10px; margin: 0; white-space: nowrap; text-align: center;
+  transition:
+    color var(--dur-base) var(--ease-in-out),
+    transform var(--dur-fast) var(--ease-out-quart),
+    background-color var(--dur-base) var(--ease-in-out);
+}
+#tabs .nav-btn:hover { color: #fff; background: rgba(255, 255, 255, .28); }
+#tabs .nav-btn:active { transform: scale(.96); }
+
+/* ── 设置页左栏底部的社区分组 ──
+   r36（2026-10-09）整块移除：用户拍板「不用放在这边，风格也不太对」——
+   社区入口已迁到设置页内容区底部的 .settings-foot 小字链接行（见文件尾改造层 19）。
+   原先这里是挂在左栏底部的一摞 .nav-btn 大按钮（含渐变「打开网站！」）。
+   ⚠️ 基础层的 .nav-btn / #tabs .nav-btn / .nav-btn-hot 保留：顶栏「确认金句」还在用。 */
+
+/* ── 预览演示模式（ui/app/00-preview.js）：右下角常驻徽标 ──
+   pointer-events:none 不挡交互；纯静态图层（无动画、无半透明逐帧变化），
+   不给透明窗口的软件渲染添帧负担。
+   视觉：跟全站的"纸面 + 细描边"走，别用实色饱和胶囊（跟柔和底不搭，且太抢眼）。
+   靠一个 accent 小圆点 + 描边把"这是演示模式"说清楚就够了。 */
+.preview-chip {
+  position: fixed; right: 16px; bottom: 14px; z-index: 600;
+  pointer-events: none;
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 5px 12px 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 12px; font-weight: 600; letter-spacing: .2px;
+  color: var(--muted);
+  background: var(--layer-1);
+  box-shadow: var(--lift), var(--paper-edge);
+}
+/* 小圆点：唯一一处上色，示意"当前处于演示态" */
+.preview-chip-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+/* ── 布局 ── */
+#layout { grid-area: main; display: flex; min-width: 0; min-height: 0; overflow: hidden; padding: 14px 16px 16px; gap: 14px; }
+.view { display: none; flex: 1; min-width: 0; min-height: 0; }
+.view.active { display: flex; gap: 14px; }
+
+/* 列表面板：浮动卡片。
+   ⚠️ #layout 现在有 14px 内边距（移植旧版 PCL 式布局），面板不再贴着窗口边，
+   所以原先那条「右侧 1px 亮线 + 向右投影」的分隔阴影必须换成整块的卡片投影 ——
+   否则方角块浮在底色上，四个直角会很明显。 */
+.list-pane {
+  width: 320px;
+  flex-shrink: 0;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--lift), var(--paper-edge);
+  position: relative;
+  z-index: 2;
+  overflow-y: auto;
+  /* R58：面板内有"要通到右缘的满宽层"（`.list-head::after` 分界线、浮层标题条），
+     它们靠负偏移伸进滚动条保留槽 —— 那几像素会被算成横向溢出，在面板底部
+     凭空滚出一条横向滚动条。这里横向改为裁剪：满宽层照样画到面板右缘，
+     多出的亚像素被圆角裁掉，且不再有横向滚动条。
+     ⚠️ overflow-x 从隐式 auto 变成 clip 后，面板内容横向溢出会直接被裁，
+     不再可滚 —— 列表内容都是整宽，本来也不该横向滚。 */
+  overflow-x: clip;
+  background: var(--layer-1);
+}
+/* 列表头：字号 12px 加字重，吸顶。
+   ⚠️ 这里**不能**留 box-shadow —— 见下方「R57 列表头的分界线」注释。 */
+.list-head {
+  padding: 11px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  border-bottom: none;
+  box-shadow: none;
+  position: sticky;
+  top: 0;
+  background: var(--layer-1);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* ── R57：列表头的分界线改成「只在滚动时出现」，静止态与面板完全一体化 ──────
+   症状（用户截图）：表头下沿一条 1px 亮线 + 一条暗带，表头右侧还有一条竖直
+   暗带，两条在右下角交汇成 L 形。状态卡被拖出后（列表头里只剩
+   `.status-placeholder` 撑着高度）表头下面是一片空地，没有内容压住这两条带，
+   于是它们赤裸地露出来，"表头"和"列表"看着像两块拼起来的板。
+
+   成因（像素级排查，逐条对上）：
+   原 `.list-head` 挂着 `box-shadow: 0 1px 0 var(--bevel), 0 2px 6px var(--depth)`：
+   ① `0 1px 0 var(--bevel)` —— --bevel = rgba(255,255,255,.05)，在下沿画 1px **亮线**；
+   ② `0 2px 6px var(--depth)` —— 向下约 6~8px 的**暗影**；
+   ③ 同一个 6px 模糊会往**右**也扩散。而 `.list-pane` 上有 `scrollbar-gutter: stable`
+      （见文件末尾「滚动条贴边」），右侧常驻一条滚动条宽的槽，`.list-head` 的右边缘
+      缩在槽左侧 → 那 6px 暗影渗进槽里，长成一条竖直暗带。
+      R56 只给浮层态补了 `.panel-floating .list-head { box-shadow: none }`，
+      **停靠态一直没补**，所以停靠时原样裸露（用户截图正是停靠态）。
+
+   修法：投影整条去掉，分界线改用 ::after 画一条 1px 细线，并且
+   ① 用 right 负值伸进滚动条保留槽 → 分界线通到面板最右，不再半路断掉；
+      伸出量由父面板的 `--pane-gutter-bleed` 决定（见「滚动条贴边」）：
+      **只有真的留了槽的面板**才会给出非 0 值，没留槽的面板拿到默认 0。
+      多伸出去的那几像素在横向会被算作"溢出"，本来会滚出一条横向滚动条，
+      由 `.list-pane` 上的 `overflow-x: clip` 兜住（R58）。
+   ② 只在列表真的滚动过之后才亮（CSS 滚动驱动动画绑定滚动进度），静止态
+      opacity 恒为 0 → 表头与列表同色，整块看起来是一体的。
+   不支持 animation-timeline 的浏览器停在 opacity 0，退化成"没有分界线"，
+   绝不会退回成一条常驻的亮线。 */
+.list-head::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: calc(-1 * var(--pane-gutter-bleed, 0px));   /* 伸进滚动条保留槽（默认不伸） */
+  bottom: 0;
+  height: 1px;
+  background: var(--border);
+  opacity: 0;
+  pointer-events: none;
+}
+@supports (animation-timeline: scroll()) {
+  .list-head::after {
+    animation: listHeadSeam 1ms linear both;
+    animation-timeline: scroll(nearest);
+    animation-range: 1px 24px;                  /* 滚动超过 24px 即完全亮起 */
+  }
+}
+@keyframes listHeadSeam { from { opacity: 0; } to { opacity: 1; } }
+/* ── 列表头的小按钮（群发 / 清空）──────────────────────────────────────
+   R63 统一：此前停靠态与浮层态是**两套**按钮语言 ——
+     · 停靠态（本规则）：底色 `--layer-1`、无描边，靠 `--lift-sm` +
+       `--paper-edge` 两点投影撑出"纸质按钮"；
+     · 浮层态（`.panel-float-bar .pfb-actions .list-head-btn`）：`--layer-1`
+       底 + 1px `--border` 描边、无投影 —— R60 为和标题条右端的 ⤢ 复位按钮
+       同一套语言才补的。
+   问题在于 `.list-head` 的底色**也是** `--layer-1`：停靠态时按钮底色与它
+   完全相同（用户图#2 实测都是 (21,24,30)），剩下的那点投影在深底上几乎
+   看不见 —— 摆出来就是两行纯文字，和标题条上那两颗有明确描边的按钮
+   摆在一起，一眼就是两种风格。
+
+   现统一到 ⤢ 复位按钮（`.pfb-reset`）那一套：`--layer-1` 底 + 1px `--border`
+   描边 + 5px 圆角 + 20px 高 + 无投影。描边在任何底色上都能立住：
+   列表头 `--layer-1` 上读作"空心按钮"，标题条 `--layer-2` 上读作"略陷进去
+   的按钮"，两边不再需要各自的覆盖规则。 */
+.list-head-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--layer-1);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  font-family: inherit;
+  white-space: nowrap;
+  box-shadow: none;
+  cursor: pointer;
+  transition: color var(--dur-base) var(--ease-in-out),
+              border-color var(--dur-base) var(--ease-in-out),
+              background var(--dur-base) var(--ease-in-out);
+}
+.list-head-btn:hover { color: var(--red); border-color: var(--red); }
+/* 按下：底色退到 --layer-2，用"陷进去"代替投影（深色底上投影本来也看不见） */
+.list-head-btn:active { color: var(--red); background: var(--layer-2); }
+
+/* ── 会话列表头：拆成「计数 + 群发 + 清空」一行，下面是 OneBot / 模型 / 就绪状态块 ──
+   从顶栏状态胶囊搬来的几项（2026-09 移植自旧版）：连接与模型是看会话时最需要的上下文。
+   整块仍随 .list-head 一起吸顶（sticky 在父级），滚动列表时不会滑走。 */
+/* R64：把行距提成变量 —— `.status-placeholder` 塌下去时要**按同一个值**抵消它，
+   否则收拢到 0 高之后还会残留 9px 的 flex gap，列表头看着还是空一截。 */
+#session-list .list-head {
+  --lh-gap: 9px;
+  flex-direction: column; align-items: stretch; gap: var(--lh-gap);
+}
+#session-list .list-head .lh-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* R61：计数吃掉剩余宽度 → 后面的 群发 / 清空 / ⠿ 依次贴着右侧排。
+   注：R61 之前这一行只有三个子元素，靠 space-between 也能排对；现在 ⠿ 手柄
+   也成为行内一员（见 `.panel-grip-inline`），必须给计数一个 flex:1，
+   否则 space-between 会把四个元素平均撑开。 */
+#session-list .list-head .lh-row > #session-count { flex: 1; min-width: 0; }
+.session-status {
+  display: flex; flex-direction: column; gap: 5px;
+  padding: 7px 10px; border-radius: 10px;
+  background: var(--inset-bg); box-shadow: var(--inset-edge);
+  font-size: 12px; font-weight: 400;
+}
+.session-status .ss-row { display: flex; align-items: center; gap: 7px; min-width: 0; }
+/* 文案可能很长（模型名 / 连接失败原因），单行省略，避免撑破左栏 */
+.session-status #onebot-label,
+.session-status #model-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 状态卡第三行：就绪圆点 + 暂停 */
+.session-status .ss-actions { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+.session-status .ss-spacer { flex: 1; }
+/* ⚠️ 这几个控件以前只在蓝色顶栏里用过，对比度靠 `.top-status .xxx` 那套白色覆盖。
+   搬进深色状态卡后必须自己解决，否则「未就绪」的圆点用 --layer-3，与药丸底色几乎同色
+   （浅色主题下更是白底白点），等于看不见。
+   用 color-mix 跟随 --text 取色 → 暗色主题得浅点、浅色主题得深点，两套主题都不用单独写。 */
+.session-status .readiness-dots { background: var(--layer-2); padding: 3px 9px; }
+.session-status .readiness-dots:hover { background: var(--hover); }
+/* ⚠️ 只给「未亮」的圆点补底色，必须带 :not(.on):not(.wait) ——
+   否则本条与 `.rdot.on` 特异性相同，而它在文件里更靠后，
+   会把「已就绪」的绿色、「等待中」的橙色一起盖掉，就绪指示直接失去意义。 */
+.session-status .rdot:not(.on):not(.wait) { background: color-mix(in srgb, var(--text) 26%, transparent); }
+/* 暂停是动作按钮，给一点强调色（原来在顶栏是白底蓝字的醒目样式） */
+.session-status #pause-btn { color: var(--accent); font-weight: 700; padding: 3px 12px; }
+/* ── R63：描边必须画在**边框盒之外**，否则包不住整圈 ──────────────────
+   症状（用户图#1）：拖状态卡到面板上时，蓝框只有右边、下边、左下是蓝的，
+   上边整条 + 左边上半段是断的 ——「周围一圈的蓝框并未完全包裹起来」。
+
+   成因（不是描边的几何算错，是绘制顺序）：
+   ① `outline` 是**元素自己**的一层绘制，排在该元素背景/边框之后、
+      **任何后代之前** —— 所以会被后代盖住。而 `.list-head` 是
+      `position: sticky; z-index: 2` 且带不透明底 `--layer-1`；
+      `.panel-float-bar` 同理（底 `--layer-2`，还靠 R58 的负 margin-right
+      通到右缘）。两者都从面板左缘起、宽度 = 面板内容盒。
+   ② 于是：上边整条被盖住；左边整段被盖到盖板的底边为止（复现页实测蓝框
+      正好在 `.list-head` 底边 y=153.5 处恢复：153.5×1.25 = 192 ≈ 实测 187）；
+      右边能露出来，是因为 `scrollbar-gutter: stable` 把列表头右侧窄掉了一条
+      ≈10.4px 的保留槽，描边最外那 1.6px 恰好落在槽里 —— 纯属侥幸。
+   ③ 复现页三方案像素实测（repro/r63_ring.py + r63_check.py）：
+        现状 offset:-2px  → 上边 0%、左边 70~78%  （复现用户截图）
+        改成覆盖层方案    → 未滚动时四边 100%，但一旦列表滚过就整体被滚走
+                            （顶部 0%、底部 4.6%），且宽度被保留槽窄掉 11px
+        改成正 offset     → 四边 100%（停靠/浮层 × 滚动/未滚动，全绿）
+
+   修法：`outline-offset` 取正 —— 描边落在边框盒**之外**，后代再怎么画也盖不到，
+   且与面板内部的滚动位置无关。
+   ⚠️ 这条成立的前提是面板四周有 ≥4px 空地，本项目两个来源都满足：
+      停靠态 `#layout` 的 padding 是 14px/16px；浮层态吸附固定留 `FLOAT_EDGE = 12`。
+   ⚠️ 也顺带避开了浮层的 8 向缩放把手（`.panel-resize-handle`，`z-index: 8`，
+      热区贴着边框盒**内侧** 6px / 四角 14px）—— 它们画在描边之上，
+      描边若留在内侧，就会被四个角压出缺口。 */
+#session-list.status-drop-target {
+  outline: 2px solid color-mix(in srgb, var(--accent) 62%, transparent);
+  outline-offset: 2px;            /* R63：画在面板外侧（原为 -2px，见上方说明）*/
+}
+
+/* 2026-10-23：详情列（会话 / 存档 / 记忆 的右栏）与全站 940px 内容列对齐。
+   用户反馈：聊天 / 存档页通栏铺满整个右栏，而市场页、已安装各页都是 940px
+   居中列 ——「这个界面也可以统一一下」。.detail-pane 原先 flex:1 铺满
+   （1600px 窗口下约 1190px）。加同款 max-width + margin-inline:auto：
+   大屏下右栏内容居中、两侧留白；窄屏 width:100% 自然收窄，行为不变。
+   ⚠️ max-width 取 990px 而不是 940px：本面板自带约 50px 水平内边距
+   （#session-detail 覆盖为 25px×2，基准规则 24px×2），减掉后内容列 ≈940px，
+   与 .usage-wrap / .market-page 的子元素肉眼齐宽。
+   ⚠️ 只动这一条：三个详情容器（#session-detail / #chat-detail / #memory-detail）
+      共用本类，存档 / 记忆 页的面板是被 15-chat-chrome.js 借进右栏的同一个节点，
+      一处改动三处生效，DOM 一行不用动。 */
+.detail-pane {
+  flex: 1; min-width: 0; overflow-y: auto; padding: 20px 24px;
+  max-width: 990px;
+  margin-inline: auto;
+}
+
+.list-head .list-head-btn, .list-head button { cursor: pointer; }
+/* 空状态：用 flex 居中而非固定 vh 偏移，窗口高度变化时始终居中 */
+.empty-hint {
+  color: var(--muted);
+  text-align: center;
+  padding: 60px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 240px;
+}
+.empty-hint::before {
+  content: '';
+  width: 44px; height: 44px;
+  border-radius: 10px;
+  box-shadow: var(--inset-edge);
+  opacity: .8;
+}
+
+/* ── 会话列表：条目平贴，选中项凹下（"按进列表里"表示当前位置）── */
+.session-item, .chat-item {
+  padding: 10px 14px;
+  margin: 6px 8px;
+  border-radius: 10px;
+  border-bottom: none;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-base) var(--ease-in-out),
+    box-shadow var(--dur-base) var(--ease-in-out),
+    transform var(--dur-fast) var(--ease-out-quart);
+}
+.session-item:hover, .chat-item:hover { background: var(--hover); }
+.session-item.selected, .chat-item.selected {
+  background: var(--sel-bg);
+  border-left-color: var(--accent);
+  box-shadow: var(--sel-bar);
+}
+/* 标题行改成**固定三列**：群名（可伸缩+省略）→ 档位标签（固定宽）→ 时间（固定宽、右对齐）。
+   之前标签紧跟群名，群名长短不一 → 每张卡的标签横向位置都不同，一列看下去参差；
+   现在标签和时间各占固定宽，卡片之间能竖着对成两列。
+   ⚠️ 时间用 tabular-nums：等宽数字，否则 1 和 8 宽度不同，右边界还是会抖。 */
+.session-title { display: flex; align-items: center; gap: 8px; }
+.session-title .session-chat { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-time {
+  flex: 0 0 auto; width: 70px; text-align: right;
+  color: var(--muted); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+/* ── 该群的回复频率（人设里的参与度档位：安静型 / 普通群友 / 活跃型）──
+   跟群名同一行：它描述的是"这个群"，不是"这一次会话"，所以贴着群名走；
+   `margin-right:auto` 把时间挤到最右，胶囊紧跟在群名后面（标题行是 space-between）。
+   视觉走**标签语言**（淡底 + 同色字 + 无描边），与状态徽标同一族 ——
+   它是信息不是控件，加描边会被误认成按钮（中止/重试才描边，见下面的胶囊规则）。
+   三档只在"同色深浅"上分强度，不引入新的语义色（绿=成功、橙=等待/警告是别的意思）。 */
+.session-freq {
+  /* 固定宽度：三档文字（安静型 / 普通群友 / 活跃型）长短不一，不锁宽就会把
+     右边的列推得左右不齐 —— 锁 62px 后每张卡的标签起止位置完全一致
+     （"普通群友"四个字在最长的那一档，62px 刚好装得下，不会顶到时间列）。 */
+  flex: 0 0 auto; width: 62px;
+  display: inline-flex; align-items: center; justify-content: center;
+  height: 18px; padding: 0 8px; border-radius: 999px;
+  font-size: 11px; line-height: 1; font-weight: 400; white-space: nowrap;
+  box-shadow: var(--lift-sm), var(--paper-edge);
+}
+.freq-low    { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); }
+.freq-medium { background: color-mix(in srgb, var(--accent) 13%, transparent); color: color-mix(in srgb, var(--accent) 88%, var(--text)); }
+.freq-high   { background: color-mix(in srgb, var(--accent) 26%, transparent); color: var(--accent); }
+.session-trigger { color: var(--muted); font-size: 12px; margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 状态行：徽标 + 活动/等待文本 +（靠右的）动作按钮。
+   ⚠️ 徽标与等待文本一律 nowrap + 不收缩 —— 否则窄侧栏下 flex 会把「运行中」压成竖排。 */
+.session-meta { display: flex; gap: 8px; margin-top: 4px; font-size: 11px; color: var(--muted); align-items: center; min-width: 0; }
+/* 统计行：token · 缓存% · 轮 · 搜。**单独占一行**、过长省略，绝不挤压上面的状态行。 */
+.session-stats { margin-top: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session-meta-acts { flex-shrink: 0; margin-left: auto; display: inline-flex; gap: 6px; }
+/* 缓存命中率（会话列表行 / 详情头）：比 muted 亮一点，"这一轮省了多少"一眼可见 */
+.cache-rate { color: var(--green); }
+
+/* ── 会话「胶囊」统一样式：状态徽标 + 行内动作按钮（中止 / 重试）──
+   用户要求这几个胶囊**外框大小完全一致**：`min-width` 让 2 字（出错 / 中止）与
+   3 字（运行中 / 等待中 / 已发言）同宽，文字一律居中。
+   ⚠️ 两个坑别改坏：
+   1) 固定 `height` + `line-height:1` —— 高度不随字体 normal 行高浮动，三者严格等高。
+   2) 按钮那两条选择器必须带 `.session-meta` 前缀（特异性 0,2,0）。只在 `.btn` 上
+      写是没用的：`.btn / .btn-small` 虽然同样 0,1,0，但源码更靠后（第 1583 行起），
+      会把这里的 padding / 圆角盖掉，中止按钮就又变回那个突兀的深色大方块。 */
+.status-badge,
+.session-meta .session-abort-btn,
+.session-meta .session-retry-btn {
+  box-sizing: border-box;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 50px;
+  height: 20px;
+  padding: 0 8px;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  border: 0;
+  border-radius: 999px;
+  box-shadow: var(--lift-sm), var(--paper-edge);
+}
+.status-done { background: color-mix(in srgb, var(--green) 18%, transparent); color: var(--green); }
+.status-noreply { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); }
+.status-running { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
+.status-waiting { background: color-mix(in srgb, var(--orange) 22%, transparent); color: var(--orange); }
+.status-error { background: color-mix(in srgb, var(--red) 18%, transparent); color: var(--red); }
+.status-aborted { background: color-mix(in srgb, var(--orange) 18%, transparent); color: var(--orange); }
+.session-wait { flex-shrink: 0; white-space: nowrap; font-size: 11px; color: var(--orange); font-variant-numeric: tabular-nums; }
+.session-item.session-waiting-row { box-shadow: var(--inset-edge); }
+.session-activity { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--accent); }
+/* ── 行内动作按钮（中止 / 重试）──
+   尺寸/圆角与状态徽标**逐项一致**（见上方「会话胶囊统一样式」，用户要求外框一样大）。
+   难点：既要"一眼看出能点"，又不能跟这套柔和的淡色纸面风格打架。
+   所以**留在同一个色系里，只加三样按钮特征**（都不改外框尺寸）：
+     · 状态徽标 = 淡色底(18~22%) + 同色字 + 字重 400 + **无边框**   → 「标签」
+     · 动作按钮 = 稍强淡色底(22%) + 同色**粗体**字 + **1px 同色描边** + 顶部内高光 → 「描边按钮」
+   描边是这里最关键的信号：整行里只有这两个元素有边，一眼就知道是控件。
+   （⚠️ 别改成实色饱和填充 —— 试过，跟四周的淡色纸面完全不搭，用户否掉了。）*/
+.session-meta .session-abort-btn,
+.session-meta .session-retry-btn {
+  font-weight: 600;
+  cursor: pointer;
+  border-width: 1px;              /* 外框尺寸不变：height/min-width 固定 + border-box */
+  border-style: solid;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .10), var(--lift-sm), var(--paper-edge);
+  /* 只过渡这几个属性；不用 animation（透明窗 + 常驻图层的性能红线，见项目记忆） */
+  transition:
+    background-color var(--dur-fast) var(--ease-in-out),
+    border-color var(--dur-fast) var(--ease-in-out),
+    color var(--dur-fast) var(--ease-in-out),
+    transform var(--dur-fast) var(--ease-out-quart),
+    box-shadow var(--dur-base) var(--ease-in-out);
+}
+/* 失败会话的「重试」：accent 色系描边按钮 */
+.session-meta .session-retry-btn {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 62%, transparent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.session-meta .session-retry-btn:hover {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 85%, transparent);
+  background: color-mix(in srgb, var(--accent) 34%, transparent);
+}
+/* 运行中/等待中的「中止」：红描边（危险动作，靠色调区分但不刺眼） */
+.session-meta .session-abort-btn {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 62%, transparent);
+  background: color-mix(in srgb, var(--red) 22%, transparent);
+}
+.session-meta .session-abort-btn:hover {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 85%, transparent);
+  background: color-mix(in srgb, var(--red) 34%, transparent);
+}
+/* 按下：键被按进表面（凹） */
+.session-meta .session-abort-btn:active,
+.session-meta .session-retry-btn:active {
+  transform: translateY(1px);
+  background: color-mix(in srgb, currentColor 44%, transparent);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, .30);
+}
+
+/* ── 会话详情 ── */
+.detail-header {
+  margin-bottom: 14px; padding: 14px 16px;
+  border-bottom: none;
+  background: var(--layer-1);
+  border-radius: 10px;
+  box-shadow: var(--lift), var(--paper-edge);
+}
+.detail-header h2 { font-size: 16px; margin-bottom: 6px; }
+.detail-header .sub { color: var(--muted); font-size: 12px; display: flex; gap: 14px; flex-wrap: wrap; }
+/* 页头按钮行的两个状态占位（#mem-members-status / #mem-consolidate-status）空闲时是空的，
+   但 flex 的 gap 会在空元素两侧各算一次 —— "拉取群成员→添加印象"被撑成 28px，
+   "添加印象→整理本群记忆"只有 14px，间隔就不一样宽（用户反馈）。
+   :empty 时直接 display:none，有内容（如"整理中…（已 Ns）"）再正常显示。 */
+#mem-members-status:empty,
+#mem-consolidate-status:empty { display: none; }
+
+.collapsible {
+  border: 1px solid var(--border); border-radius: 10px; margin-bottom: 14px;
+  background: var(--layer-1);
+  box-shadow: var(--lift-sm), var(--paper-edge);
+  padding: 2px 0;
+  transition: box-shadow var(--dur-base) var(--ease-in-out);
+}
+.collapsible > summary {
+  padding: 9px 14px; cursor: pointer;
+  transition: color var(--dur-base) var(--ease-in-out);
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
+  list-style: none;
+}
+.collapsible > summary::-webkit-details-marker { display: none; }
+.collapsible > summary::before { content: '▸ '; }
+.collapsible[open] > summary::before { content: '▾ '; }
+.collapsible .coll-body {
+  padding: 4px 14px 12px; white-space: pre-wrap; font-family: var(--mono);
+  font-size: 12px; color: var(--muted); line-height: 1.65;
+  max-height: 300px; overflow-y: auto;
+}
+
+/* ── 记忆页：每个群友一张「身份证」小卡片（2026-09-21）──
+   原来是一排 <details> 长条，印象全文直接铺开 —— 人一多就是一堵文字墙，
+   而且「编辑/更新/删除」三个按钮挤在标题行，比姓名还抢眼。
+   现在列表只负责"认人"：头像首字 + 姓名/QQ + 印象条数 + 最近一条印象预览；
+   点卡片才进档案弹窗（身份信息 + 全部印象 + 三个操作）。
+   ⚠️ .mem-card 是 <button> 但**不带 .btn 类** —— 自带完整外观，不受 .btn 那套影响。 */
+.mem-cards {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(252px, 1fr));
+  gap: 10px; margin: 10px 0 4px;
+}
+.mem-card {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  min-height: 112px;   /* R31：约初版两倍高 —— 容纳「QQ 昵称 / QQ 号 / 印象预览」三行 */
+  padding: 12px 14px; text-align: left; cursor: pointer;
+  font-family: inherit; font-size: 14px; color: var(--text);
+  background: var(--layer-1); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--lift-sm), var(--paper-edge);
+  transition: transform var(--dur-fast) var(--ease-out-quart), background-color var(--dur-base) var(--ease-in-out), box-shadow var(--dur-base) var(--ease-in-out);
+}
+.mem-card:hover {
+  background: var(--layer-2); transform: translateY(-1px);
+  box-shadow: var(--lift), var(--paper-edge), inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.mem-card:active { transform: translateY(0); }
+/* 头像：自动读取 QQ 头像（img 铺满圆），加载失败时回退到姓名首字
+   （.mem-card-ava-fb 绝对定位铺满，与 img 同一个圆；初始 hidden 由 error 事件揭开）。
+   ⚠️ 拿不到 QQ 号（非纯数字）时干脆不渲染 img，直接显示首字。 */
+.mem-card-avatar {
+  position: relative; flex-shrink: 0; width: 56px; height: 56px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 20px; font-weight: 700; color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 34%, transparent);
+  overflow: hidden;
+}
+.mem-card-ava-img {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  border-radius: 50%; object-fit: cover; display: block;
+}
+.mem-card-ava-fb {
+  position: absolute; inset: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.mem-card-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.mem-card-name {
+  font-weight: 600; font-size: 14px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mem-card-note { margin-left: 8px; font-weight: 400; font-size: 11px; color: var(--faint); }
+.mem-card-sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.mem-card-quote {
+  font-size: 12px; color: var(--muted); line-height: 1.45;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mem-card-right { flex-shrink: 0; }
+.mem-card-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 44px; height: 20px; padding: 0 8px; border-radius: 999px;
+  font-size: 11px; line-height: 1; color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+/* ── 群友记忆档案弹窗（r34 照原型 v2 第 1221-1245 行 / v25 重新设计）──
+   旧版是一张五行键值竖排表（备注名/群名片/QQ昵称/QQ号/印象），信息最少的
+   「印象 N 条」也独占一整行，弹窗又长又平。新版三段式：
+     ① 身份头部：46px 圆头像（真实 QQ 头像）+ 主名 + 「QQ 号 · 昵称 · 群名片」副行
+                  + 右上「N 条印象」徽标
+     ② 双列信息格：四个字段两列平铺，短字段不再独占整行
+     ③ 印象区：小节标题 + 序号圆点 + 条间细分隔线 */
+.mf-hero {
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 12px; border-radius: 10px;
+  background: var(--card-hi); border: 1px solid var(--line);
+}
+.mf-av {
+  position: relative; width: 46px; height: 46px; flex: 0 0 46px;
+  border-radius: 50%; overflow: hidden; display: grid; place-items: center;
+  font-size: 14px; color: var(--fg-mute); background: var(--card);
+  border: 1px solid var(--line);
+}
+.mf-av-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.mf-av-img[hidden] { display: none; }
+.mf-av-fb { position: absolute; inset: 0; display: grid; place-items: center; }
+.mf-av-fb[hidden] { display: none; }
+.mf-hid { flex: 1; min-width: 0; }
+.mf-nm {
+  font-size: 16px; font-weight: 700; color: var(--fg); line-height: 20px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mf-sub {
+  font-size: 11px; color: var(--fg-mute); margin-top: 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mf-badge {
+  flex: 0 0 auto; font-size: 11px; color: var(--fg-dim);
+  padding: 3px 9px; border-radius: 999px;
+  background: var(--card); border: 1px solid var(--line);
+}
+.mf-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.mf-cell {
+  display: flex; flex-direction: column; gap: 3px; min-width: 0;
+  padding: 7px 10px; border-radius: 10px;
+  background: var(--card); border: 1px solid var(--line);
+}
+.mf-k { font-size: 11px; color: var(--fg-mute); }
+.mf-v {
+  font-size: 12px; color: var(--fg);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mf-sec { display: flex; align-items: baseline; gap: 7px; margin: 15px 0 3px; }
+.mf-sec-t { font-size: 12px; font-weight: 700; color: var(--fg); }
+.mf-sec-n { font-size: 11px; color: var(--fg-mute); }
+/* 印象区：去掉旧版每条的独立卡片底，只留细横线分隔（原型 .mem-imp） */
+.mem-id-imps .mem-imp {
+  background: transparent; border: 1px solid transparent;
+  border-radius: 0; padding: 9px 2px;
+}
+.mem-id-imps .mem-imp + .mem-imp { border-top: 1px solid var(--line); }
+.mem-id-imps .mem-imp-n { background: var(--card); border: 1px solid var(--line); color: var(--fg-mute); }
+
+/* ── 卡片点开后的「记忆档案」弹窗内容 ── */
+.mem-id {
+  display: flex; gap: 14px; align-items: center;
+  padding: 12px 14px; margin-bottom: 12px;
+  background: var(--layer-2); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: var(--lift-sm), var(--paper-edge);
+}
+.mem-id-avatar {
+  flex-shrink: 0; width: 46px; height: 46px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 19px; font-weight: 700; color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 38%, transparent);
+}
+.mem-id-fields { flex: 1 1 auto; min-width: 0; display: grid; gap: 4px; }
+.mem-id-row { display: flex; gap: 10px; font-size: 12px; min-width: 0; }
+.mem-id-k { flex: 0 0 62px; color: var(--faint); }
+.mem-id-v { flex: 1 1 auto; min-width: 0; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+.mem-id-imps { display: grid; gap: 6px; }
+.mem-imp {
+  display: flex; gap: 8px; align-items: flex-start;
+  padding: 8px 10px; border-radius: 10px;
+  background: var(--layer-1); border: 1px solid var(--border);
+}
+.mem-imp-n {
+  flex-shrink: 0; width: 18px; height: 18px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; color: var(--faint); background: var(--hover);
+}
+.mem-imp-c { flex: 1 1 auto; min-width: 0; font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
+.mem-imp-t { flex-shrink: 0; font-size: 11px; color: var(--faint); }
+
+.msg-flow { display: flex; flex-direction: column; gap: 10px; }
+
+/* 气泡：用户气泡凹下（像刻在板上），助手气泡凸起（像贴上来） */
+.bubble {
+  max-width: 82%;
+  padding: 9px 13px;
+  border-radius: 10px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+.bubble-user {
+  align-self: flex-start;
+  background: var(--layer-1);
+  border: 1px solid var(--border);
+  box-shadow: var(--inset-edge);
+  white-space: pre-wrap;
+}
+.bubble-assistant {
+  align-self: flex-end;
+  background: color-mix(in srgb, var(--accent) 12%, var(--layer-1));
+  border: 1px solid var(--border);
+  box-shadow: var(--lift-sm), var(--paper-edge);
+}
+.bubble-assistant .asr-label { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+
+/* 会话详情工具卡片：浮起的小板 */
+.tool-card-flow {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--layer-1);
+  box-shadow: var(--lift-sm), var(--paper-edge);
+  padding: 9px 13px;
+  font-size: 12px;
+}
+.tool-card-flow.tool-error { box-shadow: var(--lift-sm), var(--paper-edge); }
+.tool-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.tool-name-flow { color: var(--orange); font-family: var(--mono); font-size: 12px; font-weight: 600; }
+.tool-args { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: pre-wrap; }
+.tool-result { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 5px; white-space: pre-wrap; border-top: 1px dashed var(--border); padding-top: 5px; }
+.tool-result.is-error { color: var(--red); }
+
+.sent-badge {
+  align-self: flex-end;
+  background: color-mix(in srgb, var(--green) 12%, var(--layer-1));
+  border: 1px solid var(--border);
+  box-shadow: var(--lift-sm), var(--paper-edge);
+  color: var(--green);
+  border-radius: 10px;
+  padding: 7px 13px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.sent-badge .asr-label { color: color-mix(in srgb, var(--green) 70%, transparent); font-size: 11px; margin-bottom: 3px; }
+
+.session-error {
+  border: 1px solid var(--border); background: color-mix(in srgb, var(--red) 8%, transparent);
+  box-shadow: var(--inset-edge);
+  color: var(--red); border-radius: 10px; padding: 10px 14px; white-space: pre-wrap;
+}
+

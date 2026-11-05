@@ -1348,7 +1348,7 @@ function enhanceOneSelect(sel) {
       //
       // ⚠️（2026-10-10 r86 修 P1）原实现只做了"上弹/限高"，但在**模态框**里会失效：
       //    .sel-menu 是 position:absolute，定位上下文是 .sel；而模态框的
-      //    .model-modal-body 带 overflow:auto（style.css:2277）。absolute 定位的
+      //    .model-modal-body 带 overflow:auto（见 03-workspace.css 同名规则）。absolute 定位的
       //    菜单一旦超出该 body 就被**裁掉**，并且它随 body 一起滚动 ——
       //    实测贴近底部展开时菜单高度 112px、可见 0px，选项完全点不到。
       //    限高治不了根：根因是"裁剪容器"而非"空间不足"。
