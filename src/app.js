@@ -96,9 +96,13 @@ function allowed(kind, id, cfg) {
 // 自己的 GitHub 仓库，发版时把 version.json 一起推上去即可。
 // 可被 config.update.checkUrl 覆盖 —— 私有仓库的 raw 链接匿名读不到（404），
 // 那种情况要么把仓库设公开，要么另建一个只放 version.json 的公开仓库再填到这里。
-// 国内直连 raw.githubusercontent.com 不稳，config 里也可以换成 jsDelivr 镜像：
-//   https://cdn.jsdelivr.net/gh/<user>/<repo>@main/version.json
-const UPDATE_INFO_URL = 'https://raw.githubusercontent.com/Mashiroxun/Chat-Agent/main/version.json';
+// 国内直连 raw.githubusercontent.com 不稳（2026-11-05 实测返回 500），
+// 默认改用 jsDelivr 镜像，国内可达。私有仓库 / 想换源仍可用 config.update.checkUrl 覆盖。
+// ⚠️ jsDelivr 的 @main 引用有 12 小时缓存（2026-11-05 实测：purge 接口报 finished
+//    但各节点仍返回旧内容）。发版后若要立即生效，先调一次：
+//      https://purge.jsdelivr.net/gh/Mashiroxun/Chat-Agent@main/version.json
+//    或改用 tag 引用（@v0.4.9.3），缓存 key 随 tag 变化，天然绕过旧缓存。
+const UPDATE_INFO_URL = 'https://fastly.jsdelivr.net/gh/Mashiroxun/Chat-Agent@main/version.json';
 
 function localVersion() {
   try {
