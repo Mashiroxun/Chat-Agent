@@ -1,0 +1,1152 @@
+/* ================================================================
+   07-connect.css — 轻量提示 / 市场其余 / 连接页 / 协议端卡 / 折叠组
+   由 style.css 拆分而来（原行 9457–10601）
+   ⚠️ 正文注释里的「第 N 行」均指拆分前的原 style.css，查阅见 ui/style.css.bak-20261105-split
+   引入顺序不可调换，层叠依赖原始先后
+   ================================================================ */
+
+/* ── 轻量提示 ── */
+.mk-toast {
+  position: fixed; left: 50%; bottom: 34px; transform: translate(-50%, 14px);
+  z-index: 9998; max-width: 76vw;
+  padding: 10px 18px; border-radius: 10px;
+  background: var(--layer-3); color: var(--fg);
+  border: 1px solid var(--line-str);
+  box-shadow: 0 10px 30px rgba(0,0,0,.4);
+  font-size: 14px; opacity: 0; pointer-events: none;
+  transition: opacity .18s, transform .18s;
+}
+.mk-toast.on { opacity: 1; transform: translate(-50%, 0); }
+.mk-toast[data-tone='ok'] { border-color: color-mix(in srgb, var(--green) 50%, transparent); }
+.mk-toast[data-tone='err'] { border-color: color-mix(in srgb, var(--red) 55%, transparent); }
+.mk-toast[data-tone='warn'] { border-color: color-mix(in srgb, var(--orange) 55%, transparent); }
+
+/* 窄窗：筛选条件自然换行，分类下拉不撑破筛选面板 */
+@media (max-width: 860px) {
+  .mk-filters { align-items: flex-start; gap: 8px 12px; }
+  .mk-fld { flex-wrap: wrap; }
+  .mk-select { min-width: 145px; max-width: calc(100vw - 100px); }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   改造层 · 29. 会话报错「说人话」卡片（r88）
+   ---------------------------------------------------------------------------
+   原样式 `.session-error` 是一整块红字 + white-space:pre-wrap —— 直接把
+   `模型 API HTTP 400：{"error":{…}}` 原样铺开，长这样：一屏红字、读不出重点。
+   保留它（老数据/未知错误仍走它），另起一套卡片：标题一行说清哪儿坏了，
+   正文两行说清为什么 + 怎么办，一个修复按钮，原始报错折进 <details>。
+
+   配色沿用全局令牌（--red / --fg / --muted / --line），跟着主题自动走，
+   不写死颜色 —— 深色主题下同样可读。
+   ═══════════════════════════════════════════════════════════════════════════ */
+.session-error-card {
+  border: 1px solid color-mix(in srgb, var(--red) 30%, var(--line));
+  background: color-mix(in srgb, var(--red) 6%, var(--layer-1, transparent));
+  box-shadow: var(--inset-edge);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-top: 10px;
+  color: var(--fg);
+  line-height: 1.65;
+}
+.session-error-card .sec-head {
+  display: flex; align-items: center; gap: 7px;
+  font-weight: 600; font-size: 14px;
+  color: var(--red);
+  margin-bottom: 7px;
+}
+.session-error-card .sec-ico { font-size: 16px; line-height: 1; }
+.session-error-card .sec-what { font-size: 14px; margin-bottom: 3px; }
+.session-error-card .sec-fix  { font-size: 14px; color: var(--muted); }
+.session-error-card .sec-actions { margin-top: 10px; }
+/* 折叠区：默认收起（用户明确选了「折叠起来，默认收起」） */
+.session-error-card .sec-raw { margin-top: 10px; }
+.session-error-card .sec-raw > summary {
+  cursor: pointer; font-size: 12px; color: var(--muted);
+  user-select: none; padding: 2px 0;
+}
+.session-error-card .sec-raw > summary:hover { color: var(--fg); }
+.session-error-card .sec-raw > pre {
+  margin: 7px 0 0; padding: 9px 11px;
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 12px; line-height: 1.5;
+  color: var(--muted);
+  white-space: pre-wrap; word-break: break-all;
+  max-height: 240px; overflow: auto;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   改造层 · 30. SnowLuma 页「萌新友好」标记（r89 / r90 改用）
+   ---------------------------------------------------------------------------
+   群里反馈：「我电脑里有 QQ，为什么这里还说我没装 QQ」。
+   r89 只把话术改软（"电脑里有 QQ"徽标 + 解释），仍要求复制一份 —— 治标。
+   r90 直接判通过：本机有 QQ 就拿来用（隔离靠 --user-data-dir，不靠复制目录），
+   徽标改成「已就绪 · 用本机 QQ」，正文说明"另开窗口登录，不顶掉你的 QQ"。
+   配色沿用现有 green token，跟主题自动走。
+   ═══════════════════════════════════════════════════════════════════════════ */
+.sl-node.is-friend { border-left-color: color-mix(in srgb, var(--green) 50%, transparent); }
+.sl-node .sl-node-friend {
+  font-size: 11px; padding: 1px 7px; border-radius: 999px;
+  background: color-mix(in srgb, var(--green) 16%, transparent);
+  color: color-mix(in srgb, var(--green) 80%, var(--fg));
+  border: 1px solid color-mix(in srgb, var(--green) 30%, transparent);
+  margin-left: 6px;
+}
+.sl-node-info.sl-node-friend-text {
+  /* 比普通 info 略亮一点：r90 这里是"已经用上你电脑里的 QQ"的好消息，
+     得让人一眼看到，而不是当成灰色的次要说明略过去 */
+  color: var(--fg);
+  background: color-mix(in srgb, var(--green) 7%, transparent);
+  border-radius: 6px; padding: 6px 10px; margin-top: 4px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   改造层 · 31. harness「开发工单」（dev-orders 插件）（r105 搬运）
+   ── 这一段整体搬运自上游 0.4.7（洛版）的 style.css 末尾，原样保留 ——
+      它是 orders 子模块的专属样式，我们的改造层里没有对应内容。
+   ⚠️ 它用的是上游令牌名（--border / --text / --layer-2 / --layer-3 / --muted），
+      这几个令牌在本文件的令牌层里同时定义了（与 --line / --fg / --card 并存），
+      所以直接可用，不需要改名。
+   ═══════════════════════════════════════════════════════════════════════ */
+/* ── harness → 开发工单（dev-orders）────────────────────────────────────
+   左列表 + 右对话流（2026-10-08 改版：从卡片列表改成 dsh 式的会话视图）。
+   对话记录来自执行器的 transcript（append-only jsonl，按行号增量读取）。
+   颜色全走主题变量，暗/亮/极光三套自动跟随。
+   r107：去掉此处的 1180px 覆写 —— 容器统一 940px（同 .is-fix 那条注释）。 */
+.devorder-panes { display: flex; gap: 12px; align-items: flex-start; }
+.devorder-side { width: 268px; flex: none; display: flex; flex-direction: column; gap: 8px; }
+.devorder-side-head { display: flex; align-items: center; gap: 8px; }
+.devorder-side-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.devorder-side-list { display: flex; flex-direction: column; gap: 6px; max-height: 560px; overflow: auto; }
+.devorder-row { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; cursor: pointer; background: var(--layer-2); transition: border-color .15s; }
+.devorder-row:hover { border-color: var(--muted); }
+.devorder-row.is-active { border-color: var(--accent); }
+.devorder-row-top { display: flex; align-items: center; gap: 7px; }
+.devorder-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--fg-dim); }
+.devorder-dot.is-running { background: var(--accent); }
+.devorder-dot.is-ready { background: var(--orange); }
+.devorder-dot.is-published { background: var(--green); }
+.devorder-dot.is-failed { background: var(--red); }
+.devorder-dot.is-discarded { background: var(--fg-mute); }
+.devorder-title { font-size: 14px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.devorder-sub { display: flex; gap: 8px; font-size: 12px; color: var(--muted); margin-top: 3px; }
+.devorder-main { flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--layer-2); display: flex; flex-direction: column; min-height: 460px; }
+.devorder-main-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.devorder-head-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.devorder-chat { padding: 12px; display: flex; flex-direction: column; gap: 8px; max-height: 560px; overflow: auto; }
+.devorder-req-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--layer-3); }
+.devorder-req-label { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+.devorder-req-text { font-size: 14px; color: var(--text); line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.devorder-msg { display: flex; gap: 8px; align-items: flex-start; }
+.devorder-msg .devorder-dot { margin-top: 5px; }
+.devorder-msg-text { font-size: 14px; color: var(--text); line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.devorder-divider { text-align: center; color: var(--muted); font-size: 11px; margin: 2px 0; }
+/* 「正在连接 X…」（思考前提示）：左对齐的小字弱化行，别做成居中分隔线 —— 它会出现很多次。 */
+.devorder-notice { color: var(--muted); font-size: 12px; margin: 1px 0; opacity: .85; font-style: italic; }
+.devorder-tool { border: 1px solid var(--border); border-radius: 10px; background: var(--layer-3); font-size: 12px; }
+.devorder-tool.is-error { border-color: var(--red); }
+.devorder-tool-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; cursor: pointer; }
+.devorder-tool-ic { width: 8px; height: 8px; border-radius: 6px; flex: none; background: var(--green); }
+.devorder-tool-ic.is-error { background: var(--red); }
+.devorder-tool-brief { flex: 1; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.devorder-tool-toggle { flex: none; color: var(--muted); font-size: 12px; }
+.devorder-tool-full { margin: 0; padding: 8px 10px; border-top: 1px solid var(--border); max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; color: var(--text); font-family: ui-monospace, Consolas, 'Courier New', monospace; font-size: 12px; line-height: 1.6; }
+.devorder-tool-full[hidden] { display: none; }
+.devorder-done { border: 1px solid var(--green); border-radius: 10px; padding: 10px 12px; background: color-mix(in srgb, var(--green) 7%, transparent); }
+.devorder-fail { border: 1px solid var(--red); border-radius: 10px; padding: 10px 12px; background: color-mix(in srgb, var(--red) 7%, transparent); }
+.devorder-done-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.devorder-done-sub { font-size: 12px; color: var(--muted); margin-top: 4px; white-space: pre-wrap; word-break: break-word; }
+.devorder-empty { padding: 24px 12px; text-align: center; color: var(--muted); font-size: 14px; line-height: 1.8; }
+.devorder-main > .devorder-empty { flex: 1 1 auto; }
+.devorder-usermsg { border: 1px solid var(--border); border-radius: 10px; background: var(--layer-3); padding: 8px 12px; }
+.devorder-usermsg-who { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+.devorder-composer { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); }
+/* 本次开发的用量条（token 用量 + 缓存命中率）：贴在输入框上方，安静地一行。 */
+.devorder-usage {
+  display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center;
+  padding: 6px 12px; font-size: 12px; color: var(--muted);
+  border-top: 1px solid var(--border); background: var(--layer-1);
+}
+.devorder-usage b { color: var(--text); font-weight: 600; }
+.devorder-usage-t { color: var(--muted); }
+.devorder-usage .is-good b { color: var(--green); }
+.devorder-usage .is-bad b { color: var(--orange); }
+.devorder-composer input {
+  flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--layer-3); color: var(--text); font-family: inherit; font-size: 14px;
+}
+.devorder-composer input:focus { outline: none; border-color: var(--accent); }
+.devorder-wl-add { display: flex; gap: 8px; margin: 10px 0; }
+.devorder-wl-add input {
+  flex: 1; padding: 6px 10px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--layer-2); color: var(--text); font-family: inherit; font-size: 14px;
+}
+.devorder-wl-list { display: flex; flex-wrap: wrap; gap: 8px; min-height: 32px; }
+.devorder-wl-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 3px 10px; font-size: 14px; color: var(--text); background: var(--layer-2);
+}
+.devorder-wl-del {
+  border: none; background: none; color: var(--muted); cursor: pointer;
+  font-size: 14px; line-height: 1; padding: 0 2px;
+}
+.devorder-wl-del:hover { color: var(--red); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   r93：后台不再白烧 CPU/GPU（R78-12 的落地）
+   ──────────────────────────────────────────────────────────────────────────
+   背景：R76 为了解决"窗口被遮挡时 Chromium 节流心跳 → 看门狗误判僵死 → 拆窗重建"，
+   在 webPreferences 里关掉了 backgroundThrottling。那一刀是对的，但代价是：
+   页面隐藏/被遮挡时，本文件里 **infinite 动画**照样全速跑
+   （骨架 shimmer、.loading-spinner、.rdot.wait，以及 ? 主题的 VHS 扫描线 /
+   chaosBgSpin 18s / chaosBrandJitter .9s 等装饰动画，还有常驻的 auto 连接旋转 /
+   在线呼吸圈）。
+   笔记本上是实打实的耗电；集显/低端机上还会与合成器抢资源，表现为界面偶发
+   掉帧、看着"像闪了一下"。
+
+   R183 增补：① 原来漏了 `.auto-icon.is-spin svg`（连接中旋转）与
+   `.auto-avatar-dot::after`（在线呼吸圈）—— 这两个是"连上就常驻"的无限动画，
+   后台照样空转，已并入暂停清单；② 修正一处 selector bug：`.sl-node.is-wait
+   .sl-node-idx` 动画其实挂在 `::after` 上，原清单写的是元素本身，等于没暂停，
+   改为 `::after`；③ 顺手把 `.btn.is-loading .btn-spin`（按钮内联加载圈）也纳入。
+
+   做法：页面不可见时由 ui/app/00-core.js 的 visibilitychange 给 <html> 挂
+   .qa-bg，这里只把**装饰性**动画暂停（animation-play-state: paused）。
+   页面一恢复，class 摘掉、动画立即继续 —— 可见状态下的观感逐帧不变。
+   回退方式：删掉这一段 + 00-core.js 里那 4 行监听即可，无其他耦合。
+
+   只列 infinite 的那批，不碰 fadeIn/popIn 这类**有限**入场动画：
+   暂停有限动画会让它在恢复后接着播尾巴，观感上是"迟到的入场"，没必要。
+   ══════════════════════════════════════════════════════════════════════════ */
+html.qa-bg .loading-spinner,
+html.qa-bg .rdot.wait,
+html.qa-bg .dot-wait,
+html.qa-bg .sk-line::after,
+html.qa-bg .sk-row::after,
+html.qa-bg .sk-col,
+html.qa-bg .sk-chart::after,
+html.qa-bg .sl-node.is-wait .sl-node-idx::after,
+html.qa-bg .mk-spin,
+html.qa-bg .auto-icon.is-spin svg,
+html.qa-bg .auto-avatar-dot::after,
+html.qa-bg .btn.is-loading .btn-spin,
+html.qa-bg #chaos-vhs .vhs-track,
+html.qa-bg[data-theme='?'] .app-shell::before,
+html.qa-bg[data-theme='?'] .brand,
+html.qa-bg[data-theme='?'] .tab.active,
+html.qa-bg[data-theme='?'] .tab.active::after,
+html.qa-bg[data-theme='?'] .dot-wait,
+html.qa-bg[data-theme='?'] .dot-on,
+html.qa-bg[data-theme='?'] .unread-pill,
+html.qa-bg[data-theme='?'] .status-badge,
+html.qa-bg[data-theme='?'] .loading-spinner,
+html.qa-bg[data-theme='?'] .sk-line::after,
+html.qa-bg[data-theme='?'] .sk-row::after {
+  animation-play-state: paused;
+}
+/* ════════════════════════════════════════════════════════════════════════════
+   R101：设置页左栏「第一个卡片」与其它左栏对齐 —— 同类控件只能有一套几何/配色
+   ──────────────────────────────────────────────────────────────────────────
+   用户给了四张截图（统计维度 / 技能下载 / harness / 设置），前三张的选中卡片
+   完全一致，唯独设置页的「模型与搜索」起始 x 比其它三处右挪 3px。真机实测
+   （真 Edge，1102×704 @dsf1.25，量到小数点后两位）逐项差异如下：
+
+     属性             .sn-item.on（三个导航页）    .settings-menu-item.active（设置页）
+     卡片左缘          8  （贴 .sidebar 内容盒）     11   ← 多 3px
+     条目节距          36px                          40px（.settings-menu gap:4px）
+     圆角              5px                           6px （皮肤层 L5392）
+     内边距左          12px                          13px
+     图标 / 图标间距   16px / gap 8px                17px / gap 9px
+     选中底色          --sel-bg                      --accent-soft（皮肤层 L5399）
+     左蓝条高度        24px（上下各内缩 6）           36px 满高
+     左蓝条右圆角      0 3px 3px 0                   2px
+     残留 1px 线框     无                            有
+
+   ① 那 3px 是三层叠加，后两层属皮肤层漏清：
+        .sidebar                padding-left 8   （L5993，全站统一）
+        > #settings-sidebar     border-left  1   ← 皮肤层 L5387 `border: 1px solid var(--line)`
+                                                  L6008 的改造层只清了 radius / box-shadow /
+                                                  background，**漏了 border** —— 与 r97 清
+                                                  .list-pane「一圈线框」同源，同一类漏项
+                                padding-left 2   ← L6008 `padding: 4px 2px`
+        → .settings-menu 起于 8 + 1 + 2 = 11；导航页那条链是 8 + 0 + 0 = 8。
+      归零后卡片回到 8；右缘对称外扩 3px（11+149=160 → 8+155=163），列宽不变。
+
+   ② 左蓝条高度要跟 .sn-bar 对齐，**必须动 06-settings-render.js 的 moveMenuInd()**
+      —— 它把 top / height 写成**内联**样式（top=offsetTop、height=offsetHeight），
+      CSS 覆盖不了。那边改成 offsetTop + 6 / offsetHeight - 12。
+
+   ⚠️ 只动设置页：.settings-menu-item / .sm-ico 的产出点唯一（06-settings-render.js:110），
+      全仓无第二处引用。
+   ⚠️ 本块必须排在 R95 焦点环块**之前** —— 那一块要靠"文件最末"压过皮肤层的
+      `input[type='text']:focus`（0,2,1），不能被挪后。
+   ════════════════════════════════════════════════════════════════════════════ */
+/* ① 清掉皮肤层残留的 1px 线框 + 去掉横向内边距 → 内容盒左缘 = 卡片左缘 = 8 */
+.sidebar > .settings-sidebar { border: 0; padding: 4px 0; }
+/* ② 条目节距 40 → 36（与 .side-nav 的零间距一致） */
+.settings-menu { gap: 0; }
+/* ③ 设置项与 .sn-item 逐项对齐（.sn-item 定义在 L6089 起） */
+.settings-menu-item {
+  gap: 8px;                 /* .sn-item gap: 8px */
+  padding: 0 8px 0 12px;    /* .sn-item padding: 0 8px 0 12px */
+  border-radius: 6px;       /* .sn-item border-radius: 5px（皮肤层 L5392 是 6px） */
+}
+.settings-menu-item .sm-ico { width: 16px; height: 16px; flex: 0 0 16px; }  /* .sn-logo 16px */
+.settings-menu-item.active {
+  background: var(--sel-bg);   /* 皮肤层 L5399 原为 --accent-soft：列表选中应与 .sn-item.on 同源 */
+  box-shadow: none;            /* 去掉皮肤层补回来的静态 inset 左蓝条（L5402）—— 高亮条只由
+                                  .settings-menu-ind 滑动提供，否则满高条 + 24px 滑动条叠成两截 */
+}
+.settings-menu-ind { border-radius: 0 6px 6px 0; }   /* 与 .sn-bar 的右圆角一致 */
+
+/* ════════════════════════════════════════════════════════════════════════════
+   R102：让「插件在哪开关」看得见 —— 左栏补「已安装」段 + 市场卡片绿钮变可点
+   ──────────────────────────────────────────────────────────────────────────
+   用户反馈：「有不少人反馈说找不到插件的位置，就是不知道在哪个界面开关插件」。
+   结构侧的改动在 14-chrome.js（左栏两段）与 16-market.js（绿钮改「管理」+ 跳转），
+   这里只负责这两件事的样式：
+
+     ① 市场卡片右侧那颗钮：原本是 r87 的 disabled 绿「已安装」（.mk-btn-done，
+        opacity:.55 靠 !important 掰回 1）—— 绿是"已装"的状态色，但它是**死的**：
+        点不动、也不告诉你去哪开。现在换成真按钮 .mk-btn-manage，颜色仍是绿
+        （状态没变），"能点"由 .mk-btn 那条通用 hover（转 accent）自己讲清楚。
+
+     ② 跳过去之后给目标卡一个 ~1.8s 的焦点环呼吸（JS 挂 .mcard-jump）。
+        列表长的时候滚过去也可能看漏，得有一下"就是这一张"的提示。
+        只用 outline-color + background-color —— 都不建合成层，
+        符合本项目**软件渲染**的规矩（铁律见第 2994 行 / R98）。
+
+   ⚠️ 本块必须排在 R95 焦点环块**之前** —— 那一块要靠"文件最末"压过皮肤层的
+      `input[type='text']:focus`（0,2,1），不能被挪后。位置规矩同 R101。
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── ① 已安装 = 可点的「管理」───────────────────────────────────────────── */
+.mk-btn-manage {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 42%, transparent);
+}
+/* 已安装卡片整体压暗（.mk-card.mk-installed 的 opacity:.82，r87）会把这颗**可点**的钮
+   一起压灰，看着又像被禁用了 —— 正是这次要修的毛病。改成只压"内容"（图标块 + 信息区），
+   动作区保持全强度：状态感还在，按钮不再是灰的。 */
+.mk-card.mk-installed { opacity: 1; }
+.mk-card.mk-installed > .mk-tile,
+.mk-card.mk-installed > .mk-info { opacity: .82; }
+
+/* ── ② 跳过去之后：目标卡片闪一下 ───────────────────────────────────────── */
+@keyframes r102CardJump {
+  0%   { outline-color: transparent; background-color: var(--layer-1); }
+  15%  { outline-color: var(--accent); background-color: color-mix(in srgb, var(--accent-soft) 70%, var(--layer-1)); }
+  55%  { outline-color: var(--accent); background-color: color-mix(in srgb, var(--accent-soft) 70%, var(--layer-1)); }
+  100% { outline-color: transparent; background-color: var(--layer-1); }
+}
+.mcard.mcard-jump {
+  outline: 2px solid transparent;
+  outline-offset: 2px;
+  opacity: 1;                       /* 压过 .mcard-off 的 opacity:.75，关着的卡也看得见 */
+  animation: r102CardJump 1.8s ease-out 1 both;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* 全局 reduce 块把 animation-duration 压成 1ms!important → 动画会"闪一下就没"。
+     这里直接把 animation-name 置 none，只留静态焦点环；JS 1.8s 后自己摘掉 class。 */
+  .mcard.mcard-jump { animation: none; outline-color: var(--accent); }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   R103：左栏「选中卡片」全 App 只留一套 —— 深蓝底 + 深蓝加粗字 + 左蓝条
+   ──────────────────────────────────────────────────────────────────────────
+   用户给了两张截图：① 聊天模式左栏「页面」（.bp-nav + .bp-radio），
+   ② 会话设置左栏「扩展」（.bp-act + .su-ext-n），问「后者的风格是不是不太对，
+   和二者界面和其他界面的选择卡片也不一样」。真机实测（1102×704 @dsf1.25，
+   transition / animation 已杀）确认同一个「选择项」角色当时有三套规格：
+
+     属性        .sn-item.on（主舞台 / 设置页）  .bp-nav.on        .bp-act.on
+     行高        36                              36                34   ← 矮 2px
+     静止字色    --fg                            --fg              --fg-dim  ← 发灰
+     选中底色    --sel-bg 深蓝 @.12              --accent-soft     --accent-soft
+     选中字色    --pcl-sel #2a80e3               --accent-hi       --accent-hi
+     选中字重    600                             600               400  ← 不粗
+     左标记      蓝条 3×24 + 前导图标染色        圆点（两页还不一致）  无
+
+   病根：.bp-act 本来是「动作按钮」—— #cc-actions 的「群发 / 清空已结束」、
+   #bp-setup-left「全部设置」的「打开完整设置页」。r95 为了给「技能 / 插件」加
+   入口复用了它（见下方 L6981 的注释），于是这两条带着动作按钮的规格混进了单选
+   列表 —— 它们在 DOM 里带 .on 与 aria-current，行为上就是选择项。
+   另外 r96 补几何时漏了 #cc-left 那条圆点覆写，同一个 .bp-radio 于是在两个全屏页
+   渲染成两种蓝（--accent-hi vs --accent）。
+
+   本块只统一「选择卡片」这一件事：行高 / 静止字色 / 选中底色 / 选中字色 /
+   选中字重 / 左标记。不动内距、gap、图标尺寸、行宽 —— 那几项由 r96「逐值照原型」
+   定，动它会与 .bp-nav-t 的省略号截断打架。
+   动作行（群发 / 清空 / 打开完整设置页）维持 34 高 / --fg-dim 不变：原型本身就是
+   .bp-nav 36 / .bp-act 34 两档，而且它们永远没有选中态。
+
+   令牌依据同 R101（L7751）：列表选中与 .sn-item.on 同源 —— 底色 --sel-bg、
+   字色 --pcl-sel、字重 600、左蓝条 3×24。
+
+   ⚠️ 本块必须排在 R95 焦点环块之前 —— 那一块要靠「文件最末」压过皮肤层的
+      input[type='text']:focus（0,2,1）。位置规矩同 R101 / R102。
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── ① 「扩展」里那两条 .bp-act 是选择项，补回选择项的规格 ──────────────────
+   原型（r96 勘定）：.bp-nav 36 高 / .bp-act 34 高 是两档 —— 前者是选择项，
+   后者是动作行。技能 / 插件走的是选择项，所以高度按 36 走。
+   只命中 [data-setup-ext]（extEntryHtml 的产出点唯一，见 14-chrome.js:125），
+   动作行 .bp-act 不受影响。 */
+#bp-setup-left .bp-act[data-setup-ext] {
+  height: 36px;          /* 原 34（继承自 #bp-setup-left .bp-act），与同栏 .bp-nav 齐平 */
+  font-size: 14px;     /* 原 13 —— 与同栏 .bp-nav-t 一致 */
+}
+/* 静止字色只能写给**未选中**的行。`#bp-setup-left .bp-act[data-setup-ext]` 是
+   (1,2,0)，比 `.bp-act.on` 的 (0,2,0) 高 —— 不加 :not(.on) 会连选中态的
+   --pcl-sel 一起压成 --fg（第一版实测：选中字色仍是 rgb(233,234,236)）。 */
+#bp-setup-left .bp-act[data-setup-ext]:not(.on) { color: var(--fg); }
+
+/* ── ② 选中态：底色 / 字色 / 字重 —— 全 App 一套 ────────────────────────── */
+.bp-nav.on { background: var(--sel-bg); }
+.bp-nav.on .bp-nav-t { color: var(--pcl-sel); font-weight: 600; }
+.bp-act.on { background: var(--sel-bg); color: var(--pcl-sel); }
+.bp-act.on span:not(.su-ext-n) { font-weight: 600; }
+.bp-act.on .su-ext-n { color: var(--pcl-sel); opacity: 1; }
+.bp-row.on { background: var(--sel-bg); }
+.bp-row.on .bp-rt { color: var(--pcl-sel); font-weight: 600; }
+
+/* ── ③ 左标记统一成蓝条：3 宽 / 24 高 / 右圆角 3 / 垂直居中 ────────────────
+   这里**不能**照 .sn-bar 写 top/bottom: 6px —— .bp-row 是两行（实测 51.98 高），
+   那套会把它拉成 34 高。改用 top: calc(50% - 12px) + height: 24px：
+   36 高的行算出来正好是 6px，与 .sn-bar 渲染逐像素一致；52 高的行则是 14px，
+   条始终 24 高、始终居中。 */
+.bp-nav, .bp-act, .bp-row { position: relative; }
+.bp-nav::before, .bp-act::before, .bp-row::before {
+  content: ''; position: absolute; left: 0; top: calc(50% - 12px);
+  width: 3px; height: 24px;
+  border-radius: 0 6px 6px 0; background: transparent;
+}
+.bp-nav.on::before, .bp-act.on::before, .bp-row.on::before { background: var(--pcl-sel); }
+
+/* ── ④ 前导标记染色：圆点跟字色走；两页的圆点色分裂一并收掉 ────────────────
+   #cc-left 那条 (1,3,0) 覆写在 L6494，必须用同特异性 + 更靠后压过去。 */
+.bp-nav.on .bp-radio { border-color: var(--pcl-sel); }
+.bp-nav.on .bp-radio::after { background: var(--pcl-sel); }
+#cc-left .bp-nav.on .bp-radio { border-color: var(--pcl-sel); }
+#cc-left .bp-nav.on .bp-radio::after { background: var(--pcl-sel); }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   R104：左栏「第一个可选卡片」全 App 统一落在距栏目外框 34px 处
+   ──────────────────────────────────────────────────────────────────────────
+   用户给了下载页左栏截图、圈出「市场」这个分组标题，问
+   「这些字会导致各个界面的第一个选项卡距离上部的位置不一样，能不能统一一下？」
+   真机枚举 11 个页签 + 2 个全屏页后，确认「首个可选行顶边 − 该栏外框顶边」
+   当时是四个值：
+
+     位置                                 现状     上面压着什么
+     #side-nav（存档/记忆/用量/下载 四页） 34  ✅  .sn-sec 分组标题
+     #side-nav（harness / SnowLuma 两页）   2      无标题，首个就是 .sn-item
+     #cc-left（聊天模式全屏）             23.19    .bp-sec「页面」
+     #bp-setup-left（会话设置全屏）         44      .bp-sec「选择会话」
+     #settings-sidebar（设置页）           101      .settings-runstate 运行状态卡
+
+   病根是两族标题的「上间距 + 行盒高」不一样，而栏自身的 padding-top 又各不同：
+     .sn-sec（L6087）padding: 12px 10px 5px + 11.5px 字（行盒 15）
+                     → 2 + 12 + 15 + 5 = 34
+     .bp-sec（L6329）margin:  18px 4px 4px 7px + 12px 字 / 继承 line-height 1.6
+                     （行盒 19.19）           → 18 + 19.19 + 4 = 41.19
+   再叠加两个全屏页的栏 padding-top（#cc-left 0 / #bp-setup-left 2），以及一个
+   更隐蔽的坑 —— **外边距塌陷**：#cc-left 顶内边距为 0，首标题那 18px 外边距
+   直接塌陷到栏外，栏内落点被结构性地钉死在 19.19+4 = 23.19，
+   用外边距怎么调都改不动。
+
+   本块把四处都归到 34，做法各不相同、但都只动「首标题 / 首行」：
+     ① 两个全屏页：首标题行盒归一 20px、上外边距 18 → 8
+        （栏 padding-top 2 + 8 + 20 + 4 = 34）
+     ② #cc-left 补 2px 顶内边距顶住塌陷，外边距才在栏内生效
+     ③ 运维组（harness / SnowLuma）左栏没有分组标题，补 32px 上外边距凑成 34
+   已经落在 34 的四处（存档 / 记忆 / 用量 / 下载）一个字都不动。
+   设置页的 101 是**运行状态卡**占位、不是标题造成的，按用户选择保持现状。
+
+   ⚠️ 只用 `:first-child` 命中首元素：有标题的页首个子元素是 .sn-sec，
+      `#side-nav > .sn-item:first-child` 天然不匹配；中段标题（「已安装」/
+      「群聊7/7」/「快捷操作」）与次栏（#chat-list / #memory-list）也都不受影响。
+   ⚠️ 本块必须排在 R95 焦点环块之前 —— 那一块要靠「文件最末」压过皮肤层的
+      input[type='text']:focus（0,2,1）。位置规矩同 R101 / R102 / R103。
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── ① 全屏页左栏：首标题行盒归一 20px + 上外边距 8px ─────────────────
+   #cc-left .bp-sec 那条 (1,1,0) 覆写在 L6484，本选择器 (1,2,1) 比它高，
+   同分也靠源顺序取胜，不需要 !important。
+   ⚠️ R131 起会话设置页左栏首子元素是搜索框挡板（.bp-search-wrap），
+      「选择会话」头不再是 :first-child —— 那条 8px/20px 改由
+      `#bp-setup-left .bp-search-wrap + .bp-sec` 承接（见 .bp-clear 之后），
+      这里只留聊天模式那份，免得留一条命中不到的规则。 */
+#cc-left > .bp-sec:first-child {
+  margin-top: 8px;      /* 原 18px（.bp-sec 基础规则 / #cc-left .bp-sec 覆写） */
+  line-height: 20px;    /* 原继承 1.6 → 19.19px，归一到 20，与 .bp-sec-row 齐平 */
+}
+
+/* ── ② 聊天模式左栏：补 2px 顶内边距顶住外边距塌陷 ───────────────────────
+   #cc-left 是 15-chat-chrome.js 插进 #session-list 的裸 div，原 padding: 0 2px
+   （R99-A，见 L6480）。顶内边距为 0 时首标题的 margin-top 会**塌陷到栏外**，
+   栏内落点恒为 19.19+4 = 23.19；补 2px 后外边距在栏内生效
+   （与 .bp-left 的 2px 一致，两栏的内缩约定继续统一）。 */
+#cc-left { padding-top: 2px; }
+
+/* ── ③ 运维组（harness / SnowLuma）左栏：没有分组标题，补 32px 顶部留白 ──
+   renderSideNav 对 ops 组走的是「无标题」分支（14-chrome.js L426），
+   首个 .sn-item 直接是 #side-nav 的第一个子元素，距栏顶只有栏自身的
+   padding-top 2px。补 32 凑成 34，与其余九页齐平。
+   ⚠️ 有标题的页首个子元素是 .sn-sec，:first-child 不匹配 → 那九页零影响。 */
+#side-nav > .sn-item:first-child { margin-top: 32px; }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   R105：两个全屏页左栏去掉「蓝色圆点」前导标记
+   ──────────────────────────────────────────────────────────────────────────
+   用户给了聊天模式左栏截图，圈出每一行开头那颗蓝色圆点，说「蓝色圆点不要」。
+
+   那颗圆点是 <span class="bp-radio">，全工程只有两个产出点，且都长在 .bp-nav 里：
+     14-chrome.js:475       会话设置页「选择会话」列表（data-setup-chat）
+     15-chat-chrome.js:251  聊天模式「页面」导航（会话 / 存档 / 记忆）
+   index.html 里一次都没有。
+
+   它本来就是多余的：R103 已经给 .bp-nav.on 加了与主舞台 .sn-item.on 同款的
+   左侧蓝条（.bp-nav.on::before，3×24，见 L7874-7879），再叠加 --sel-bg 选中
+   底色与 --pcl-sel 加粗字色，一行的选中提示已经三重，圆点是第四重。
+   去掉之后，本栏选中态与主舞台 .sn-item.on 的「蓝条 + 底色 + 粗字」逐项一致。
+
+   ⚠️ 不能只写 display:none。圆点占着 15px 宽 + 10px 间距共 25px 前导槽，
+      裸隐藏会让行文字从 x=49 塌到 x=24（真机实测），只比所在栏的分组标题
+      （「页面」/「选择会话」文字在 x=23）多 1px，看着像标题没缩进。
+      故把这 25px 槽留在原地：padding-left 8 → 33（= 8 + 15 + 10）。
+      实测行文字仍落在 x=49，与改前逐像素一致；且「标题 → 行文字」缩进 26px
+      与主舞台完全同值（主舞台 18→44，本栏 23→49），这条节奏没有被破坏。
+
+   ⚠️ 本块落地后，下面这些「圆点染色」规则全部变成死规则（元素已 display:none）：
+      L6374 / L6375（第 12 节基础）、L6491-6495（r96 那条 (1,3,0) 覆写）、
+      L7881-7886（R103 块 ④）。保留是为了可逆；要清理可另开一轮。
+   ⚠️ 位置规矩同 R101~R104：必须排在 R95 焦点环块之前。
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── ① 去掉前导圆点（全工程只有这两栏用 .bp-nav） ───────────────────────── */
+#cc-left .bp-radio,
+#bp-setup-left .bp-radio { display: none; }
+
+/* ── ② 把圆点原本占的 15px + 间距 10px 前导槽留在原地，文字位置一字不移 ──
+   #cc-left .bp-nav / #bp-setup-left .bp-nav 的原覆写都是 padding: 0 10px 0 8px
+   （L6489 / L6506，同为 (1,1,0)），本块更靠后 → 同分靠源顺序取胜，不需要 !important。 */
+#cc-left .bp-nav,
+#bp-setup-left .bp-nav { padding-left: 33px; }
+
+/* ── r108：给「页面」三项补回线性图标 ───────────────────────────────────
+   此前 R103 把 .bp-radio 隐藏、前导槽留 33px（15px 圆点 + 10px 间距）只为了文字位不动；
+   现在图标占回那个 15px 槽，文字仍停在 33px。仅聊天模式这栏（#cc-left）有图标，
+   会话设置栏（#bp-setup-left）无图标，故只回退 #cc-left 的 padding-left。 */
+#cc-left .bp-nav { padding-left: 8px; }
+#cc-left .bp-nav-ico {
+  width: 15px; height: 15px; flex: 0 0 15px;
+  stroke: currentColor; fill: none; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round; opacity: .82;
+}
+#cc-left .bp-nav.on .bp-nav-ico { stroke: var(--accent-hi); opacity: 1; }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   R95：把被压掉的焦点环补回来
+   ──────────────────────────────────────────────────────────────────────────
+   本文件上部有一条通用兜底：`:focus-visible { outline: 2px solid var(--accent) }`
+   （见「键盘可达性：统一焦点环」），全站绝大多数元素都靠它拿到焦点环。
+   但下面这四个选择器在自己**基础**规则里写了 `outline: none` —— 特异性与
+   `:focus-visible` 相同（0-1-0）、源顺序更靠后，于是把焦点环整个抹掉；
+   它们各自的 `:focus` 只把边框改成 `--muted`（低对比度，键盘用户几乎看不见）。
+   这里补回焦点环 —— 必须写在它们之后才能生效，所以放在文件末尾。
+   ════════════════════════════════════════════════════════════════════════════ */
+/* ⚠️ r97：上面那段说明里「特异性与 :focus-visible 相同（0-1-0）」只对了一半。
+   基础规则 `.fi-adapt-input { outline: none }` 确实是 (0,1,0)，但它**不是**压掉
+   焦点环的那一条 —— 皮肤层第 5570 行还有一条
+     `input[type='text']:focus { outline: 0; border-color: var(--accent); box-shadow: none }`
+   特异性 **（0,2,1）**，比 `.fi-adapt-input:focus-visible`（0,2,0）**高**，
+   而且它自己就写着 `outline: 0`。于是 R95 补的这四条里只有
+   `.fix-card textarea` 真正生效（textarea 的全局 focus 只有 (0,1,1)）；
+   挂在 `<input type="text">` 上的 `.fi-adapt-input` / `.mig-input` 两条
+   **一直是死的** —— 实测聚焦后 outline 仍为 none。
+   （`.fix-input` 侥幸活着：它的真实标记是 `<input class="fix-input">`，
+     **没有 type 属性**，`input[type='text']` 那条不匹配它。）
+   修法：给两条 input 选择器各加一个 `input` 类型选择器，把特异性提到 (0,2,1)，
+   与皮肤层那条**打平**；本块在文件最末尾，同分靠源顺序取胜 → 焦点环恢复。
+   实测（真实 Tab 键驱动、真 Edge）：加 `input` 前缀后 outline 立刻画出 2px；
+   把同一份规则**不带前缀**放到文件末尾则不画 —— 证明差异来自特异性而非源顺序。 */
+input.fi-adapt-input:focus-visible,
+input.mig-input:focus-visible,
+.fix-card textarea:focus-visible,
+.fix-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   启动引导（OOBE，2026-10-18）
+   PCL 扁平语言：面 = 卡片底 + 1px 描边；层次靠底色深浅，不靠阴影。
+   颜色全部走令牌，暗/亮主题自动适配。z-index 高于 .model-modal-overlay(9999)，
+   保证引导盖住一切（含设置页里可能开着的弹窗）。
+   ══════════════════════════════════════════════════════════════ */
+.ob-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  /* 2026-11-04（R181）：去掉 `backdrop-filter: blur(6px)`，遮罩加实到 90% 补偿。
+     这是全屏 fixed 层，而滚动发生在它内部的 .ob-card（overflow-y:auto）——
+     正是第 9055 行那条注释说的场景：本项目是**软件渲染**
+     （main.js 关掉硬件加速 + --disable-gpu + --disable-software-rasterizer），
+     每个 backdrop 层每帧都要在 CPU 上把背后区域读回来做高斯模糊，
+     滚动时背后内容每帧都变、结果无法缓存 → 上下滚动明显卡顿。
+     项目里 .model-modal-overlay / .modal-overlay 早就显式写了
+     `backdrop-filter: none`，只有这个后加的引导层漏了。
+     去掉模糊后靠 90% 的 page-bg 遮罩保持"背景退到后面"的层次，视觉差异很小。 */
+  background: color-mix(in srgb, var(--page-bg) 90%, transparent);
+  animation: obFadeIn 0.18s var(--ease-in-out);
+}
+.ob-overlay.closing {
+  animation: obFadeIn 0.16s var(--ease-in-out) reverse;
+}
+@keyframes obFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.ob-card {
+  width: min(660px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--line-str);
+  border-radius: 10px;
+  padding: 22px 24px 18px;
+  animation: obCardIn 0.22s var(--ease-in-out);
+}
+@keyframes obCardIn {
+  from { opacity: 0; transform: translateY(10px) scale(0.99); }
+  to { opacity: 1; transform: none; }
+}
+.ob-head {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+.ob-logo {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-hi);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+.ob-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--fg);
+  margin-bottom: 4px;
+}
+.ob-sub {
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--fg-dim);
+}
+.ob-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ob-step {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card-hi);
+}
+.ob-step.done {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+.ob-step-dot {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg-dim);
+  background: var(--field-bg);
+  border: 1px solid var(--line-str);
+}
+.ob-step.done .ob-step-dot {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.ob-step-body {
+  flex: 1;
+  min-width: 0;
+}
+.ob-step-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ob-step-opt {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--fg-mute);
+  border: 1px solid var(--line-str);
+  border-radius: 6px;
+  padding: 0 5px;
+  line-height: 16px;
+}
+.ob-step-desc {
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--fg);
+  margin: 4px 0 0;
+}
+/* 补充行：解释上一行的术语、「找不到怎么办」、「能不能跳过」。
+   字号更小但用 --fg-dim（--fg-mute 在 #2a2c33 上对比度约 3.4:1，
+   12px 正文读起来发虚 —— 萌新引导不能靠低对比度压层级）。 */
+.ob-step-hint {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--fg-dim);
+  margin: 4px 0 0;
+}
+.ob-step-status {
+  font-size: 12px;
+  color: var(--fg-dim);
+  margin-top: 5px;
+}
+.ob-step-status.ok {
+  color: var(--accent-hi);
+}
+.ob-step-go {
+  flex: none;
+  /* 顶部对齐而非居中：卡片有了补充行后高度不一，居中的按钮会飘在段落中间，
+     看不出它属于哪个步骤。对齐标题行才读得通。 */
+  align-self: flex-start;
+  margin-top: 1px;
+}
+.ob-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.ob-skip {
+  color: var(--fg-dim);
+}
+
+/* 「使用引导」侧栏入口：视觉与分区项同族（PCL 菜单项），
+   用上边距与主菜单分开；图标用当前色。 */
+.ob-entry {
+  margin-top: 2px;
+  color: var(--fg-mute);
+}
+.ob-entry:hover { color: var(--accent-hi); }
+
+/* 「去配置」配好后自动弹回引导：刚完成的步骤高亮闪一下，
+   让用户立刻明白"引导为什么又出现了"—— 是来带我走下一步的。 */
+.ob-step.just-done {
+  animation: obStepPop 0.6s var(--ease-in-out);
+  border-color: var(--accent);
+}
+@keyframes obStepPop {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.025); background: var(--accent-soft); }
+  100% { transform: scale(1); }
+}
+
+/* ── 市场页警告条（2026-10-18，技能/插件市场共用）─────────────────
+   为什么常驻：插件数量与 token 用量/缓存命中率直接相关（每个插件都往
+   系统提示里注入工具说明，前缀缓存的分母随之变大）；且本版本自带用量
+   优化，第三方同类插件会冲突双双失效。放在标题栏正下方 —— 装之前一定
+   看得见，又不挡搜索/筛选。视觉与 .mod-trust-all 同一套暖色警告约定
+   （warn-line 左边框 + warn-bg 浅暖底），不另起配色。 */
+.mk-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--warn-line, #e6b94d);
+  border-left-width: 4px;
+  border-radius: var(--r);
+  background: var(--warn-bg, #fff8e6);
+  color: var(--fg);
+}
+.mkw-ico {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  fill: var(--orange, #e6a23c);
+}
+.mkw-text p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--fg-dim);
+}
+.mkw-text p + p { margin-top: 3px; }
+.mkw-text b { color: var(--fg); }
+
+/* ── 设置页顶部全局提示的「知道了 / 展开」（2026-10-18）──────────────
+   长提示默认完整显示（新用户需要），点「知道了」后收成一行紧凑提示
+   （.set-hint--mini），选择记在 localStorage，随时可点「展开」恢复。 */
+.set-hint-x {
+  flex: 0 0 auto;
+  margin-left: auto;
+  align-self: center;
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0 2px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.set-hint-x:hover { color: var(--fg); }
+.set-hint--mini { padding-top: 6px; padding-bottom: 6px; margin-bottom: 10px; }
+
+/* ── 更新报告卡片：标题行吸顶（2026-10-18）──────────────────────────────
+   卡片自己内部滚动（.stage-report 的 max-height + overflow-y:auto），
+   旧实现标题行跟着内容一起滚出视野 —— 滚动到第二、三版时用户不知道
+   自己在看什么。sticky 到卡片顶边。
+   r134c（2026-10-18 晚）：**负 margin 吸顶方案废弃**。原写法是容器给
+   padding-top:16px、标题条用 margin:-16px -20px 0 往上顶掉它 —— 实测
+   sticky 的吸附遇到负 top margin 会「停在半路」：钉住后标题条上沿距
+   滚动口顶边差出一个 padding-top，露出一条 16px 的缝，滚动内容从缝里
+   穿出来（用户两次截图反馈的「标题条盖在文字上」就是这条缝，缝里的
+   文字被卡片边框切半行，看着像淡影）。改为：容器顶部**不给** padding，
+   标题条自带 16px 顶部留白、负 margin 只保留左右 —— 吸顶时天然贴住
+   滚动口顶边，缝隙从结构上不存在了。 */
+.stage-report .sr-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 -20px 0;
+  padding: 16px 20px 10px;
+  background: var(--card);
+  border-radius: var(--r) var(--r) 0 0;
+  border-bottom: 1px solid var(--line);
+}
+/* r134：吸顶下缘的渐隐 —— 内容滚到 header 下方要「淡出」而不是被硬切。
+   高度必须 **大于一整行**（12.5px × 1.75 行高 ≈ 22px，取 28px）——
+   第一版只给了 12px，一行字上半截被 header 不透明底切掉、下半截挂在
+   渐变里，看着像带删除线。
+   r134c：渐隐只在「真的滚动过」时出现 —— 停在顶部时第一条目不该被
+   渐变罩暗（::after 常驻的话，没滚动也会把第一行压暗半截）。
+   is-scrolled 由 14-chrome.js 的 scroll 监听开关。 */
+.stage-report .sr-head::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; top: 100%;
+  height: 28px;
+  background: linear-gradient(180deg, var(--card), transparent);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+.stage-report.is-scrolled .sr-head::after { opacity: 1; }
+
+/* ── 就绪指示器：未就绪项补缩写（2026-10-18）──────────────────────────
+   全绿时仍是四个点（最简洁）；某一项没就绪时，点旁边补一个红色缩写
+   （⚠QQ / ⚠SL / ⚠OB / ⚠配置），OneBot 连接中是橙色 "OB…"。
+   缩写只占 1~2 个字，四项全异常也不会撑破账号卡；完整说明在 title 里。 */
+.rdot-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.rdot-t {
+  display: none;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  letter-spacing: .2px;
+}
+.rdot-item.is-off .rdot-t { display: inline; color: var(--red); }
+.rdot-item.is-wait .rdot-t { display: inline; color: var(--orange); }
+/* 有缩写出现时点间距略放松，避免点贴着文字 */
+.readiness-dots:has(.rdot-t:not(:empty)) { gap: 9px; }
+
+/* 「对话内容」对照行：不是插件，用虚线分隔 + 中性色条，避免和插件排行混为一谈 */
+.uc-bar-row.contrast { cursor: default; }
+.uc-bar-row.contrast:hover { background: transparent; }
+.uc-bar-row.contrast .uc-rank { color: var(--faint); background: transparent; }
+.uc-bar-row.contrast .uc-name { color: var(--text); }
+.uc-bar-row.contrast .uc-bar-fill { background: var(--muted); }
+.up-sumline-note { color: var(--faint); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   连接页 · 工作台版（2026-10-27，R129）
+   ──────────────────────────────────────────────────────────────────────────
+   取代 R128 的「单卡模式」：那一版是"620px 居中卡 + 一个 56px 大圆 + 一句话"，
+   对完全不懂的人确实友好，但它是落地页的语言，不是控制台的语言 ——
+   1280px 的窗口里两侧各空 330px、没有页标题、端点/协议端/日志全塞进一个折叠，
+   摆在这套 PCL 扁平 UI 里就是"没做完"。
+
+   这一版按全站规则重排：
+     · 内容列 940px（与 .usage-wrap / 市场卡片行同宽），左对齐；
+     · 面 = 1px 描边 + 实心卡片底（--card），层次靠底色，不用阴影和大圆角；
+     · 状态 = 卡片左侧 3px 竖条 + 彩色标题（绿 / 橙 / 灰三档，语义与 .sl-chip 一致）；
+     · 强调色只给主按钮；其余控件沿用 .btn（透明底 + 同色描边）。
+
+   ⚠️ 上面的 .auto-* 是 R128 的旧规则，**仍被头像（.auto-avatar）、线性图标
+      （.auto-icon）、引导体（.auto-steps / .auto-field / .auto-pick）、
+      提示行（.auto-note）复用** —— 只改容器，别删它们。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* 根容器：覆盖 .auto-page 的 620px / 居中 / 24px 内边距 */
+.auto-page.cx-page {
+  max-width: 940px;
+  padding: 2px 0 22px;
+  gap: 12px;
+  align-items: stretch;
+  text-align: left;
+}
+
+/* ── 页头：标题 + 一句话 + 总状态 + 重新检测 ── */
+.cx-head { display: flex; align-items: center; gap: 14px; padding: 2px 2px 0; }
+.cx-head-main { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.cx-head-title {
+  margin: 0; font-size: 16px; font-weight: 600; line-height: 1.4;
+  color: var(--fg); letter-spacing: .2px;
+}
+.cx-head-sub { font-size: 12px; color: var(--fg-mute); }
+.cx-head-acts { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+/* .sl-chip 自带 margin-left:auto（它是给"标题右侧唯一元素"用的），这里在 flex 里要还原 */
+.cx-head-acts .sl-chip { margin-left: 0; }
+
+/* ── 卡片：1px 描边 + 实心底，9px 圆角，无阴影 ── */
+.cx-card {
+  position: relative; min-width: 0;
+  border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--card); padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+
+/* 状态卡：左侧竖条表示通/通不了/没跑（沿用 PCL 选中项的左竖条语法） */
+.cx-state { padding-left: 19px; }
+/* 竖条只覆盖头部（与 44px 头像等高），不拉到卡片底部 ——
+   拉满时会读成"整块卡片都在报警"，而它其实只是状态标记。 */
+.cx-state::before {
+  content: ''; position: absolute; left: 0; top: 13px;
+  width: 3px; height: 46px;
+  border-radius: 0 6px 6px 0; background: var(--fg-mute);
+}
+.cx-state.is-ok::before { background: var(--green); }
+.cx-state.is-warn::before { background: var(--orange); }
+.cx-state.is-off::before { background: var(--fg-mute); }
+
+/* 顶部：头像 / 线性图标 + 结论 + 身份 */
+.cx-state-top { display: flex; align-items: center; gap: 13px; }
+.cx-state-mark { position: relative; flex-shrink: 0; }
+.cx-state-mark .auto-avatar {
+  width: 44px; height: 44px; font-size: 18px; box-shadow: none;
+  position: relative; overflow: hidden;
+}
+.cx-state-mark .auto-avatar-dot {
+  width: 12px; height: 12px; border-width: 2px;
+  border-color: var(--card); right: -1px; bottom: -1px;
+}
+/* 机器人头像：真实 QQ 头像（/api/avatar 本地缓存）叠在原来那层「按号取色」的渐变上。
+   渐变 + 昵称首字保留为兜底 —— 断网、CDN 抽风、或者 QQ 号不是纯数字时，
+   img 会被 bindConnAvatarFallback 藏掉，露出下面这一层，不会是空白圆。 */
+.cx-av-fb {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  font-size: inherit; font-weight: 700; line-height: 1; color: #fff;
+  user-select: none;
+}
+.cx-av-img {
+  position: absolute; inset: 0; display: block;
+  width: 100%; height: 100%;
+  object-fit: cover;      /* 原图未必是正方形，裁切而不是拉伸 */
+  border-radius: inherit;
+}
+.cx-state-mark .auto-icon { width: 44px; height: 44px; border-radius: 10px; }
+.cx-state-mark .auto-icon svg { width: 21px; height: 21px; }
+.cx-state-id { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.cx-state .auto-id { justify-content: flex-start; }
+
+/* 复用 #conn-verdict 这个锚点（updateConnectionLive 会写它的 is-ok/is-warn），
+   但在这里把它降级成"纯文字块" —— 它原本是带边框和底色的独立块，
+   直接塞进卡片会变成卡中卡。 */
+.cx-state .conn-verdict {
+  padding: 0; border: 0; border-radius: 0; background: transparent; display: block;
+}
+.cx-state .conn-verdict-title { font-size: 16px; font-weight: 600; letter-spacing: .2px; }
+
+/* 副标题：结论下面那句人话 */
+.cx-state > .conn-verdict-sub { margin: 0; max-width: 760px; }
+.cx-state > .conn-verdict-sub:empty { display: none; }
+
+/* ── 连接详情：2×2 事实格 ── */
+.cx-metrics {
+  border-top: 1px solid var(--line); padding-top: 11px;
+  display: flex; flex-direction: column; gap: 9px;
+}
+.cx-metrics-head {
+  display: flex; align-items: baseline; gap: 10px;
+  font-size: 11px; letter-spacing: .3px; color: var(--fg-mute);
+}
+.cx-metrics-head em { margin-left: auto; font-style: normal; font-size: 11px; opacity: .85; }
+/* 4 列而不是 2×2：940px 内容列下 2 列会让每格空到 490px、字只占三分之一，
+   看着松散；4 列（每格约 225px）刚好放下 ws://192.168.1.100:3001 这种地址。 */
+.cx-metrics-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.cx-metric {
+  min-width: 0; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--card-hi);
+  display: flex; flex-direction: column; gap: 3px;
+}
+.cx-metric-k { font-size: 11px; color: var(--fg-mute); }
+.cx-metric-v {
+  font-size: 12px; color: var(--fg);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+code.cx-metric-v { font-family: var(--mono); font-size: 12px; color: var(--fg-dim); }
+.cx-metric-v em { font-style: normal; font-size: 11px; color: var(--fg-mute); margin-left: 4px; }
+.cx-ok { color: var(--green); }
+.cx-dim { color: var(--fg-mute); }
+
+/* ── 引导体（密码框 / 选号 / 三步安装）：宽度收到可读区间，别铺满 940 ── */
+.cx-state-body:empty { display: none; }
+.cx-state-body .auto-steps { margin-top: 0; }
+.cx-state-body .auto-step { padding: 10px 0; }
+.cx-state-body .auto-step-desc { max-width: 620px; }
+.cx-state-body .auto-field { max-width: 460px; margin-top: 0; }
+.cx-state-body .auto-pick { max-width: 560px; }
+/* 序号圆点：原本是蓝底蓝字（那是"主流程"的语义），但这一块经常出现在橙色
+   的"还差一步"状态里，蓝点混在橙卡里很跳 —— 改成中性色，让状态色只属于标题。 */
+.cx-state-body .auto-step-no {
+  background: color-mix(in srgb, var(--fg-mute) 20%, transparent);
+  color: var(--fg-dim);
+}
+/* 引导里的按钮与输入框统一到全局控件高度（.btn 30px / .field input 34px），
+   否则会出现"按钮 28、输入框 34"的参差。 */
+.cx-state-body .auto-step .btn { height: 30px; }
+.cx-state-body .auto-field input {
+  height: 34px; padding: 0 12px; border-radius: 6px;
+  border-color: color-mix(in srgb, var(--fg) 20%, transparent);
+}
+.cx-state-body .auto-field .btn { height: 34px; }
+
+/* ── 底部：主按钮 + 提示 ── */
+.cx-state-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.cx-state-foot:empty { display: none; }
+.cx-primary { min-width: 132px; height: 32px; padding: 0 20px; font-size: 14px; border-radius: 6px; }
+.cx-state-foot .auto-note { font-size: 12px; }
+
+/* ── 协议端卡 ── */
+.cx-proc-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.cx-card-title {
+  margin: 0; font-size: 14px; font-weight: 600;
+  color: var(--fg); letter-spacing: .2px;
+}
+.cx-proc-head .conn-proc-chip { margin-left: 0; }
+.cx-proc-acts { margin-left: auto; display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.cx-proc-meta {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  border-top: 1px solid var(--line); padding-top: 10px;
+}
+.cx-proc-dir {
+  min-width: 0; flex: 1;
+  font-family: var(--mono); font-size: 12px; color: var(--fg-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cx-proc-k { flex-shrink: 0; font-size: 11px; color: var(--fg-mute); }
+/* 协议端操作的一行反馈（启动失败 / 没目录 / 找不到 / 控制台打不开）。
+   空时不占位；有内容时用浅蓝（--accent-hi），与"手检结论"同一档语气。 */
+.cx-proc-hint {
+  font-size: 12px; line-height: 1.65;
+  color: var(--accent-hi);
+  overflow-wrap: anywhere;
+}
+.cx-proc-hint:empty { display: none; }
+.cx-switch {
+  display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0;
+  font-size: 12px; color: var(--fg-dim); cursor: pointer;
+}
+.cx-switch input { margin: 0; }
+
+/* ── 折叠组：一块外框 + 内部分隔线，比四个独立 details 干净 ── */
+.cx-adv {
+  border: 1px solid var(--line); border-radius: var(--r);
+  background: var(--card); overflow: hidden;
+}
+.cx-fold + .cx-fold { border-top: 1px solid var(--line); }
+.cx-fold > summary {
+  display: flex; align-items: center; gap: 8px;
+  height: 38px; padding: 0 14px;
+  cursor: pointer; user-select: none; list-style: none;
+  font-size: 12px; color: var(--fg-dim);
+}
+.cx-fold > summary::-webkit-details-marker { display: none; }
+/* 三角用 CSS 画，避免 ▸/▾ 在不同字体下宽度漂移 */
+.cx-fold > summary::before {
+  content: ''; flex-shrink: 0; width: 0; height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  opacity: .55;
+  transition: transform .15s var(--ease-out-quart);
+}
+.cx-fold[open] > summary::before { transform: rotate(90deg); }
+.cx-fold > summary:hover { background: var(--hover); color: var(--fg); }
+.cx-fold-sub { font-size: 11px; color: var(--fg-mute); }
+.cx-fold-body { border-top: 1px dashed var(--line); padding: 2px 14px 14px; }
+.cx-fold-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 9px 0; font-size: 12px; color: var(--fg-mute);
+}
+.cx-fold-bar-r { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.cx-fold-body .snowluma-logs-view { border-radius: 6px; border: 1px solid var(--line); }
+/* 端点表单改两列 grid：flex-wrap 下三个 field 会挤在一行、第四个掉到下一行，
+   左右边界对不齐。两列 = 地址一对、令牌一对，最整齐。 */
+.cx-fold-body .field-row {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px; margin-bottom: 12px;
+}
+.cx-fold-body .field-row .field { min-width: 0; }
+@media (max-width: 800px) {
+  .cx-fold-body .field-row { grid-template-columns: 1fr; }
+}
+
+/* 窄窗口：事实格降到 2 列。
+   阈值取 1000px 而不是 800px —— 内容列固定 940，扣掉左栏 165 与两侧 26×2 后，
+   窗口宽度低于约 1000 时每格就不到 190px，`ws://192.168.1.100:3001` 会被截成
+   省略号，"看地址"这个主要用途就废了。 */
+@media (max-width: 1000px) {
+  .cx-metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 800px) {
+  .cx-head { flex-wrap: wrap; }
+  .cx-head-acts { margin-left: 0; width: 100%; }
+}

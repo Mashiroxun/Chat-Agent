@@ -257,7 +257,7 @@ function bindUiCustomEvents() {
      背景事实，改这里之前先读：
        · 本地图片  config.ui.bgImage → #app-bg 的 background-image
        · 小红车壁纸 localStorage['wp-console-bg'] → html[data-wp='on'] + #wp-bg-video/#wp-bg-img
-     而 style.css:493 有一条 `html[data-wp='on'] #app-bg { display: none }` ——
+     而 01-base.css 里有一条 `html[data-wp='on'] #app-bg { display: none }` ——
      **壁纸一启用，本地图就被整层隐藏**。两者不是叠加，是后者顶掉前者。
 
      这正是把壁纸页收回设置的直接原因：拆在两个入口时，用户在设置里选完图

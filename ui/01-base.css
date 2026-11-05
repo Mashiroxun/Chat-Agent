@@ -1,0 +1,637 @@
+/* ================================================================
+   01-base.css — CSS 变量 / 暗亮主题 / 重置 / 启动 loading 壳
+   由 style.css 拆分而来（原行 1–630）
+   ⚠️ 正文注释里的「第 N 行」均指拆分前的原 style.css，查阅见 ui/style.css.bak-20261105-split
+   引入顺序不可调换，层叠依赖原始先后
+   ================================================================ */
+
+/* ══════════════════════════════════════════════════════════════
+   QQ Agent 控制台样式 —— PCL 扁平版（v0.5 整体换肤）
+   ══════════════════════════════════════════════════════════════
+   设计来源：QQAgent-主界面原型-v2.html（PCL 启动器风格）。
+   视觉语言只有四条：
+
+     · 面    —— 1px 实色描边 + 实心卡片底，层次靠底色深浅，不靠阴影
+     · 控件  —— 「透明底 + 1px 同色描边」（PCL MyButton 默认色型）；
+                只有主按钮用蓝色渐变（Highlight 色型）
+     · 选中  —— 左侧蓝竖条 + 蓝字（PCL MyListItem / ColumnCheck），
+                不加整行高亮底色
+     · 顶栏  —— 46px 蓝色渐变；导航 = 白色胶囊（选中）/ 透明（未选中）
+
+   文件结构（三层，自上而下按源顺序生效）：
+     ① 令牌层   :root / [data-theme]  —— 全站 1900+ 处 var() 的总开关
+     ② 布局层   骨架、面板、各页面组件（保留下来的原有实现）
+     ③ 改造层   文件末尾「PCL 扁平化改造层」—— 用同特异性靠顺序覆盖 ②
+
+   因此「改外观」只应改 ① 与 ③：动 ② 容易碰到布局与交互契约。
+
+   ⚠️⚠️ 本文件**刻意存在大量"同名选择器重复出现"**（如 #topbar ×4、
+       .session-meta .session-retry-btn ×5、input.sw ×4、.modal-overlay ×3、
+       :root ×5 …）—— 这是上面三层设计的**必然结果**，不是冗余、更不是死代码：
+         · ② 布局层先给一个基准样式；
+         · ③ 改造层在文件后段用**同特异性**再写一遍来覆盖（CSS 靠"后出现者胜"）。
+       所以**不要**做"合并重复选择器"的重构 —— 合并会改变层叠顺序，
+       等于把改造层的覆盖提前到基准层之前，全站换肤会整片塌掉。
+       唯一安全的清理方向是删「三层都没引用到」的选择器（需逐个交叉核对 HTML/JS），
+       收益远小于风险，故本工程选择保留。
+     判断某条规则是否真死：搜选择器里的类名/ID 是否在 ui/index.html、ui/app/*.js
+     出现过。仅凭"同选择器出现过两次"就删，是**错**的。
+*/
+
+/* ── 令牌：PCL 扁平设计系统（对齐「QQAgent-主界面原型-v2」）──────────
+   ⚠️ 旧变量名（--layer-* / --bg* / --lift* / --paper-edge / --inset-* …）全部保留，
+      只是重新指向新的取值 —— 全站 1900+ 处 var() 引用无需改动即整体换色换质感。
+   ⚠️ :root 与 [data-theme='dark'] 写在同一条规则里，"默认"和"显式选暗色"共用一套值。 */
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* ── 原型 v2 的核心令牌 ── */
+  --page-bg: #1b1c20;      /* 窗口底 */
+  --card: #24252b;         /* 卡片 / 面板 */
+  --card-hi: #2a2c33;      /* 卡片内的次级面（表头、按钮、输入槽） */
+  --line: rgba(255, 255, 255, .07);      /* 面的 1px 描边 */
+  --line-str: rgba(255, 255, 255, .15);  /* 控件描边（要更清楚） */
+  --fg: #e9eaec;
+  --fg-dim: #9aa0aa;
+  --fg-mute: #6f757f;
+  --field-bg: #1d1e23;     /* 输入框底 */
+  --bubble-me: #2f3a4d;
+  --bubble-bot: #26272e;
+  --accent: #3d8bfd;
+  --accent-hi: #7fb0ff;
+  --accent-soft: rgba(61, 139, 253, .16);
+  --pcl-sel: #2a80e3;      /* PCL MyListItem 选中色（左蓝条 + 蓝字） */
+  --hint-fg: #8db9ff;      /* PCL MyHint(Theme=Blue) 字色 */
+  --btn-hl: #68b0ff;       /* PCL MyButton Highlight：边框色 = 文字色 */
+  --btn-hl-sub: #7f7f7f;
+  --btn-normal: #e7f3ff;   /* PCL MyButton 默认色型 */
+  --topbar-h: 46px;
+  --r: 10px;
+
+  /* ── 旧令牌别名（保持全站引用有效）── */
+  --layer-0: var(--page-bg);
+  --layer-1: var(--card);
+  --layer-2: var(--card-hi);
+  --layer-3: #2f3138;                  /* 浮层（下拉 / 弹窗）比卡片再高一档 */
+  --bg: var(--layer-0);
+  --bg-2: var(--layer-1);
+  --bg-3: var(--layer-2);
+  --frame-bg: var(--page-bg);
+  --border: var(--line-str);
+  --text: var(--fg);
+  --muted: var(--fg-dim);
+  --faint: var(--fg-mute);
+  --code-bg: #15161a;
+  --code-fg: #b9c0cc;
+  --green: #3ddc84;
+  --red: #ff6b6b;
+  --orange: #f5a623;
+
+  /* r107：一键信任全部 banner 的暖色提示（暗色：深金描边 + 深暖底） */
+  --warn-line: #6b561f;
+  --warn-bg: #3a2f17;
+
+  --hover: rgba(127, 127, 127, .10);
+  --active: rgba(127, 127, 127, .16);
+  --overlay: rgba(0, 0, 0, .55);
+  --depth: rgba(0, 0, 0, .4);
+  --bevel: rgba(255, 255, 255, .05);
+  --on-accent: #fff;
+
+  /* ── 扁平化：拟物 gadget 全部归零 ──
+     用「0 0 0 0 transparent」而不是 none：它们大量出现在
+     `box-shadow: var(--lift-sm), var(--paper-edge), inset ...` 这样的多值列表里，
+     写 none 会让整条声明在计算值阶段失效（IACVT）而丢掉后面的 inset 圆环。 */
+  --lift-sm: 0 0 0 0 transparent;
+  --lift: 0 0 0 0 transparent;
+  --lift-lg: 0 18px 50px rgba(0, 0, 0, .5);
+  --paper-edge: 0 0 0 0 transparent;
+  --inset-edge: 0 0 0 0 transparent;
+  --sel-bar: inset 3px 0 0 var(--pcl-sel);
+  --sel-bg: rgba(42, 128, 227, .12);
+  --inset-bg: var(--field-bg);
+  --shadow-sm: 0 0 0 0 transparent;
+  --shadow-md: 0 0 0 0 transparent;
+  --shadow-lg: var(--lift-lg);
+  --edge: var(--line);
+
+  --mono: 'JetBrains Mono', 'Cascadia Code', 'Microsoft YaHei', Consolas, monospace;
+  --ui: 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', system-ui, sans-serif;
+}
+
+/* ── 亮色 ── */
+[data-theme='light'] {
+  color-scheme: light;
+
+  --page-bg: #eef1f5;
+  --card: #ffffff;
+  --card-hi: #f5f7fa;
+  --line: rgba(0, 0, 0, .08);
+  --line-str: rgba(0, 0, 0, .16);
+  --fg: #1f2329;
+  --fg-dim: #5b636e;
+  /* R64：原 #868e99 在白底上只有 3.32:1，达不到 WCAG AA（正文 4.5:1）——
+     .idbar-sub / .set-head-sub / .sq-title / .module-note 正文等辅助文字全部读它。
+     调深到 #69707a：白底 5.00:1、卡片次面(#f5f7fa) 4.66:1，色相仍为中性蓝灰。 */
+  --fg-mute: #69707a;
+  --field-bg: #f5f7fa;
+  --bubble-me: #dbe9ff;
+  --bubble-bot: #f2f4f7;
+  --accent: #3d8bfd;
+  --accent-hi: #2f6fd0;
+  --accent-soft: rgba(61, 139, 253, .14);
+  --pcl-sel: #2a80e3;
+  --hint-fg: #2f6fd0;
+  --btn-hl: #2f6fd0;
+  --btn-hl-sub: #7f7f7f;
+  --btn-normal: #4a525d;
+
+  --layer-0: var(--page-bg);
+  --layer-1: var(--card);
+  --layer-2: var(--card-hi);
+  --layer-3: #ffffff;
+  --bg: var(--layer-0);
+  --bg-2: var(--layer-1);
+  --bg-3: var(--layer-2);
+  --frame-bg: var(--page-bg);
+  --border: var(--line-str);
+  --text: var(--fg);
+  --muted: var(--fg-dim);
+  --faint: var(--fg-mute);
+  --code-bg: #f7f8fa;
+  --code-fg: #454b55;
+  --green: #1f9d55;
+  --red: #d94a4a;
+  --orange: #c97a12;
+
+  /* r107：一键信任全部 banner 的暖色提示（亮色：金描边 + 浅暖底） */
+  --warn-line: #e6b94d;
+  --warn-bg: #fff8e6;
+
+  --hover: rgba(127, 127, 127, .08);
+  --active: rgba(127, 127, 127, .14);
+  --overlay: rgba(20, 24, 33, .3);
+  --depth: rgba(16, 24, 40, .16);
+  --bevel: rgba(255, 255, 255, .85);
+  --on-accent: #fff;
+
+  --lift-sm: 0 0 0 0 transparent;
+  --lift: 0 0 0 0 transparent;
+  --lift-lg: 0 18px 50px rgba(16, 24, 40, .22);
+  --paper-edge: 0 0 0 0 transparent;
+  --inset-edge: 0 0 0 0 transparent;
+  --sel-bar: inset 3px 0 0 var(--pcl-sel);
+  --sel-bg: rgba(42, 128, 227, .10);
+  --inset-bg: var(--field-bg);
+  --shadow-sm: 0 0 0 0 transparent;
+  --shadow-md: 0 0 0 0 transparent;
+  --shadow-lg: var(--lift-lg);
+  --edge: var(--line);
+
+  --mono: 'JetBrains Mono', 'Cascadia Code', 'Microsoft YaHei', Consolas, monospace;
+  --ui: 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', system-ui, sans-serif;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   动效 token
+   ══════════════════════════════════════════════════════════════
+   设计取向：Linear 的丝滑转场 + Vercel 的克制配色。
+   控制台是要长时间盯着的界面，动效的目标是"让变化可追踪"，
+   而不是炫技 —— 所以位移都控制在 12px 以内、时长都在 360ms 以内，
+   强调色只用于传达状态，不用于装饰。
+
+   缓动曲线（为什么选这几条）：
+     --ease-out-quart  减速收尾，元素"到位"感最强。用于入场、悬浮抬升
+     --ease-in         加速离场。用于**收回/退出**
+                       （离场不该用减速曲线 —— 那会让元素"拖着尾巴"慢慢磨完，
+                         看着软塌塌、不干脆；离场要的是迅速让位给下一个动作）
+                       ⚠️ 刻意用标准 ease-in 而**不是** 4 次方：4 次方起手太慢，
+                          在 120ms 这种短时长下会先"钝一下"再唰地消失，反而不顺。
+     --ease-in-out     两端慢中间快。用于颜色/背景这类对称变化
+     --ease-spring     轻微过冲，给交互一点"手感"。用于弹窗、按压
+   ⚠️ 入场用 out、离场用 in —— 这是动效的基本对称。此前收回/展开共用
+      ease-out-quart，收回时那条减速尾巴就是"收回很拖沓"的观感来源。
+   时长分级：越快 = 越接近即时反馈；越慢 = 越像"场景切换"
+     --dur-fast     120ms  按压、hover 这类即时反馈
+     --dur-base     180ms  颜色/边框变化
+     --dur-slow     260ms  位移、展开收起
+     --dur-slower   360ms  模态框、页面转场
+   R89 补充的「专用档」（对齐 PCL2 CE，出处见下方 :root 内注释）：
+     --dur-instant   50ms  激活/展开态，观感等同"瞬"（PCL2 用 10ms）
+     --dur-tap       80ms  按压收缩（PCL2 MyButton MouseDown）
+     --dur-hover    100ms  悬停**进入**（PCL2 animationColorIn）
+     --dur-leave    200ms  悬停**离开**（PCL2 animationColorOut）
+     --dur-cancel   700ms  按下后划走取消的慢回弹（PCL2 MouseLeave）
+     --stagger      25ms  阶梯入场步进（PCL2 右栏每卡 +25ms）
+   ⚠️ 进出**刻意不对称**：hover 进 100 / 出 200；页面进 250~400 / 退 70~110。
+      同一组属性要为 :hover 与默认态各写一份值，别图省事写一个共用值。
+*/
+:root {
+  --ease-out-quart: cubic-bezier(.25, 1, .5, 1);
+  --ease-in: cubic-bezier(.4, 0, 1, 1);
+  --ease-in-out: cubic-bezier(.4, 0, .2, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 260ms;
+  --dur-slower: 360ms;
+
+  /* ── R89：PCL2 CE 对齐的「专用时长档」────────────────────────────
+     出处（pcl2-ce-src，全部有行号可复现）：
+       Controls/MyButton.xaml.cs:22-23    悬停进 100 / 出 200
+       Controls/MyButton.xaml.cs:167-208  按压三段式 80 / 300 / 800
+       Controls/MyListItem.xaml.cs:44-58  列表项 120 / 180
+       Controls/MyComboBoxItem.cs:11-12   下拉项 100 / 300
+       Controls/MyPageRight.cs            阶梯入场每卡 +25ms
+     这一组**不是**改写上面四档，而是给"专用动作"各配一个档位 ——
+     PCL2 的帧驱动引擎把时长切得极细，最有迁移价值的就是
+     「按压 / 悬停进入 / 悬停离开 / 取消回弹」互不复用。 */
+  --dur-instant: 50ms;
+  --dur-tap: 80ms;
+  --dur-hover: 100ms;
+  --dur-leave: 200ms;
+  --dur-cancel: 700ms;
+  --stagger: 25ms;
+
+  /* 位移尺度：统一控制"动多远"，避免各处乱写 px */
+  --shift-sm: 4px;
+  --shift-md: 8px;
+  --shift-lg: 12px;
+}
+
+/* ── 全局基础过渡 ──
+   给常见交互元素一个默认过渡，这样新增组件"天然就有"动效，
+   而不是每次都要记得补 transition。具体组件可按需覆盖。 */
+a,
+button,
+input,
+textarea,
+select,
+summary,
+[role='button'],
+[role='tab'],
+.clickable {
+  /* ⚠️ 这里配的是**离开**档（--dur-leave 200ms）—— 鼠标移出时回落到的就是它。
+     "进入"档由紧随其后的 :hover 规则单独压到 --dur-hover 100ms。
+     CSS 的 transition 取的是"变化发生之后"计算出来的那套值，所以：
+       进入 → :hover 命中 → 100ms（快）
+       离开 → :hover 失效 → 回落本规则 → 200ms（慢）
+     这就是 PCL2「进入快、离开慢」的纯 CSS 实现，不需要 JS 参与。 */
+  transition:
+    background-color var(--dur-leave) var(--ease-in-out),
+    border-color var(--dur-leave) var(--ease-in-out),
+    color var(--dur-leave) var(--ease-in-out),
+    box-shadow var(--dur-leave) var(--ease-in-out),
+    transform var(--dur-slow) var(--ease-out-quart),
+    opacity var(--dur-leave) var(--ease-in-out);
+}
+/* 悬停**进入**档（PCL2 animationColorIn = 100ms）。
+   ⚠️ 必须把整条 transition 重写一遍，不能只写 transition-duration ——
+      后者要按属性个数对齐顺序，将来增删一个属性就会整体错位。 */
+a:hover,
+button:hover,
+input:hover,
+textarea:hover,
+select:hover,
+summary:hover,
+[role='button']:hover,
+[role='tab']:hover,
+.clickable:hover {
+  transition:
+    background-color var(--dur-hover) var(--ease-in-out),
+    border-color var(--dur-hover) var(--ease-in-out),
+    color var(--dur-hover) var(--ease-in-out),
+    box-shadow var(--dur-hover) var(--ease-in-out),
+    transform var(--dur-hover) var(--ease-out-quart),
+    opacity var(--dur-hover) var(--ease-in-out);
+}
+
+/* ── 主题切换平滑过渡 ──
+   切换明暗时让颜色渐变而不是硬切，避免"闪一下"的廉价感。
+   注意：只过渡颜色相关属性，不过渡 transform —— 否则所有元素会一起抖动。 */
+body,
+.topbar,
+.settings-menu,
+.model-modal,
+.usage-card,
+.tier-bar,
+.tier-param,
+.usage-table th,
+.usage-table td {
+  transition:
+    background-color var(--dur-slow) var(--ease-in-out),
+    border-color var(--dur-slow) var(--ease-in-out),
+    color var(--dur-slow) var(--ease-in-out);
+}
+
+
+/* ── 设置项变动反馈：已移除（原「流动的浅黄色渐变」）──
+   原 .dirty-glow 是一条 rgba(255,213,79,.10~.22) 的半透明黄色渐变带
+   （background-size 220% + dirtyFlow 1.6s infinite），由表单 change/input
+   触发，一直挂到 600ms 防抖 + 保存请求完成才消失。
+   在透明分层窗口上它会被逐帧 alpha 混合成一条横向的黄色残影
+   —— 就是用户反复看到的"黄色的一坨"。
+   R95：连下面这条"置空"兜底规则也一并删掉 —— 全仓已无任何 add/remove 调用
+        （07-settings-events.js 的 markDirty 早已不再收集 dirtyEls，只留说明注释），
+        规则纯空转。（原文写"JS 里仍有 add/remove 调用"，与实际不符。）
+   ⚠️ 若将来要恢复这个提示：**不要用半透明逐帧动画**，透明分层窗口下必然糊成残影。 */
+
+/* ══════════════════════════════════════════════════════════════
+   无障碍：尊重"减少动态效果"系统偏好
+   ══════════════════════════════════════════════════════════════
+   部分用户会因动画产生眩晕/恶心（前庭功能障碍）。开启后：
+     - 位移、缩放、旋转全部禁用（保留 opacity 淡入淡出，那是最温和的）
+     - 时长压到 1ms 让过渡"瞬间完成"，避免残留动画
+   这是 WCAG 2.1 的建议项，不是可选项。
+*/
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* 位移/缩放类动画直接停掉，只留纯淡入淡出。
+     ⚠️ R95 修正（原清单 7 条里 4 条空转）：
+       · `.toast` 这个类**不存在** —— 真实类名是 .mk-toast / .upload-toast；
+       · `[class*='itemIn']` / `[class*='popIn']` / `[class*='slideIn']` 是按
+         **类名子串**匹配的，而真实类名是 new-item / upload-toast / model-dd，
+         都不含这些子串 —— 三条选择器永远不命中，等于没写。
+     改成真实类名之后，列表新条目（itemIn，位移 -5px）、上传提示 / 模型下拉
+     （popIn，位移 12px）、折叠体（pageIn，位移）在 reduce 下才是真正"不位移"，
+     而不是被上面的通配符压成 1 帧闪一下。
+     ⚠️ 刻意**不含** .model-modal-overlay：它的退场靠 .closing 的 fadeOut +
+        forwards 填充，一旦 animation:none，遮罩会保持全不透明直到 400ms 兜底
+        才消失 —— 比现在更糟。它的时长已被通配符压到 1ms，那才是正确的"瞬间消失"。 */
+  .model-modal,
+  .modal,
+  .skill-modal,
+  .usage-card,
+  .tier-btn,
+  .upload-toast,
+  .model-dd,
+  .session-item.new-item,
+  .chat-item.new-item,
+  .member-table tr,
+  .collapsible[open] > *:not(summary) {
+    animation: none !important;
+    transform: none !important;
+  }
+  /* 阶梯入场的延迟同样要归零：否则 reduce 模式下元素要先隐形 175ms 才出现，
+     那对前庭功能障碍用户比没有动画更难受。 */
+  .settings-pane > * { animation-delay: 0ms !important; }
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* 按钮与输入控件不使用浏览器默认边框。
+   ⚠️ 必须显式置 none：删除自定义 border 后，UA 默认的浅色描边会露出来
+   （表现为深色界面上每个按钮周围一圈"白边"——顶栏「消息/扩展」分组标题上的
+   白框就是它：.tab-group-head 没写 border，UA 的 outset 白边直接透出来）。
+   checkbox / radio 除外 —— 它们依赖原生外观渲染。
+   类选择器（.theme-option 等）特异性更高，自己声明的 border 不受影响。 */
+button,
+input:not([type='checkbox']):not([type='radio']),
+select,
+textarea { border: none; }
+
+/* ══════════════════════════════════════════════════════════════
+ 透明窗口的「圆角外壳」—— 不做整窗圆角裁剪，改用「矩形填充 + 四角 1/4 圆片」
+
+ 背景：本机 Windows 不给任何窗口加圆角（已用普通有边框窗口抓屏对照实测），
+ 所以四角只能自己画 —— electron/main.js 是 transparent: true，
+ 圆角外的像素必须真的是透明的、能透出桌面。
+
+ ⚠️ 为什么不再用 body { border-radius }（血泪教训）：
+ 给整窗内容套圆角裁剪，在**软件渲染**下每帧都要对整窗做一次抗锯齿圆角裁切。
+ 同环境重内容实测（真滚轮 + rAF 采样）：
+     整窗圆角裁剪      159 帧 / p95 19.0ms
+     干脆去掉圆角      281 帧 / p95  7.9ms
+     本方案（无裁剪）  323 帧 / p95  6.9ms   ← 比"没有圆角"还快
+ 而且原方案窗口越大越亏；本方案与窗口尺寸基本无关。注意这跟"透明窗口"无关 ——
+ 保留 transparent: true 但把半径去掉就已经回到满速，所以贵的是裁剪，不是透明。
+
+ 做法（零裁剪）：.win-frame 是 position:fixed 的整窗层，7 层背景拼出圆角：
+   3 个矩形（上条 / 中间 / 下条）铺满窗口，都不覆盖四角的 R×R 方块；
+   4 个 R×R 的 1/4 圆片（radial-gradient，弧内不透明、弧外透明）填在四角。
+ 角落方块里「弧外」那部分自然透出桌面 = 真圆角。
+ fixed 定位让它成为独立层，滚动时完全不参与重绘。
+
+ 仍然必须遵守：**body 不能有背景色**。按 CSS 规范，html 背景为 transparent 时
+ body 的背景会被「传播到画布」、铺满整个窗口矩形，背景色因此挂在 .win-frame 上。
+ contain: paint 保留（它让 body 成为 fixed 浮层的包含块，去掉实测更卡）。
+
+ 踩过的坑：曾经给 html 加「全透明渐变 background-image」想阻断背景传播，
+ 结果软件合成下根层被当成不透明层，四角渲染成纯黑 [0,0,0]（实测）。别走这条路。
+ ══════════════════════════════════════════════════════════════ */
+/* 从旧版（develop）移植的块会用到这几个 token，这里按 v0.4 自己的设计体系补齐别名：
+   · --glass-* 在 v0.4 里就是 --layer-*（本版不用毛玻璃，用实心分层）；
+   · --radius-* 对齐 v0.4 现有卡片圆角（7 / 10 / 14）；
+   · --topbar-* 是顶栏渐变（PCL 亮蓝），三套主题共用同一组。 */
+:root {
+  /* R46：圆角改由 Win11 DWM 提供（main.js roundedCorners: true，真圆角、弧外透桌面、
+     不依赖透明窗口）。页面自绘的圆角壳归零：两层圆角叠加会在角落露出 --frame-bg 的
+     深色弧片（用户看到"黑色糊在角上"）。若系统不给圆角（如 Win10），窗口就是方正
+     矩形 —— 也好过黑角。 */
+  --win-radius: 0px;
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 10px;
+  --glass-1: var(--layer-1);
+  --glass-2: var(--layer-2);
+  --glass-3: var(--layer-3);
+  --topbar-1: #4a97f5;
+  --topbar-2: #2f7fe8;
+}
+
+/* R46：窗口改回不透明后，画布（整个窗口矩形）用 --frame-bg 兜底 —— 别让画布
+   露出 BrowserWindow 的硬编码 backgroundColor。html 的背景会传播给画布，
+   且随主题/个性化底色联动。（页面自绘圆角壳已随 --win-radius: 0 归零，
+   圆角改由 Win11 DWM 的 roundedCorners 提供，见 electron/main.js R46 注释。） */
+html { background: var(--frame-bg); }
+
+body {
+  background: transparent;
+  height: 100vh;
+  /* R110：hidden → clip。⚠️ 这是本轮「点管理跳页后顶栏被顶出窗口」的
+     根治点之一：overflow:hidden 只是「不给人滚」，盒子本身仍是可用脚本
+     滚动的滚动容器 —— scrollIntoView()、input.focus() 都能把它滚起来。
+     一旦页面存在任何一像素的文档级溢出（本项目就有，见 .sel-menu 的 R110
+     注释），整个外壳就会被顶上去、#topbar 连同窗口按钮被窗沿裁掉。
+     clip 才是「永远不滚」：盒子根本不是滚动容器，scrollTop 恒为 0，
+     页面结构再有多余溢出也顶不动外壳。 */
+  overflow: clip;
+  contain: paint;
+}
+
+/* 圆角外壳：整窗填充 + 四个 1/4 圆角片。
+   层的顺序：本元素 z-index:-1 在最底，其上依次是 .app-shell 的装饰光晕与内容。
+   ⚠️ 四角圆片的弧心要落在「该方块朝窗口内部那一个角」：
+      窗口左上角方块 → 弧心在方块的右下（100% 100%）；
+      右上角 → 弧心在左下（0% 100%）；左下角 → 右上（100% 0%）；右下角 → 左上（0% 0%）。 */
+/* 背景图层（R40）：固定铺满、永不参与交互。图片由 JS 写进 style，
+   未设置时 background-image 为空 → 完全不绘制。 */
+.app-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  border-radius: var(--win-radius);
+  background-color: transparent;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* 小尺寸预览图别硬拉伸（内置主题跟随 src/wallpaper/theme.js 量到宽度 <720px 会写
+   bgSoften，见 00-core.js 的 .is-soft 挂载处）。一次性高斯模糊当氛围底，
+   比放大后的马赛克体面。blur 四边会漏出半透明边，inset 向外扩 60px 盖住 ——
+   body 是 overflow:clip，扩出去不会产生滚动条，也不需要 transform 缩放去遮边。 */
+.app-bg.is-soft {
+  inset: -60px;
+  filter: blur(var(--app-bg-soften, 28px)) saturate(1.15) brightness(0.9);
+}
+
+/* 壁纸套件接管背景后，这张自动抓取的缩略图彻底退场。
+   JS 在首帧绘制前已经判过一轮（有真壁纸就不铺，见 00-core.js），这里是兜底：
+   在壁纸页换壁纸 / 清壁纸时，不必等 /api/config 轮询回来才收起。 */
+html[data-wp='on'] #app-bg { display: none; }
+
+.win-frame {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-color: transparent;
+  /* ⚠️ 填充色统一走 --frame-bg（默认 = --layer-0）：个性化里调"底色不透明度"
+     就是把它换成半透明的 color-mix，让下面的背景图/桌面透上来。
+     别在这里直接写 var(--layer-0)，否则不透明度调节永远无效。 */
+  background-image:
+    radial-gradient(circle var(--win-radius) at 100% 100%, var(--frame-bg) 0 calc(var(--win-radius) - 0.5px), transparent var(--win-radius)),
+    radial-gradient(circle var(--win-radius) at 0% 100%, var(--frame-bg) 0 calc(var(--win-radius) - 0.5px), transparent var(--win-radius)),
+    radial-gradient(circle var(--win-radius) at 100% 0%, var(--frame-bg) 0 calc(var(--win-radius) - 0.5px), transparent var(--win-radius)),
+    radial-gradient(circle var(--win-radius) at 0% 0%, var(--frame-bg) 0 calc(var(--win-radius) - 0.5px), transparent var(--win-radius)),
+    linear-gradient(var(--frame-bg), var(--frame-bg)),
+    linear-gradient(var(--frame-bg), var(--frame-bg)),
+    linear-gradient(var(--frame-bg), var(--frame-bg));
+  background-size:
+    var(--win-radius) var(--win-radius),
+    var(--win-radius) var(--win-radius),
+    var(--win-radius) var(--win-radius),
+    var(--win-radius) var(--win-radius),
+    calc(100% - 2 * var(--win-radius)) var(--win-radius),
+    100% calc(100% - 2 * var(--win-radius)),
+    calc(100% - 2 * var(--win-radius)) var(--win-radius);
+  background-position:
+    0 0,
+    100% 0,
+    0 100%,
+    100% 100%,
+    var(--win-radius) 0,
+    0 var(--win-radius),
+    var(--win-radius) 100%;   /* ⚠️ 底条纵向必须写 100%。原先写 calc(100% - 14px)：
+     background-position 的百分比按「(容器高−图高)×p」求偏移，calc 混入长度会
+     再减一次 14px，底条被抬高 14px 悬空 —— 底边中间透出壁纸、
+     只剩两个底角圆片挂在下面，看起来像两只深色耳朵（2026-09-20 修复）。 */
+  background-repeat: no-repeat;
+}
+
+/* 顶栏紧贴窗口上沿：它必须自己带圆角，否则它的方角会盖住 .win-frame 画的圆角。
+   只裁自己的背景，刻意不写 overflow:hidden —— 否则会把页签的下拉菜单裁掉。 */
+#topbar { border-radius: var(--win-radius) var(--win-radius) 0 0; }
+
+/* 这几个是 inset:0 的整窗遮罩：没有整窗裁剪之后，它们自己不圆角就会在显示期间
+   把窗口四角盖成方的。它们只在启动/弹窗时出现（那时不滚动），这点裁剪开销无所谓。
+   .loading-overlay 从顶栏下方盖起，所以只有下面两个角需要圆。 */
+/* R69：弹窗遮罩也改成从顶栏下方盖起（与 .loading-overlay 同款），所以只有下面两个角需要圆。
+   原先它们盖满整窗、把顶栏一起罩住 —— 于是弹窗打开期间右上角的 ✕ 根本点不到
+   （实测：✕ 中心命中的是遮罩，点击收不到）。 */
+.loading-overlay,
+.modal-overlay,
+.model-modal-overlay { border-radius: 0 0 var(--win-radius) var(--win-radius); }
+#chaos-vhs { border-radius: var(--win-radius); }
+
+/* 应用外壳：grid 布局层 + 装饰光晕。底色已交给 .win-frame，所以这里不再有背景。
+   position+isolation 是为了让 ::before 的装饰光晕能正常分层：
+   作为 stacking context 内的负 z-index 子层，它画在 .win-frame 底色**之上**、内容**之下**
+   （不做隔离的话 z-index:-1 会跑到父级上下文里、被底色整个盖住）。 */
+.app-shell {
+  position: relative;
+  isolation: isolate;
+  height: 100%;
+  color: var(--text);
+  font-family: 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', system-ui, sans-serif;
+  font-size: 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto 1fr;
+  grid-template-areas:
+    "topbar"
+    "banner"
+    "main";
+  overflow: hidden;
+}
+
+/* ── 启动 loading 壳：卡片浮起，日志区凹下 ── */
+/* 从顶栏下方盖起（而不是 inset:0）：无边框窗口下顶栏就是标题栏，
+   如果被这块全屏遮罩盖住，首启（要下载/解包 SnowLuma，可能很久）期间
+   窗口既拖不动也关不掉。留出顶栏 = 随时能挪窗口或缩到托盘。 */
+.loading-overlay {
+  position: fixed; inset: 50px 0 0 0; z-index: 999;
+  background: var(--layer-0);
+  display: flex; align-items: center; justify-content: center;
+}
+.loading-card {
+  width: min(520px, 92vw);
+  padding: 28px 30px;
+  background: var(--layer-1);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--lift-lg), var(--paper-edge);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.loading-title { font-size: 16px; font-weight: 600; }
+.loading-sub { color: var(--muted); font-size: 14px; }
+.loading-spinner {
+  width: 22px; height: 22px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+/* 按钮内联加载指示（2026-10-27）：自检模型设置「拉取模型 / 连接检测」等待时显示 */
+.btn-spin {
+  display: none;
+  width: 11px; height: 11px;
+  margin-right: 6px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+  vertical-align: -1px;
+}
+.btn.is-loading .btn-spin { display: inline-block; }
+.btn.is-loading { cursor: progress; }
+.loading-logs {
+  margin-top: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: var(--inset-bg);
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: var(--inset-edge);
+}
+/* 2026-10-23：日志折叠开关 —— .loading-card 是 flex column，按钮默认会被拉成
+   整行宽；align-self 收回自然宽度，保持一颗小按钮的样子。 */
+.loading-logs-toggle { align-self: flex-start; }
+

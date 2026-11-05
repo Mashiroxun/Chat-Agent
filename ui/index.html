@@ -18,7 +18,16 @@
        只写 https: 会直接 ERR_BLOCKED_BY_CSP（"查看收藏的表情"打不开的根因）。
        两份 CSP（本 meta 与 src/app.js 的头）取交集，改一处必须同步另一处。 -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://kondius.cn https://o.alicdn.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; media-src 'self' data: blob:; connect-src 'self' https://kondius.cn; font-src 'self' data:; frame-src 'self' https:; object-src 'none'; base-uri 'none'; form-action 'none'" />
-  <link rel="stylesheet" href="/style.css" />
+  <!-- 样式表按功能拆分为 7 份（2026-11-05，原 style.css 10601 行 / 441KB）。
+       ⚠️ 引入顺序不可调换：层叠依赖原始先后，重排会改变覆盖关系。
+       分片由原文件按行连续切分而来，拼接后与原文件字节级一致。 -->
+  <link rel="stylesheet" href="/01-base.css" />
+  <link rel="stylesheet" href="/02-shell.css" />
+  <link rel="stylesheet" href="/03-workspace.css" />
+  <link rel="stylesheet" href="/04-usage.css" />
+  <link rel="stylesheet" href="/05-dialogs.css" />
+  <link rel="stylesheet" href="/06-stage.css" />
+  <link rel="stylesheet" href="/07-connect.css" />
   <!-- 桌宠管理页（「桌宠」一级页）的版式。独立文件，不掺进 style.css。 -->
   <link rel="stylesheet" href="/desktop-pet-panel.css" />
   <!-- ⚠️（2026-10-17 修 H1）全局错误兜底必须**最先执行**：装在主题预置之前，
