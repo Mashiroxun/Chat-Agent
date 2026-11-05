@@ -1898,8 +1898,11 @@
     if (!rows.length) return;
 
     // r106：用户点 × 关掉之后，同版本不再出现（换了新版本自动再出现一次）。
-    // stamp 取最新那一版的 version，退而求其次取 date；两者都空就不记忆（只本次会话关闭）。
+    // 2026-11-05：stamp 从「只认 version」改成「version|date」—— 同版本号内
+    //   更新报告内容（改 date）时也重新出现一次，否则点过 × 的用户永远看不到
+    //   这次合并精简后的新条目。发版频率低，多弹一次可接受；两者都空则不记忆。
     var stamp = String(rows[0].version || rows[0].date || '');
+    if (rows[0].version && rows[0].date) stamp = rows[0].version + '|' + rows[0].date;
     if (stamp) {
       var closed = '';
       try { closed = localStorage.getItem(REPORT_KEY) || ''; } catch (e) { /* 隐私模式 */ }
