@@ -97,9 +97,170 @@ if (!renderGpuOff) {
   // 真正的独立 GPU 进程才谈得上"崩溃即重启、应用不死"。
 }
 
+// ── 自愈重启交接标记 ───────────────────────────────────────────────────────
+//
+// 场景（2026-11-05 实测复现，群友反馈的「解压后双击打不开」）：
+//   首启 GPU 崩溃 → 旧进程 `app.relaunch()` 拉起新进程 → 中间 3~6 秒屏幕上
+//   什么都没有 → 用户以为没打开，再双击一次 → 这个「打岔实例」可能先一步
+//   抢到 Electron 单实例锁，把真正能恢复的那个进程挤成 gotLock=false 直接退出。
+//   结果自愈被掐断，用户看到的是一句「QQ Agent 已经在运行了」和一个空屏幕。
+//
+// 交接标记的作用：relaunch 前写下、新进程窗口真正起来后删掉。任何实例在
+// `requestSingleInstanceLock()` **之前**先读它 —— 存在且新鲜，就说明
+// 「上一次启动正在自愈重启」，此刻的双击必须让路，并且要给出正确的解释，
+// 而不是那句会把人带偏的「已经在运行了」。
+//
+// 15 秒是上限：覆盖实测 6.6 秒的完整重启耗时并留足余量。超时的标记按不存在
+// 处理，绝不让一个残留文件把用户锁在门外。
+const RELAUNCH_HANDOVER_MS = 15_000;
+
+function relaunchHandoverPath() {
+  const dir = process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR;
+  return dir ? path.join(dir, '.relaunch-handover') : '';
+}
+
+/** 写交接标记（relaunch 前调用）。写不进去不影响重启，只是少一层保护。 */
+function writeRelaunchHandover(reason) {
+  const file = relaunchHandoverPath();
+  if (!file) {
+    console.log(`[relaunch] 交接标记跳过（${reason}）：数据目录未就绪`);
+    return;
+  }
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ pid: process.pid, at: Date.now(), reason }));
+    console.log(`[relaunch] 已写交接标记（${reason}）→ ${file}`);
+  } catch (error) {
+    console.log(`[relaunch] 交接标记写入失败（${reason}）：${error?.message ?? error}`);
+  }
+}
+
+/**
+ * 交接标记的环境变量标识：relaunch 的子进程会继承父进程环境，
+ * 用它自证"我是重启拉起来的，标记对我无效"。
+ *
+ * 为什么不用 `app.relaunch({ args })` 传命令行参数：Windows 打包版实测
+ * 传了 args 之后新进程根本不出现（原 `app.relaunch()` 能起），而这条链一旦
+ * 起不来就是"自愈彻底失效、用户彻底打不开"，风险远大于收益。环境变量
+ * 不需要改启动命令行，行为与原来完全一致。
+ */
+const RELAUNCH_CHILD_ENV = 'QQ_AGENT_RELAUNCH_CHILD';
+
+const isRelaunchChild = process.env[RELAUNCH_CHILD_ENV] === '1';
+if (isRelaunchChild) {
+  // 只在本进程判定一次就抹掉，别让"孙进程"也继承这个身份。
+  try { delete process.env[RELAUNCH_CHILD_ENV]; } catch { /* 忽略 */ }
+}
+
+/**
+ * 读交接标记：新鲜 + 本进程不是重启接收方，才算"要拦的双击"。
+ *   ① 新鲜（≤15s）：残留标记不能把用户永久锁在门外。
+ *   ② 本进程带 RELAUNCH_CHILD_ENV → 它就是交接的接收方，标记是通行证不是路障。
+ * 剩下的情况才是真正要拦的：**用户的双击打岔了一个正在进行的自愈重启**。
+ */
+function readRelaunchHandover() {
+  if (isRelaunchChild) return null;
+  const file = relaunchHandoverPath();
+  if (!file) return null;
+  try {
+    const obj = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const at = Number(obj?.at) || 0;
+    if (!at || Date.now() - at > RELAUNCH_HANDOVER_MS) return null;
+    console.log(`[relaunch] 读到交接标记（${obj?.reason || '未知'}，${Date.now() - at}ms 前）：本进程让路`);
+    return obj;
+  } catch { return null; }
+}
+
+/** 清交接标记（新进程窗口真正起来后调用）。 */
+function clearRelaunchHandover() {
+  const file = relaunchHandoverPath();
+  if (!file) return;
+  try { fs.unlinkSync(file); } catch { /* 不存在就算了 */ }
+}
+
+/**
+ * 重启前主动交还实例锁（2026-11-05）。
+ *
+ * 为什么必须做：`app.exit(0)` 触发的 `process.on('exit')` 释放钩子，和
+ * `app.relaunch()` 拉起的新进程是**并行**的。新进程完全可能先跑完
+ * `acquireInstanceLock()`，而那一刻旧进程还没走到 exit 钩子 ——
+ * `data/qq-agent.lock` 仍在、旧 PID 也还活着，于是新实例被判成"已有实例在运行"，
+ * 弹一句「QQ Agent 已经在运行了」然后自己退出。
+ *
+ * 用户视角就是反馈里的「zip 解压后双击打不开」：
+ *   首启崩溃 → 旧进程静默重启（屏幕 3~6 秒一片空白）→ 用户再双击 →
+ *   新实例撞锁退出 → 眼前既没有旧窗口也没有新窗口。
+ * 实测「首启 + 第 2 秒再双击」稳定复现，见 boot-diag.log 与 main 日志。
+ *
+ * 只删**自己**的锁（PID 比对）：不是自己的绝不碰，宁可让新进程走一遍
+ * 残留锁清理，也不能误删另一个真正在运行的实例的锁。
+ */
+function releaseOwnLockBeforeRelaunch(reason) {
+  const dir = process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR;
+  if (!dir) return;
+  const lockPath = path.join(dir, 'qq-agent.lock');
+  try {
+    const parsed = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+    if (Number(parsed?.pid) !== process.pid) return;      // 不是自己的锁：不碰
+    fs.unlinkSync(lockPath);
+    console.log(`[relaunch] 已交还实例锁（${reason}），重启进程不会撞锁`);
+  } catch { /* 锁不存在 / 读不出 / 删不掉：都不该阻断重启 */ }
+}
+
+/**
+ * 重启前给一句可见反馈（2026-11-05）。
+ *
+ * `app.relaunch()` 到新窗口出现实测约 3.4 秒，叠加崩溃计数的 2~3 秒，
+ * 屏幕上最长有 6 秒什么都没有 —— 用户只会理解为"没打开"，然后重复双击，
+ * 进而撞上 releaseOwnLockBeforeRelaunch 注释里那条竞态。
+ *
+ * ⚠️ 必须节流（24 小时一次）：显卡/驱动有问题的机器每次启动都会崩一次，
+ *    不节流这条通知就变成"每次开机弹一下"的骚扰，比"没反应"更招人烦。
+ *    真实用户装好后只会崩第一次（之后 render-gpu-off.flag 已存在，直接走
+ *    软件模式），所以正常情况一辈子只看到一次。
+ *
+ * 用系统通知而不是弹窗：不占父窗口、不需要用户点、`app.exit(0)` 之后
+ * 仍留在通知中心可回看。通知不可用（系统关闭通知 / 无 AUMID）时静默跳过，
+ * 绝不能因为"提示失败"把重启也搭进去。
+ */
+function notifyRelaunching(body) {
+  try {
+    const Notification = electronApi.Notification ?? electronApi.default?.Notification;
+    if (!Notification?.isSupported?.()) return;
+    const handoverFile = relaunchHandoverPath();
+    const stamp = handoverFile ? path.join(path.dirname(handoverFile), '.relaunch-notified') : '';
+    if (stamp) {
+      try {
+        const last = Number(String(fs.readFileSync(stamp, 'utf8')).trim()) || 0;
+        if (last && Date.now() - last < 24 * 60 * 60 * 1000) return;   // 24h 内已经提示过
+      } catch { /* 没有历史记录，正常提示 */ }
+    }
+    new Notification({ title: 'QQ Agent 正在重启', body, silent: true }).show();
+    if (stamp) {
+      try { fs.writeFileSync(stamp, String(Date.now())); } catch { /* 写不进就下次再提示 */ }
+    }
+  } catch { /* 通知发不出去不影响重启 */ }
+}
+
+/**
+ * 带"接收方标识"的重启。
+ *
+ * 不能裸调 `app.relaunch()`：新进程没有任何办法自证身份，只会在交接标记前
+ * 把自己当成"打岔的双击"而让路退出 —— 重启链自己把自己掐断（实测踩过）。
+ * 办法是给子进程留一个环境变量身份（RELAUNCH_CHILD_ENV），它读到标记时
+ * 就知道"这是给我的通行证"，不会被自己拦住。
+ */
+function relaunchAsSelfHealing() {
+  // 用环境变量给子进程留身份，不改启动命令行 —— 原因见 RELAUNCH_CHILD_ENV 的注释。
+  process.env[RELAUNCH_CHILD_ENV] = '1';
+  app.relaunch();
+}
+
 // GPU 崩溃自动回退（安全网 3）。只在真的启用了 GPU 时生效。
 let gpuCrashCount = 0;
 let gpuCrashWindowStart = Date.now();
+// 防重入：已排定重启后，后续的崩溃回调不得再次触发 relaunch。
+let relaunchScheduled = false;
 function noteRenderCrash(kind) {
   if (renderGpuOff) return;   // 已在软件模式：正常崩溃，不归 GPU，不再回退
   const now = Date.now();
@@ -111,12 +272,20 @@ function noteRenderCrash(kind) {
         `${new Date().toISOString()} 渲染相关进程崩溃 kind=${kind} count=${gpuCrashCount}\n`);
     }
   } catch { /* 日志失败不影响回退 */ }
-  if (gpuCrashCount >= 3) {
+  if (gpuCrashCount >= 3 && !relaunchScheduled) {
+    relaunchScheduled = true;
     try {
       if (RENDER_GPU_OFF_FLAG) fs.writeFileSync(RENDER_GPU_OFF_FLAG, `${new Date().toISOString()} kind=${kind}\n`);
     } catch { /* 写不进就只能下次再试 */ }
     console.error('[render] GPU 反复崩溃，已写 render-gpu-off.flag，重启进软件模式');
-    app.relaunch();
+    // 顺序有讲究：
+    //   ① 先发提示 —— 用户得知道"不是没打开，是在切兼容模式"；
+    //   ② 再交还实例锁 —— 必须在 relaunch 之前，否则新进程会撞上自己的锁；
+    //   ③ 最后才 relaunch + exit —— 顺序反了就是上面那段注释里的"打不开"。
+    notifyRelaunching('检测到显卡加速不可用（GPU 子进程反复崩溃），正在自动切换到兼容模式，请稍候几秒。');
+    writeRelaunchHandover('GPU 崩溃自愈');
+    releaseOwnLockBeforeRelaunch('GPU 崩溃自愈');
+    relaunchAsSelfHealing();
     app.exit(0);
   }
 }
@@ -166,7 +335,11 @@ function noteRendererCrash(where) {
   });
   if (!ok) { console.error('[render] 渲染进程连续崩溃，但写不进 render-config.json，无法自动降级'); return; }
   console.error('[render] 渲染进程连续崩溃 → 已切兼容模式（关闭渲染沙箱），重启应用');
-  app.relaunch();
+  // 同 noteRenderCrash：提示 → 交还锁 → 重启，顺序不能换。
+  notifyRelaunching('检测到界面进程被本机安全软件拦截，正在自动切换到兼容模式，请稍候几秒。');
+  writeRelaunchHandover('渲染崩溃自愈');
+  releaseOwnLockBeforeRelaunch('渲染崩溃自愈');
+  relaunchAsSelfHealing();
   app.exit(0);
 }
 
@@ -719,26 +892,60 @@ process.env.QQ_AGENT_DATA_DIR = resolveDataDir();
 
 // 单实例锁：重复启动（双击 .bat）不产生第二个实例，而是唤出已有窗口。
 // 没有锁的话第二个实例会双份连同一个协议端，群消息会被双重回复。
-const gotLock = app.requestSingleInstanceLock();
+//
+// ⚠️（2026-11-05）抢锁前先看「自愈重启交接标记」。
+//    上一次启动正在 relaunch 的这几秒里，用户最容易因为"没动静"再双击一次。
+//    若这个打岔实例抢到唯一的 Electron 锁，正在恢复的那个进程就会 gotLock=false
+//    直接退出 —— 自愈被掐断，用户只剩一句"已经在运行"和一片空屏幕。
+//    有标记 = 让路，并给出准确的解释（下方 handover 分支）。
+// 重复实例 / 自愈重启交接期：主启动链必须让路。
+//
+// 这两条分支各自会弹提示并 app.quit()，但下面那个 `app.whenReady()` 主启动链
+// 是**独立注册**的、并不看 gotLock —— 它会照样 createApp、起服务、建窗口。
+// 于是同一个进程一边"让路退出"一边"正常启动"：窗口建了又拆、core.stop() 与
+// 建窗日志互相穿插，用户看到的是一次莫名其妙的闪退（实测日志里 core.stop()
+// 和 loadURL 交错出现）。让路必须是一次明确的决策，不能只靠另一条链自己收场。
+let bootAborted = false;
+
+const handover = readRelaunchHandover();
+const gotLock = handover ? false : app.requestSingleInstanceLock();
 if (!gotLock) {
-  // ⚠️ 不能静默退出（R45）：已有一个实例占着锁时，新实例原来的行为是 app.quit() 后
-  //    一声不响地消失。用户看到的是"双击了没反应"，而眼前那个窗口可能是上一次
-  //    卡死留下的定格画面 —— 于是反复双击、反复无反应。这里明确告知一句。
-  // ⚠️（2026-10-16 外部审查 #2 站点①）这个框**无父窗口**（此刻主窗口归已运行的实例），
-  //    是独立顶层窗口 → 占一个任务栏按钮，且点掉之前进程不退。群友截图里
-  //    "任务栏一排 QQ Agent"就是它。加 8 秒超时自消：信息一行字读够，
-  //    没人看也自己消失，不必人工点。
-  app.whenReady().then(() => {
-    showDialog({
-      type: 'info',
-      title: '洛版 QQ Agent v0.4.9.2',
-      message: 'QQ Agent 已经在运行了',
-      detail: '已为你唤出正在运行的窗口。\n如果那个窗口一直停在启动画面，请从右下角托盘图标选择「退出」，再重新打开。',
-      buttons: ['知道了']
-    }, { autoCloseMs: DIALOG_TIMEOUT.alreadyRunning })
-      .catch(() => {})
-      .finally(() => app.quit());
-  }).catch(() => { /* 单实例提示失败也不影响退出（2026-10-18 补链尾兜底） */ });
+  bootAborted = true;
+  if (handover) {
+    // 交接期：说的是"正在自动切换兼容模式"，不是"已经在运行" —— 两者别混。
+    app.whenReady().then(() => {
+      const leftMs = Math.max(0, RELAUNCH_HANDOVER_MS - (Date.now() - Number(handover.at)));
+      showDialog({
+        type: 'info',
+        title: 'QQ Agent 正在启动',
+        message: '上一次启动遇到显卡或安全软件问题，程序正在自动切换兼容模式。',
+        detail: `窗口会在几秒内自己出现（最长 ${Math.ceil(RELAUNCH_HANDOVER_MS / 1000)} 秒），不需要再双击。\n`
+          + '如果一直不出现，请打开 data\\logs 下的日志查看原因。',
+        buttons: ['知道了']
+      }, { autoCloseMs: Math.min(3000, Math.max(1200, leftMs)) })
+        .catch(() => {})
+        .finally(() => app.quit());
+    }).catch(() => { app.quit(); });
+  } else {
+    // ⚠️ 不能静默退出（R45）：已有一个实例占着锁时，新实例原来的行为是 app.quit() 后
+    //    一声不响地消失。用户看到的是"双击了没反应"，而眼前那个窗口可能是上一次
+    //    卡死留下的定格画面 —— 于是反复双击、反复无反应。这里明确告知一句。
+    // ⚠️（2026-10-16 外部审查 #2 站点①）这个框**无父窗口**（此刻主窗口归已运行的实例），
+    //    是独立顶层窗口 → 占一个任务栏按钮，且点掉之前进程不退。群友截图里
+    //    "任务栏一排 QQ Agent"就是它。加 8 秒超时自消：信息一行字读够，
+    //    没人看也自己消失，不必人工点。
+    app.whenReady().then(() => {
+      showDialog({
+        type: 'info',
+        title: '洛版 QQ Agent v0.4.9.2',
+        message: 'QQ Agent 已经在运行了',
+        detail: '已为你唤出正在运行的窗口。\n如果那个窗口一直停在启动画面，请从右下角托盘图标选择「退出」，再重新打开。',
+        buttons: ['知道了']
+      }, { autoCloseMs: DIALOG_TIMEOUT.alreadyRunning })
+        .catch(() => {})
+        .finally(() => app.quit());
+    }).catch(() => { /* 单实例提示失败也不影响退出（2026-10-18 补链尾兜底） */ });
+  }
 } else {
   // 第二实例启动时：唤出窗口，并顺手把"卡住的自己"救回来 —— 用户再点一次
   // 就是在告诉我们"界面没出来"，这时候重载页面正是他想要的结果。
@@ -2626,6 +2833,9 @@ function startWidgetSync() {
 }
 
 app.whenReady().then(async () => {
+  // 重复实例 / 自愈重启交接期：上面那条链已经决定让路并退出，
+  // 这里绝不能再把服务起起来 —— 否则窗口建了又拆，用户只看到闪退。
+  if (bootAborted) return;
   try {
     // ── 数据目录可写性自检（P0-2）─────────────────────────────────────
     // 必须排在一切业务之前：安装目录不可写时，失败会散落在十几个模块里，
@@ -2721,7 +2931,14 @@ app.whenReady().then(async () => {
         sandboxOffAt: new Date().toISOString()
       });
       if (!ok) return { ok: false, error: '写入 data/render-config.json 失败，请检查安装目录权限' };
-      setTimeout(() => { try { app.relaunch(); } catch { /* 忽略 */ } app.exit(0); }, 400);
+      setTimeout(() => {
+        // 这条路径同样要交还锁：用户点「开启兼容模式」重启时若撞上旧锁，
+        // 会看到一个"已经在运行"的框而窗口不出现（与崩溃自愈那条同源）。
+        try { writeRelaunchHandover('用户开启兼容模式'); } catch { /* 忽略 */ }
+        try { releaseOwnLockBeforeRelaunch('用户开启兼容模式'); } catch { /* 忽略 */ }
+        try { relaunchAsSelfHealing(); } catch { /* 忽略 */ }
+        app.exit(0);
+      }, 400);
       return { ok: true, restarting: true };
     };
     // 先启动服务拿到真实端口，再开窗口。
@@ -2744,6 +2961,9 @@ app.whenReady().then(async () => {
     } else {
       await createWindow(port);
     }
+    // 自愈重启交接完成：窗口已经真正建出来，撤掉让路标记。
+    // 此后用户再双击恢复原语义（唤出窗口 / 提示已在运行），不会被误判成"正在重启"。
+    clearRelaunchHandover();
     // 桌宠窗口：必须等 core.start() 拿到**真实端口**后再起（pet.html 走同源 HTTP，
     // 端口错了就是白屏/404）。放在 if/else 之后而不是 createWindow 内部 ——
     // 第二实例复用已有窗口那条分支同样要拉起桌宠。
@@ -2807,7 +3027,48 @@ app.whenReady().then(async () => {
     //     用户以为程序坏了，实际只是"已经开着了"—— 按消息前缀分流到友好信息框。
     // #2：原框**无父窗口、无超时**，点掉之前进程不退 → 占任务栏。真失败给 180s
     //     （要留「打开日志目录」的点击时间），锁冲突给 8s（一行话读够）。
-    if (/\[单实例\]/.test(String(error?.message ?? describeError(error)))) {
+    //
+    // ── 模块编译期错误（2026-11-05，来自一份真实崩溃报告）─────────────────
+    // 报告原文：
+    //   [启动失败] SyntaxError: Identifier 'DATA_DIR' has already been declared
+    //     at compileSourceTextModule (node:internal/modules/esm/utils:340:16)
+    // 这类错误的堆栈里**一个文件名都没有** —— 编译器在解析阶段就失败了，还没走到
+    // 记录模块路径那一步。用户看到的是一串 node:internal，完全没法自救，只能来问。
+    // 它也不是运行期故障：说明 resources/app 里有文件被改过（重复定义），或者
+    // 覆盖安装时只换了一部分文件。所以单独给一条能照着做的处置办法。
+    // 注意：`SyntaxError` 在 error.name 里，不在 error.message 里 ——
+    // 只拼 message 的话正则永远不命中（这里踩过一次，日志里只剩旧的那行）。
+    const bootErrName = String(error?.name ?? '');
+    const bootErrText = String(error?.message ?? describeError(error));
+    const bootErrFull = `${bootErrName}: ${bootErrText}`;
+    // 顺带把完整堆栈落日志：describeError 只给一行，派不上用场。
+    if (/SyntaxError|ERR_MODULE_NOT_FOUND|does not provide an export/i.test(bootErrFull)) {
+      logCritical('electron', `[启动失败·程序文件损坏] ${bootErrFull}\n${error?.stack ?? ''}`);
+      const logsDirBroken = path.join(process.env.QQ_AGENT_DATA_DIR || '.', 'logs');
+      showDialog({
+        type: 'error',
+        title: 'QQ Agent 的程序文件已损坏',
+        message: '组件文件被改过、或覆盖安装不完整，启动不了。',
+        detail: `${bootErrFull}\n\n`
+          + '这不是你的配置问题 —— data 文件夹里的聊天记录、记忆、模型 Key 都不受影响。\n\n'
+          + '处置办法（按顺序做）：\n'
+          + '1. 从右下角托盘图标右键 →「退出」，确认任务管理器里没有 QQ Agent；\n'
+          + '2. 把 data 文件夹先复制一份到别处（保险，通常用不上）；\n'
+          + '3. 删掉 resources 文件夹，用新包里的 resources 原样覆盖回去；\n'
+          + '4. 重新打开 QQ Agent。\n\n'
+          + '注意不要在程序运行时解压覆盖 —— 被占用的文件写不进去，还会变成新旧混装。\n\n'
+          + `详细日志目录：${logsDirBroken}`,
+        buttons: ['打开日志目录', '退出'],
+        defaultId: 1,
+        cancelId: 1,
+      }, { autoCloseMs: DIALOG_TIMEOUT.startupFailed }).then(({ response }) => {
+        if (response === 0) shell.openPath(logsDirBroken).catch(() => {});
+        app.quit();
+      }).catch(() => app.quit());
+      return;
+    }
+
+    if (/\[单实例\]/.test(bootErrText)) {
       showDialog({
         type: 'info',
         title: 'QQ Agent 已经在运行了（同一数据目录）',
@@ -2826,7 +3087,19 @@ app.whenReady().then(async () => {
       type: 'error',
       title: 'QQ Agent 启动失败',
       message: '启动失败了，原因见下方。',
-      detail: `${describeError(error)}\n\n详细日志目录：${logsDir}`,
+      // 2026-11-05：补一句"刚覆盖安装过"的引导。
+      // 实测过这个坑：程序运行时解压覆盖，`QQ Agent.exe`、resources.pak、
+      // chrome_*.pak、d3dcompiler_47.dll、icudtl.dat、libEGL/libGLESv2、zh-CN.pak、
+      // v8_context_snapshot.bin 这 11 个文件会被占用写不进去，而 resources/app 下的
+      // 590 个业务代码文件全部覆盖成功 —— 于是旧 exe 配新代码，启动即失败。
+      // 用户看到"启动失败"只会以为软件坏了，不会想到是解压时没关程序。
+      detail: `${describeError(error)}\n\n`
+        + `详细日志目录：${logsDir}\n\n`
+        + '如果你刚刚覆盖安装过（把新包解压到旧目录）：\n'
+        + '请先从右下角托盘图标右键 →「退出」，确认任务管理器里没有 QQ Agent，'
+        + '再把新包重新解压一遍。程序运行时 exe 和几个 dll 是写不进去的，'
+        + '只换掉业务代码会变成"新旧混装"。\n'
+        + 'data 文件夹（配置、聊天记录、记忆）重新解压不会动，放心。',
       buttons: ['打开日志目录', '退出'],
       defaultId: 1,
       cancelId: 1,

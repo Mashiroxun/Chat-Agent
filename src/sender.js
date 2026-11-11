@@ -551,4 +551,84 @@ export class SendQueue {
       return data;
     });
   }
+
+  /**
+   * 给一条消息点表情回应（0.4.9.3）。
+   *
+   * 与 poke 走同一条闸门链：白名单 → 发送配额 → 随机延迟 → 留档。
+   * 点表情比发言轻，但同样是对外动作，配额照占（否则连点能刷屏）。
+   *
+   * 留档文案必须写清"这是点表情、不是发言"—— 下一轮模型读到自己的历史时，
+   * 才不会把"点了个赞"记成"我说了句什么"。
+   */
+  react(chatKey, messageId, emojiId, set = true) {
+    const [kind, id] = String(chatKey).split(':');
+    const chain = this.#chain(chatKey);
+    return chain(async () => {
+      this.#ensureAllowed(chatKey);
+      this.#checkRate(chatKey);
+      await sleep(randInt(120, 400));
+      const data = await this.onebot.setMsgEmojiLike(messageId, emojiId, set);
+      const ts = Date.now();
+      const action = set ? '点了表情' : '取消了表情';
+      this.store.appendSelf(chatKey, { text: `[表情回应] 你给 #${messageId} ${action} ${emojiId}`, ts, mid: null });
+      this.onSent?.({ chatKey, text: `[表情回应] #${messageId}`, messageId: null });
+      return data;
+    });
+  }
+
+  /**
+   * 撤回一条自己发的消息（0.4.9.3）。
+   *
+   * 与其它对外动作的两点不同：
+   *   ① **不占发送配额**（不调 #checkRate）。撤回是纠错动作，发错话要立刻能收回；
+   *      被配额卡住反而会逼它"将错就错"，那比多发一条更糟。
+   *   ② 归属校验不在这里做。协议端只认 message_id、不管是谁的，所以"只能撤自己的"
+   *      必须由调用方（recall_message 工具）用 store 里的 self 标记先挡一道。
+   */
+  recall(chatKey, messageId) {
+    const chain = this.#chain(chatKey);
+    return chain(async () => {
+      this.#ensureAllowed(chatKey);
+      await sleep(randInt(120, 400));
+      const data = await this.onebot.deleteMsg(messageId);
+      const ts = Date.now();
+      // 主动在本地标记撤回，**不依赖协议端回推 recall 事件**：
+      // 自己撤自己的消息，服务端未必推 group_recall，等不到事件的话那条消息
+      // 会一直留在存档里喂给模型，它下一轮还在引用一句群里已经看不见的话。
+      try { this.store.markRecalled(chatKey, messageId); } catch { /* 不在存档里就算了 */ }
+      // 留档：不写这条的话，下一轮读历史会以为那条消息还在群里
+      this.store.appendSelf(chatKey, { text: `[撤回] 你撤回了 #${messageId}`, ts, mid: null });
+      this.onSent?.({ chatKey, text: `[撤回] #${messageId}`, messageId: null });
+      return data;
+    });
+  }
+
+  /**
+   * 发一张合并转发的「聊天记录」卡片（0.4.9.3）。
+   *
+   * 与其它发送同一条闸门链：白名单 → 配额 → 随机延迟 → 留档。
+   * 留档刻意写成「[合并转发] N 条」而不是把内容摊平 —— 读历史时要能一眼分清
+   * "我打包转了一段对话"和"我自己说了一大段"，否则模型会把自己转发的内容
+   * 当成自己的发言继续引用。
+   */
+  sendForward(chatKey, nodes, opts = {}) {
+    const [kind, id] = String(chatKey).split(':');
+    const chain = this.#chain(chatKey);
+    return chain(async () => {
+      this.#ensureAllowed(chatKey);
+      this.#checkRate(chatKey);
+      await sleep(randInt(300, 900));
+      const data = await this.onebot.sendForwardMsg(kind, id, nodes, opts);
+      const ts = Date.now();
+      const n = Array.isArray(nodes) ? nodes.length : 0;
+      this.store.appendSelf(chatKey, {
+        text: `[合并转发] ${opts.summary || `${n} 条聊天记录`}`,
+        ts,
+        mid: data?.message_id ?? null
+      });
+      this.onSent?.({ chatKey, text: `[合并转发] ${n} 条`, messageId: data?.message_id ?? null });
+      return data;
+    });
+  }
 }

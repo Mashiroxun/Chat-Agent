@@ -191,6 +191,11 @@ export const DEFAULT_CONFIG = {
   // 安全例外（默认全部关闭）
   security: {
     allowPrivateImageHosts: false,          // true 时图片下载允许内网地址（仅本地测试/自建图床）
+    // 只放行环回（127.x / ::1 / localhost），LAN / 链路本地 / 云元数据仍拦。
+    // 用途：插件要调本机 Ollama(11434)、OneBot(3000)、宿主 HTTP(3210) 时，
+    // 不必把 allowPrivateImageHosts 打开（那个开关会把整张内网一起放开）。
+    // 默认关闭；改动由 security-guards.test.mjs 里的用例守着。
+    allowLoopback: false,
     // ── 外链白名单（2026-10-15 R129）──
     // 主进程把页面里的链接交给系统浏览器前，要走 electron/external-link.js 的四道判据：
     //   ① 协议只允许 http/https（`file:` / `ms-msdt:` 这类交给 shell 是"执行"不是"打开"）；

@@ -24,6 +24,42 @@ import { resolveCachedMediaPath } from './media-path.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
+/**
+ * QQ 群公告正文里带的是 HTML 实体（`&nbsp;` `&#10;` `&amp;` …），
+ * 原样塞给模型会被念成「& n b s p」或者当成乱码。只处理最常见的几个，
+ * 不引第三方库，也不碰标签（公告正文不该有标签）。
+ * 2026-11-11 实测 SnowLuma `_get_group_notice` 返回体里确实带这些实体。
+ */
+function decodeAnnouncementText(raw) {
+  const named = { nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", '#39': "'" };
+  return String(raw ?? '')
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => {
+      const n = parseInt(h, 16);
+      return Number.isFinite(n) && n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : ' ';
+    })
+    .replace(/&#(\d+);/g, (_, d) => {
+      const n = Number(d);
+      return Number.isFinite(n) && n > 0 && n <= 0x10ffff ? String.fromCodePoint(n) : ' ';
+    })
+    .replace(/&([a-z]+|#39);/gi, (m, k) => named[k.toLowerCase()] ?? m);
+}
+
+/**
+ * 消息 #数字 的统一校验（2026-11-11 模糊测试补）。
+ * QQ 的 message_id 是有符号 int32，存档里真有负数（如 -1668521248），
+ * 模型也爱写成 "#123"，所以允许前导 # 和负号，其余一律拒绝。
+ *
+ * 之前三个工具各自 `String(raw)` 就往下走：传个 `{}` 会变成
+ * "[object Object]" —— react/recall 靠 store.findByMid 找不到还能兜住，
+ * msg_reactions 不查 store，直接拿这个字符串去问协议端，最后回一句
+ * 「这条消息还没有人点表情」，是纯粹的误导。
+ */
+function parseMessageId(raw) {
+  if (raw === undefined || raw === null) return null;
+  const s = String(raw).trim().replace(/^#/, '');
+  return /^-?\d{1,20}$/.test(s) ? s : null;
+}
+
 /** 当前配置的 GIF 选路（vision/video 开关组合，规则矩阵见 resolveGifRoute 注释）。 */
 function currentGifRoute() {
   const cfg = getConfig();
@@ -251,6 +287,183 @@ function memberHint(ctx) {
   return `请从当前会话成员里选一个 QQ 号填进去：\n${lines}`;
 }
 
+/**
+ * 表情回应的编号解析（0.4.9.3）。
+ *
+ * QQ 的表情是数字编号（face id），不是 emoji 字符——传 "👍" 协议端不认。
+ * 内置别名只放**确认能用**的，其余一律允许直接传数字：宁可让模型传个不存在的
+ * 编号被协议端拒掉，也不要在表里塞一堆没验证过的号，点出来是个莫名其妙的表情、
+ * 而模型还以为自己表达对了。
+ */
+const EMOJI_ALIASES = {
+  like: '76',   // 赞
+};
+
+function resolveEmojiId(input) {
+  const raw = String(input ?? '').trim();
+  if (!raw) return EMOJI_ALIASES.like;
+  const alias = EMOJI_ALIASES[raw.toLowerCase()];
+  if (alias) return alias;
+  if (/^\d{1,4}$/.test(raw)) return raw;
+  return '';
+}
+
+/**
+ * 系统表情目录索引（0.4.9.3）。
+ *
+ * 之前 react_message 只认 like→76 一个别名，因为其它编号是什么我没验证过。
+ * 协议端其实自带目录：`fetch_sys_faces` 每项都有 `q_sid`（编号）与 `q_des`（名字，
+ * 形如「/赞」），实测 q_sid=76 正是「/赞」，与内置别名对得上。
+ *
+ * 所以拉一次全量目录，建「名字 → 编号」索引缓存一小时。模型可以直接说「笑」「赞」
+ * 「无语」，由代码翻成编号 —— 不用背数字，也不会点出个莫名其妙的表情。
+ */
+const FACE_INDEX_TTL_MS = 60 * 60 * 1000;
+let faceIndex = null;
+let faceIndexAt = 0;
+
+async function loadFaceIndex(ctx) {
+  if (faceIndex && Date.now() - faceIndexAt < FACE_INDEX_TTL_MS) return faceIndex;
+  const resp = await ctx.onebot.fetchSysFaces(false);
+  // ⚠️ OneBotClient.call() 最后是 `return body.data`，拿到的是**已解包**的对象。
+  //    这里再写 resp.data.packs 就多剥了一层，永远是 undefined（这条踩过）。
+  const packs = resp?.packs || [];
+  const idx = new Map();
+  for (const pack of packs) {
+    for (const e of (pack?.emojis || [])) {
+      const sid = String(e?.q_sid ?? '').trim();
+      const name = String(e?.q_des ?? '').replace(/^\//, '').trim();
+      if (/^\d+$/.test(sid) && name && !idx.has(name)) idx.set(name, sid);
+    }
+  }
+  if (!idx.size) return null;
+  faceIndex = idx;
+  faceIndexAt = Date.now();
+  return idx;
+}
+
+/**
+ * 把「like / 笑 / 76」解析成表情编号。
+ * 数字直接透传，内置别名优先，再不行翻目录（精确 → 去斜杠 → 包含匹配）。
+ * 目录取不到时返回空让调用方报错 —— 宁可说"不认识这个表情"，也不瞎猜一个号。
+ */
+async function resolveFaceId(ctx, input) {
+  const raw = String(input ?? '').trim();
+  if (!raw) return EMOJI_ALIASES.like;
+  if (/^\d{1,4}$/.test(raw)) return raw;
+  const alias = EMOJI_ALIASES[raw.toLowerCase()];
+  if (alias) return alias;
+  let idx = null;
+  try { idx = await loadFaceIndex(ctx); } catch { /* 目录不可用，语义解析走不通 */ }
+  if (!idx) return '';
+  if (idx.has(raw)) return idx.get(raw);
+  const bare = raw.replace(/^\//, '');
+  if (idx.has(bare)) return idx.get(bare);
+  for (const [name, sid] of idx) {
+    if (name.includes(bare) || bare.includes(name)) return sid;
+  }
+  return '';
+}
+
+/** 名片点赞的每日去重：`chatKey|QQ` → 本地日期。防同一个群反复骚扰同一人。 */
+const likeDay = new Map();
+
+function localDayKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+
+/**
+ * 互动类工具的公共回执（0.4.9.3）。
+ *
+ * 只回 `{ sent: 1 }` / `{ poked: true }` 这类"我做了"的信息时，模型建立不了
+ * 「对谁做的」这一层：@ 填错号、引用的是哪条、发去了哪个会话，全都无从核对。
+ * 下一轮它就按自己脑补的状态继续说话，症状就是"分不清指向"。
+ *
+ * 下面三个函数把身份和落点算出来，供 send_message / send_to / send_image /
+ * send_poke 共用，保证同一类动作的回执形状一致。
+ */
+
+/** 从会话里解析某个 QQ 的展示名：活跃成员表 → 最近 300 条记录 → 空串。 */
+function resolveMemberName(ctx, userId) {
+  const id = Number(userId);
+  if (!Number.isInteger(id) || id <= 0) return '';
+  const hit = (ctx.store.activeMembers(ctx.chatKey, 50) || [])
+    .find((m) => Number(m.userId) === id);
+  if (hit?.name) return String(hit.name);
+  const prior = (ctx.store.recent(ctx.chatKey, { limit: 300 }) || [])
+    .find((m) => !m.self && Number(m.senderId) === id && m.senderName);
+  return prior ? String(prior.senderName) : '';
+}
+
+/** 人的描述：名字(QQ:号) / QQ:号 / 自己 / 空串。 */
+function describeUser(ctx, userId) {
+  const id = Number(userId);
+  if (!Number.isInteger(id) || id <= 0) return '';
+  if (String(id) === String(ctx.selfId)) return '自己';
+  const name = resolveMemberName(ctx, id);
+  return name ? `${name}(QQ:${id})` : `QQ:${id}`;
+}
+
+/**
+ * 一次对外动作的落点：发在哪个会话、@ 了谁、引用哪条。
+ * 参数没给就回 null —— 别往回执里塞空串，模型会把空串当成一个真实目标。
+ */
+function actionLanding(ctx, args = {}) {
+  const atId = Number(args.atUserId);
+  const hasAt = Number.isInteger(atId) && atId > 0;
+  const reply = args.replyToMessageId;
+  const hasReply = reply !== undefined && reply !== null && String(reply).trim() !== '';
+  let at = null;
+  if (hasAt) {
+    const isSelf = String(atId) === String(ctx.selfId);
+    const name = isSelf ? '' : resolveMemberName(ctx, atId);
+    at = {
+      userId: atId,
+      name: name || null,
+      label: isSelf ? '自己' : (name ? `${name}(QQ:${atId})` : `QQ:${atId}`),
+      // false = 这个号在当前会话里认不出来，@ 大概率不会落到人身上。
+      // 有这个布尔，模型才知道该不该把"已经叫了他"当既成事实。
+      resolved: isSelf || !!name
+    };
+  }
+  return {
+    chat: { kind: ctx.kind, id: String(ctx.chatId ?? '') },
+    at,
+    replyTo: hasReply ? String(reply) : null
+  };
+}
+
+/**
+ * 拍一拍的返回体（0.4.9.3）。
+ *
+ * 只回 `{ poked: true }` 时模型分不清「谁拍谁」：事件流里的文案是
+ * 「[拍一拍] 张三(QQ:1) 拍了拍 我」，方向是「对方 → 自己」；而这次调用是
+ * 「自己 → 对方」。两者落在同一段上下文里，模型会把刚发出去的拍当成
+ * 「有人在拍我」，进而对着自己的动作回应一遍。
+ *
+ * 所以这里显式给出 direction 与 target，并用一句话把方向说死。
+ */
+function pokeResult(ctx, targetId) {
+  const id = Number(targetId) || null;
+  const isSelf = !!(id && String(id) === String(ctx.selfId));
+  const label = id ? describeUser(ctx, id) : '对方';
+  const where = ctx.kind === 'group' ? '群聊' : '私聊';
+  // 拍自己不能说"你拍对方"——那是另一个方向，模型会照着它去回应对方
+  const text = isSelf
+    ? `你（机器人）在${where}拍了拍自己。这是你自己的动作，不是别人拍你。`
+    : `你（机器人）在${where}拍了拍 ${label}。方向是你拍对方，不是对方拍你；对方只会收到一条拍一拍提示，不会产生文字消息。`;
+  return {
+    poked: true,
+    direction: 'self→target',
+    chat: { kind: ctx.kind, id: String(ctx.chatId ?? '') },
+    target: id ? { userId: id, name: isSelf ? null : (resolveMemberName(ctx, id) || null), isSelf } : null,
+    text
+  };
+}
+
+
 function imageParts(text, dataUrls) {
   const parts = [{ type: 'text', text }];
   for (const url of dataUrls) parts.push({ type: 'image_url', image_url: { url } });
@@ -344,7 +557,16 @@ function registerAllTools() {
         }
         // failed 必须带出去：用量账本（plugin-usage）按 toolCall.failed 统计失败，
         // 否则"部分失败"在控制台永远是 0 错误（体检 F8：QQ 侧 result=241 被静默吞掉）。
-        return ok({ sent: realSent.length, failed: result.failed.length, messageIds: realSent.map((s) => s.messageId).filter(Boolean), note: note.join('') });
+        // 动作回执（0.4.9.3）：除了"发了几条"，还要回显 @ 的是谁、引用的是哪条。
+        // 只回 sent/messageIds 时，@ 填了个不存在的号、或协议端把 @ 吃掉，
+        // 模型都无从得知，下一轮就会按"我已经 @ 过他了"继续说话。
+        return ok({
+          sent: realSent.length,
+          failed: result.failed.length,
+          messageIds: realSent.map((s) => s.messageId).filter(Boolean),
+          ...actionLanding(ctx, args),
+          note: note.join('')
+        });
       } catch (error) {
         // 禁言终态错误（F4）：全败且签名是禁言（sender 已标记该群禁言状态）。
         // 作为终态返回：模型收到后应停止重试发送 —— 重试除了烧 token 没有任何意义。
@@ -415,7 +637,15 @@ function registerAllTools() {
         ctx.emit('session-update', ctx.session.id);
         const note = [`已发送到 ${wantTarget}。不要输出汇报。`];
         if (result.failed.length) note.push(`（另有 ${result.failed.length} 条发送失败：${result.failed.map((f) => f.error).join('；')}）`);
-        return ok({ sent: realSent.length, messageIds: realSent.map((s) => s.messageId).filter(Boolean), note: note.join('') });
+        // 目标要结构化带回去（0.4.9.3）：note 里那句"已发送到 group:123"是给人看的，
+        // 模型多轮之后未必还记得；target 字段让它随时能核对到底发去了哪。
+        return ok({
+          sent: realSent.length,
+          messageIds: realSent.map((s) => s.messageId).filter(Boolean),
+          target: { chatKey: wantTarget, kind: tKind, id: tId },
+          chat: { kind: ctx.kind, id: String(ctx.chatId ?? '') },
+          note: note.join('')
+        });
       } catch (error) {
         return err(error?.message ?? error);
       }
@@ -444,10 +674,419 @@ function registerAllTools() {
             return err(`targetUserId 必须是正整数的 QQ 号（收到：${JSON.stringify(args.targetUserId)}）。${memberHint(ctx)}`);
           }
           await ctx.sender.poke(ctx.chatKey, target);
-        } else {
-          await ctx.sender.poke(ctx.chatKey, null);
+          return ok(pokeResult(ctx, target));
         }
-        return ok({ poked: true });
+        // 私聊不传就是拍对方：回执里补上对方 QQ 号，否则模型不知道拍了谁
+        const peer = ctx.kind === 'private' ? Number(ctx.chatId) || null : null;
+        await ctx.sender.poke(ctx.chatKey, null);
+        return ok(pokeResult(ctx, peer));
+      } catch (error) {
+        return err(error?.message ?? error);
+      }
+    }
+  });
+
+  registerTool({
+    id: 'react_message',
+    name: '给消息点表情',
+    description: '给某条消息点一个表情回应 —— 只在消息下面挂一个小表情，不发言、不插话。别人发了图、表情包、截图这类「看到了但没什么可说」的内容时用它代替评价；也可以用来表示「在听」「收到」「好笑」。比硬憋一句点评自然得多。',
+    category: 'messaging',
+    icon: '👍',
+    parameters: {
+      type: 'object',
+      properties: {
+        messageId: { type: ['integer', 'string'], description: '消息的 #数字（可为负）' },
+        emoji: { type: 'string', description: "表情的中文名（笑 / 赞 / 无语 / 惊 / 哭 这些）、'like'，或 QQ 表情编号；不传默认赞" }
+      },
+      required: ['messageId']
+    },
+    async execute(ctx, args) {
+      try {
+        const midKey = parseMessageId(args.messageId);
+        if (!midKey) {
+          return err(`要给哪条消息点表情？传消息的数字编号（如 #123，负数也行）。${midHint(ctx)}`);
+        }
+        const entry = ctx.store.findByMid(ctx.chatKey, midKey);
+        if (!entry) return err(`当前会话找不到消息 #${midKey}。${midHint(ctx)}`);
+        const emojiId = await resolveFaceId(ctx, args.emoji);
+        if (!emojiId) {
+          return err(`不认识这个表情：${JSON.stringify(args.emoji)}。可以传中文名（如「笑」「赞」「无语」）、'like'，或者 QQ 表情编号。`);
+        }
+        await ctx.sender.react(ctx.chatKey, midKey, emojiId);
+        return {
+          ...ok({
+            reacted: true,
+            messageId: midKey,
+            emojiId,
+            chat: { kind: ctx.kind, id: String(ctx.chatId ?? '') },
+            // 必须说清"没有发言"：不然下一轮它会以为自己已经说过话了
+            text: `已给消息 #${midKey} 点了表情（编号 ${emojiId}）。这只是一个小表情，你并没有发言。`
+          }),
+          // ⚠️ 这不是发言。category 是 messaging，会被 isDeliverTool 判成投递工具；
+          //    不显式声明的话编排器会把"点了个表情"补记成「发了条消息」，
+          //    触发"发言即收尾"本轮直接结束 —— 模型就再没机会补一句了。
+          delivered: false
+        };
+      } catch (error) {
+        return err(error?.message ?? error);
+      }
+    }
+  });
+
+  registerTool({
+    id: 'recall_message',
+    name: '撤回自己的消息',
+    description: '撤回你自己刚发出去的一条消息。只在说错话、发重了、发完就后悔时用。只能撤你自己发的，撤别人的属于越权，会被直接拒绝。',
+    category: 'messaging',
+    icon: '↩️',
+    parameters: {
+      type: 'object',
+      properties: {
+        messageId: { type: ['integer', 'string'], description: '要撤回的消息 #数字，必须是你自己发的' }
+      },
+      required: ['messageId']
+    },
+    async execute(ctx, args) {
+      try {
+        const midKey = parseMessageId(args.messageId);
+        if (!midKey) {
+          return err(`要撤回哪条消息？传消息的数字编号（如 #123，负数也行）。${midHint(ctx)}`);
+        }
+        const entry = ctx.store.findByMid(ctx.chatKey, midKey);
+        if (!entry) return err(`当前会话找不到消息 #${midKey}。${midHint(ctx)}`);
+        // 归属闸：协议端只认 message_id、不问是谁的消息。这里不挡，
+        // 等于把"撤回任何人的发言"这个能力直接交给模型 —— 是越权，也是把柄。
+        if (!entry.self) {
+          return err(`只能撤回你自己发的消息。消息 #${midKey} 是${entry.senderName ? ` ${entry.senderName} ` : '别人'}发的，不能撤。`);
+        }
+        await ctx.sender.recall(ctx.chatKey, midKey);
+        return {
+          ...ok({
+            recalled: true,
+            messageId: midKey,
+            chat: { kind: ctx.kind, id: String(ctx.chatId ?? '') },
+            // 别让它以为撤回等于没发生：对方可能已经看见了
+            text: `已撤回你发的那条消息 #${midKey}，群里现在看不到它了。注意：对方若已经看到，撤回不会让他忘掉；真要紧就补一句说明。`
+          }),
+          // 撤回是"抹掉"不是"发出"，同样不能让编排器记成一条发言
+          delivered: false
+        };
+      } catch (error) {
+        return err(error?.message ?? error);
+      }
+    }
+  });
+
+  registerTool({
+    id: 'like_user',
+    name: '给名片点赞',
+    description: '给某个群友的 QQ 名片点赞，对方会收到提示。适合关系近、刚聊得开心的时候随手一个；同一个人一天最多点一次，别当成刷存在感的手段。',
+    category: 'messaging',
+    icon: '👍',
+    parameters: {
+      type: 'object',
+      properties: {
+        userId: { type: ['integer', 'string'], description: '对方 QQ 号；不知道就先调 get_active_members 查' },
+        times: { type: 'integer', description: '点几次，默认 1，最多 10（QQ 每日上限）' }
+      },
+      required: ['userId']
+    },
+    async execute(ctx, args) {
+      try {
+        const id = Number(args.userId);
+        if (!Number.isInteger(id) || id <= 0) {
+          // JSON.stringify(undefined) 返回的是 undefined 而不是字符串，
+          // 模板里会印出字面量 "undefined" 给模型看 —— 用 ?? 兜住。
+          const shown = JSON.stringify(args.userId) ?? '（没传）';
+          return err(`userId 必须是正整数的 QQ 号（收到：${String(shown).slice(0, 60)}）。${memberHint(ctx)}`);
+        }
+        if (String(id) === String(ctx.selfId)) return err('不能给自己点赞。');
+        // 频控按「自己 × 对方」计，**不按会话**：名片赞是发给这个人的，
+        // 同一个人在 A 群和 B 群各点一次，对他是两次打扰。之前 key 里带了
+        // chatKey，等于按群去重，跨群就能绕过去。
+        const key = `${ctx.selfId}|${id}`;
+        const today = localDayKey();
+        // 频控放在这里而不是靠提示词：名片赞是"推送到对方"的动作，刷起来就是骚扰。
+        if (likeDay.get(key) === today) {
+          return err(`今天已经给 ${describeUser(ctx, id)} 点过了。一天一次就够，别刷。`);
+        }
+        const times = Math.min(10, Math.max(1, Number(args.times) || 1));
+        await ctx.onebot.sendLike(id, times);
+        likeDay.set(key, today);
+        // 只增不减的 Map 长期跑会缓慢膨胀：隔天清掉非今天的记录即可（量本来就小，
+        // 但机器人是常驻进程，这类"永不回收"的表多了就是内存泄漏）。
+        if (likeDay.size > 1000) {
+          for (const [k, v] of likeDay) if (v !== today) likeDay.delete(k);
+        }
+        return {
+          ...ok({
+            liked: true,
+            target: { userId: id, name: resolveMemberName(ctx, id) || null },
+            times,
+            text: `已给 ${describeUser(ctx, id)} 的名片点了 ${times} 次赞，对方会收到提示。今天不会再点第二次。`
+          }),
+          // 点赞是推送通知，不是群里的发言
+          delivered: false
+        };
+      } catch (error) {
+        return err(error?.message ?? error);
+      }
+    }
+  });
+
+  registerTool({
+    id: 'forward_recent',
+    name: '合并转发聊天记录',
+    description: '把本会话最近几条消息打包成一张「聊天记录」卡片发出去。适合「给我留个记录」「把刚才那段整理一下」这类请求。内容只能来自当前会话，默认也发在当前会话；要发到别的群/私聊必须传 targetChatKey，且需要管理员在 设置 → 工具与技能 里开启跨会话发送（默认关闭，没开就别试）。',
+    category: 'messaging',
+    icon: '📦',
+    parameters: {
+      type: 'object',
+      properties: {
+        count: { type: 'integer', description: '转发最近几条，默认 10，最多 50' },
+        targetChatKey: { type: 'string', description: '可选：发到哪个会话（group:群号 / private:QQ号）。不传就发在当前会话' },
+        title: { type: 'string', description: '可选：卡片外显标题，默认「N 条聊天记录」' }
+      }
+    },
+    async execute(ctx, args) {
+      try {
+        const count = Math.min(50, Math.max(1, Number(args.count) || 10));
+        // store.recent 是时间正序（最早在前），转发节点直接按这个顺序，不要 reverse
+        const entries = ctx.store.recent(ctx.chatKey, { limit: count }) || [];
+        if (!entries.length) return err('当前会话还没有可转发的消息。');
+
+        // ⚠️ 节点树在程序里拼，不交给模型：OneBot 的 node 结构是三层嵌套，
+        //   让模型自己写几乎必错。它只需要说"转最近 10 条"。
+        const nodes = entries.map((e) => {
+          // ⚠️ 2026-11-11 抓到的真 bug：SnowLuma 的 parseForwardNodes() 取的是
+          //   `data.user_id ?? data.uin`，**根本不认 data.qq**；而 qq 会被
+          //   assertForwardNodeMetadata 当普通字符串静默放行，不报错。
+          //   结果 userUin 全部回落成机器人自己 —— 转发卡片里群友说的话
+          //   全变成机器人自己说的。这里两个键都写且同值：SnowLuma 读 uin，
+          //   其它 OneBot 实现读 qq，两边都不会错。
+          const uin = String(e.self ? (ctx.selfId ?? '') : (e.senderId ?? '')) || String(ctx.selfId ?? '');
+          return {
+            type: 'node',
+            data: {
+              uin,
+              qq: uin,
+              name: e.self ? String(ctx.selfNickname || '我') : String(e.senderName || ''),
+              content: [{ type: 'text', text: String(e.text || '[非文字消息]').slice(0, 2000) }]
+            }
+          };
+        });
+
+        let chatKey = ctx.chatKey;
+        const target = String(args.targetChatKey || '').trim();
+        if (target && target !== ctx.chatKey) {
+          if (!/^(group|private):\d+$/.test(target)) {
+            return err('targetChatKey 格式应为 group:群号 或 private:QQ号。');
+          }
+          // 跨会话转发与 send_to 同一道闸：开关 + 白名单，一样都不能少
+          if (getConfig().tools?.crossChatSend !== true) {
+            return err('跨会话发送未开启，不能转发到别的会话。管理员可在 设置 → 工具与技能 里打开。');
+          }
+          const [tKind, tId] = target.split(':');
+          const allow = getConfig().allow || {};
+          const allowList = (tKind === 'group' ? allow.groups : allow.private) || [];
+          const allowedAll = allowList.length === 0 && getConfig().allowAllWhenEmpty === true;
+          if (!(allowList.map(String).includes(tId) || allowedAll)) {
+            return err(`目标 ${target} 不在白名单内，不能转发过去。`);
+          }
+          chatKey = target;
+        }
+
+        const summary = String(args.title || '').slice(0, 60) || `${nodes.length} 条聊天记录`;
+        const data = await ctx.sender.sendForward(chatKey, nodes, { summary, source: '聊天记录' });
+        return ok({
+          forwarded: true,
+          count: nodes.length,
+          to: chatKey,
+          messageId: data?.message_id ?? null,
+          // 说清"这是卡片"：否则下一轮它会以为自己又重新讲了一遍
+          text: `已把最近 ${nodes.length} 条消息合并转发到 ${chatKey}。这是一张聊天记录卡片，不是你重新说了一遍内容。`
+        });
+      } catch (error) {
+        return err(error?.message ?? error);
+      }
+    }
+  });
+
+  registerTool({
+    id: 'group_highlights',
+    name: '看群里的高光',
+    description: '看本群的荣誉榜（龙王 / 话痨 / 群聊之火 / 魅力 / 萌新）和今日打卡人数。没话题、想接一个大家都懂的梗时看一眼；纯读取，不打扰任何人。数据来自 QQ 群自带功能，冷清的小群经常是空的。',
+    category: 'query',
+    icon: '🏆',
+    parameters: {
+      type: 'object',
+      properties: {
+        part: { type: 'string', enum: ['all', 'honor', 'sign'], description: '默认 all；只看荣誉传 honor，只看打卡传 sign' }
+      }
+    },
+    async execute(ctx, args) {
+      try {
+        if (ctx.kind !== 'group') return err('荣誉榜和群打卡只有群聊里有，私聊没有这些东西。');
+        const part = ['all', 'honor', 'sign'].includes(String(args.part)) ? String(args.part) : 'all';
+        const out = {};
+        if (part !== 'sign') {
+          const honor = await ctx.onebot.getGroupHonor(ctx.chatId, 'all');
+          // 同上：call() 已解包，直接用，不要再 .data。
+          // 每个榜截到 5 人：大群的榜单能上百条，原样塞进上下文等于白烧 token，
+          // 而模型真正用得上的只有前几名。
+          const slim = (v) => (Array.isArray(v) ? v.slice(0, 5) : []);
+          out.honor = honor ? {
+            current_talkative: honor.current_talkative ?? null,
+            talkative_list: slim(honor.talkative_list),
+            performer_list: slim(honor.performer_list),
+            legend_list: slim(honor.legend_list),
+            emotion_list: slim(honor.emotion_list),
+            strong_newbie_list: slim(honor.strong_newbie_list)
+          } : null;
+        }
+        if (part !== 'honor') {
+          const signed = await ctx.onebot.getGroupSignedList(ctx.chatId);
+          out.signed = Array.isArray(signed) ? signed.length : 0;
+        }
+        const honorEmpty = !out.honor
+          || ['current_talkative', 'talkative_list', 'performer_list', 'legend_list', 'emotion_list', 'strong_newbie_list']
+            .every((k) => {
+              const v = out.honor[k];
+              return v == null || (Array.isArray(v) && v.length === 0);
+            });
+        // 三种情况文案要分开：打卡不是"最活跃"，说错了模型会照着编
+        if (part === 'sign') {
+          out.note = '打卡名单是今天签到过的人，可以拿来说「今天谁来了」这类话；名单空就是这个群没开打卡。';
+        } else if (honorEmpty) {
+          out.note = '这个群暂时没有荣誉数据（QQ 的荣誉榜要群活跃到一定规模才会有）。没有就别硬聊这个，换个话题。';
+        } else {
+          out.note = '名单里的人是群里最活跃的那批，适合当聊天的由头。';
+        }
+        return ok(out);
+      } catch (error) {
+        return err(error?.message ?? error);
+      }
+    }
+  });
+
+  registerTool({
+    id: 'group_notice',
+    name: '看群公告',
+    description: '读本群的公告（群规、置顶通知、新成员须知）。刚进群、或者有人提到「群规」「公告」时先看一眼，能少踩坑。纯读取，不打扰任何人。',
+    category: 'query',
+    icon: '📌',
+    parameters: { type: 'object', properties: {} },
+    async execute(ctx) {
+      try {
+        if (ctx.kind !== 'group') return err('群公告只有群聊里有，私聊没有。');
+        const raw = await ctx.onebot.getGroupNotice(ctx.chatId);
+        // 协议端返回的是「普通公告 + 新成员公告」的合并数组；不同实现也可能包一层对象
+        const list = Array.isArray(raw) ? raw : (Array.isArray(raw?.notices) ? raw.notices : []);
+        if (!list.length) return ok({ count: 0, note: '这个群没有设置公告。' });
+        const notices = list.slice(0, 5).map((n) => {
+          // ⚠️ 2026-11-11 实测抓到的形状（SnowLuma 2.1.1）：
+          //   { notice_id, sender_id, publish_time, send_to_new_members,
+          //     message: { text, image: [], images: [] } }
+          // 旧版只读顶层 text / content / images → **正文和图片数永远是空的**，
+          // 模型拿到 5 条空公告还以为群规是空的。正文在 message.text 里，
+          // 图片在 message.images（有时是 message.image），顶层的 send_to_new_members
+          // 和 publish_time 倒是对的。这里全部兼容旧形状，防止换协议端后再次踩坑。
+          const body = (n?.message && typeof n.message === 'object') ? n.message : {};
+          const images = Array.isArray(body.images) ? body.images
+            : (Array.isArray(body.image) ? body.image
+              : (Array.isArray(n?.images) ? n.images : []));
+          const text = decodeAnnouncementText(body.text ?? n?.text ?? n?.content ?? '').slice(0, 600);
+          return {
+            text,
+            imageCount: images.length,
+            newMemberNotice: n?.send_to_new_members === true || n?.sendToNewMembers === true,
+            time: n?.publish_time
+              ? new Date(Number(n.publish_time) * 1000).toLocaleString('zh-CN', { hour12: false })
+              : (n?.publishTime ? String(n.publishTime) : '')
+          };
+        });
+        const note = '公告就是群规，照着来即可；不要把它当话题在群里复述一遍。';
+        return ok({
+          count: notices.length,
+          total: list.length,
+          notices,
+          // count 是「这回给了几条」，total 才是一共几条 —— 大群公告常有十来条，
+          // 不给 total 的话模型会以为群里就这 5 条。
+          note: list.length > notices.length ? `${note}（共 ${list.length} 条，这里只列最近 ${notices.length} 条。）` : note
+        });
+      } catch (error) {
+        return err(error?.message ?? error);
+      }
+    }
+  });
+
+  registerTool({
+    id: 'group_system_msg',
+    name: '看群进出通知',
+    description: '看本群的系统消息：谁申请加群、谁已进群、谁退群了。有人问「刚才谁进群了」这类问题时用。纯读取。',
+    category: 'query',
+    icon: '🚪',
+    parameters: { type: 'object', properties: {} },
+    async execute(ctx) {
+      try {
+        const raw = await ctx.onebot.getGroupSystemMsg(ctx.kind === 'group' ? ctx.chatId : null);
+        const list = Array.isArray(raw) ? raw : [];
+        if (!list.length) return ok({ count: 0, note: '没有待处理或近期的系统消息。' });
+        return ok({
+          count: list.length,
+          // 字段名在不同协议端不完全一致，原样给前几条（已截断），让模型自己读 key
+          items: list.slice(0, 10),
+          note: '常见字段：group_id / group_name / requester_nick / requester_uin / invitor_uin / checked。'
+        });
+      } catch (error) {
+        return err(error?.message ?? error);
+      }
+    }
+  });
+
+  registerTool({
+    id: 'msg_reactions',
+    name: '看谁点了表情',
+    description: '看某条消息上有谁点了表情、点的什么（编号 + 数量 + 用户）。想知道自己说的话有没有被认同、或者谁在围观时看。纯读取。',
+    category: 'query',
+    icon: '😊',
+    parameters: {
+      type: 'object',
+      properties: {
+        messageId: { type: ['integer', 'string'], description: '消息的 #数字' }
+      },
+      required: ['messageId']
+    },
+    async execute(ctx, args) {
+      try {
+        const midKey = parseMessageId(args.messageId);
+        if (!midKey) return err(`要看哪条消息的表情？传消息的数字编号（如 #123，负数也行）。${midHint(ctx)}`);
+        const raw = await ctx.onebot.getMsgEmojiLikes(midKey);
+        const list = Array.isArray(raw) ? raw : [];
+        if (!list.length) return ok({ count: 0, messageId: midKey, note: '这条消息还没有人点表情。' });
+        const reactions = list.slice(0, 8).map((r) => ({
+          emojiId: String(r?.emoji_id ?? ''),
+          count: Number(r?.count) || 0,
+          // 只取 QQ 号，名字要另外从成员表查 —— 这里不做额外请求。
+          // ⚠️ 不能 `String(u ?? '')` 了事：协议端偶尔给 null / {} 占位，
+          //    以前会把 "" 和 "[object Object]" 当成 QQ 号塞给模型。
+          users: (Array.isArray(r?.users) ? r.users : [])
+            .map((u) => {
+              const id = (typeof u === 'number' || typeof u === 'string') ? u : (u?.uin ?? u?.user_id ?? '');
+              const s = String(id ?? '').trim();
+              return /^\d+$/.test(s) ? s : null;
+            })
+            .filter(Boolean)
+            .slice(0, 10)
+        })).filter((r) => r.emojiId !== '' || r.count > 0);
+        if (!reactions.length) return ok({ count: 0, messageId: midKey, note: '这条消息还没有人点表情。' });
+        return ok({
+          messageId: midKey,
+          // count 与 reactions 对齐：截断到 8 种之后还报 list.length 会自相矛盾
+          count: reactions.length,
+          reactions,
+          note: 'emojiId 是 QQ 表情编号，可对照 react_message 用的那套编号。'
+        });
       } catch (error) {
         return err(error?.message ?? error);
       }
@@ -663,7 +1302,13 @@ function registerAllTools() {
           imageCount ? `${imageCount} 张图片` : '',
           videoCount ? `${videoCount} 段视频（由 GIF 动图转换，≤480px/≤24帧）` : ''
         ].filter(Boolean).join(' + ');
-        const built = getImagePartsOrVideo(`消息 ${args.messageId} 的内容${note}：${what}。`, results);
+        // 这段文字是模型看完图之后读到的**最后一句**，正好在它决定说什么的位置上。
+        // 只说"这是几张图"时，它倾向于用评价画面来"交差"；把三个出口直接摆出来，
+        // 才压得住那股点评冲动。
+        const lead = `消息 ${args.messageId} 的内容${note}：${what}。`
+          + '看完了——有具体的话就说；没什么可说就调 react_message 点个表情，或者直接结束本轮。'
+          + '不要为了交代「我看到了」去描述或评价画面。';
+        const built = getImagePartsOrVideo(lead, results);
         return built;
       } catch (error) {
         return err(error?.message ?? error);
@@ -1136,7 +1781,12 @@ function registerAllTools() {
           at: new Date().toLocaleTimeString('zh-CN', { hour12: false })
         });
         ctx.emit('session-update', ctx.session.id);
-        return ok({ sent: true, messageId: result?.message_id ?? null, note: '图片已发送。' });
+        return ok({
+          sent: true,
+          messageId: result?.message_id ?? null,
+          ...actionLanding(ctx, args),
+          note: '图片已发送。'
+        });
       } catch (error) {
         return err(error?.message ?? error);
       }

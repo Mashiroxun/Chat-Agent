@@ -47,7 +47,11 @@ const ROOT_MUST_EXCLUDE = [
 /** app 目录内不进包的东西（同样是"本机存在正常、但会污染分发"）。 */
 const APP_MUST_EXCLUDE = [
   { name: '.workbuddy', desc: '本项目的智能体工作目录（含对话与记忆）' },
-  { name: 'plugin-data', desc: '插件运行时数据' }
+  { name: 'plugin-data', desc: '插件运行时数据' },
+  // docs/ 是版本历史 / 验证报告 / 架构分析这类内部资料（1.8MB）。
+  // 不进包：既是体积浪费，里面的分析文档还带本机绝对路径。
+  // 注意与 doc/（单数，面向插件开发者的接口文档）区分，后者仍随包分发。
+  { name: 'docs', desc: '开发内部资料（历史/验证/分析），不对外分发' }
 ];
 
 /** 打包必须保留的文件（缺了就是打不出能用的包）。 */
@@ -104,6 +108,9 @@ walkForBackups(path.join(APP_DIR, 'plugins'));
 walkForBackups(path.join(APP_DIR, 'skills'));
 walkForBackups(path.join(APP_DIR, 'electron'));
 walkForBackups(path.join(APP_DIR, 'src'));
+// ui 也是整目录进包的前端资源 —— 曾经漏扫，两个 580KB 的 style.css.bak-* 一直
+// 躺在那里没人报，白占 1.16MB 分发包体积，还可能被误认为有效样式表。
+walkForBackups(path.join(APP_DIR, 'ui'));
 
 // ── 3. 必需文件 ────────────────────────────────────────────────────────────
 for (const rel of REQUIRED) {
@@ -112,7 +119,9 @@ for (const rel of REQUIRED) {
 
 // ── 4. 敏感内容扫描（只看会被打进包的文本源码）──────────────────────────────
 const TEXT_EXT = new Set(['.js', '.mjs', '.cjs', '.json', '.html', '.css', '.md', '.txt', '.yml', '.yaml']);
-const SCAN_SKIP_DIRS = new Set(['node_modules', 'data', '.workbuddy', 'plugin-data', '.git', 'doc']);
+// 注意 'docs' 是复数：原先只写了 'doc'（插件开发文档），docs/ 那 1.8MB
+// 历史与验证资料一直在被全量扫描，还报出一堆本机路径噪音。
+const SCAN_SKIP_DIRS = new Set(['node_modules', 'data', '.workbuddy', 'plugin-data', '.git', 'doc', 'docs']);
 const SECRET_RULES = [
   { re: /(sk-[A-Za-z0-9]{16,})/g, label: '疑似 API Key（sk- 开头）' },
   { re: /(?:api[_-]?key|apikey|token|secret|password)\s*[:=]\s*['"]([A-Za-z0-9_\-]{20,})['"]/gi, label: '疑似硬编码密钥' }
@@ -189,6 +198,43 @@ for (const [hit, file] of scannedHits) {
   add(level, file, hit, level === 'FATAL' ? '把密钥挪到 data/config.json（不入包）后重扫' : '改成相对路径或从配置读');
 }
 
+// ── 5. 版本一致性（反馈第 11 条）────────────────────────────────────────────
+// 症状：日志里反复出现"更新源版本落后于当前安装"，用户永远收不到新版本提示。
+// 成因有两类，脚本只能查第一类；第二类必须靠发版动作保证（见文末提醒）：
+//   ① 本地漏改：package.json 与 version.json 不一致 / notes 为空 / 更新日志没条目
+//   ② 远程 CDN 缓存：更新源走 jsDelivr 的 @main，实测约 12 小时才刷新
+function readJsonSafe(target) {
+  try { return JSON.parse(fs.readFileSync(target, 'utf8')); }
+  catch (error) {
+    add('FATAL', target, `读不到或不是合法 JSON：${error?.message || error}`, '检查文件是否存在、编码是否为 UTF-8');
+    return null;
+  }
+}
+
+const pkgDoc = readJsonSafe(path.join(APP_DIR, 'package.json'));
+const verDoc = readJsonSafe(path.join(APP_DIR, 'version.json'));
+const pkgVer = String(pkgDoc?.version || '').trim();
+const verVer = String(verDoc?.version || '').trim();
+if (pkgDoc && !pkgVer) add('FATAL', 'resources/app/package.json', '缺少 version 字段', '更新检查靠它比对，必须有');
+if (verDoc && !verVer) add('FATAL', 'resources/app/version.json', '缺少 version 字段', '更新检查靠它比对，必须有');
+if (pkgVer && verVer && pkgVer !== verVer) {
+  add('FATAL', 'resources/app/version.json',
+    `版本号与 package.json 不一致（${verVer} ≠ ${pkgVer}）`,
+    '两者必须同时改；否则客户端会一直以为自己比更新源新，不再提示升级');
+}
+if (verDoc && !String(verDoc.notes || '').trim()) {
+  add('WARN', 'resources/app/version.json', 'notes 为空：更新弹窗里没有变更说明', '写上本版摘要（会直接展示给用户）');
+}
+if (pkgVer) {
+  try {
+    const chrome = fs.readFileSync(path.join(APP_DIR, 'ui/app/14-chrome.js'), 'utf8');
+    if (!chrome.includes(`version: '${pkgVer}'`) && !chrome.includes(`version: "${pkgVer}"`)) {
+      add('WARN', 'resources/app/ui/app/14-chrome.js',
+        `首页更新日志里没有 ${pkgVer} 的条目`, '补一条 STAGE_CHANGELOG，否则用户看不到本版改了什么');
+    }
+  } catch { /* 文件缺失已由 REQUIRED 覆盖 */ }
+}
+
 // ── 输出 ───────────────────────────────────────────────────────────────────
 const FATAL = findings.filter((f) => f.level === 'FATAL');
 const EXCLUDE = findings.filter((f) => f.level === 'EXCLUDE');
@@ -227,5 +273,12 @@ const excl = findings
   .join(' ');
 console.log(`   tar -a -c -f QQAgent-release.zip ${excl} -C "${ROOT}" .`);
 
+if (pkgVer) {
+  // 这条不是代码能"检查"出来的：远程 version.json 真的落后，本地也看不出来。
+  // 只能把动作写在发版流程里，否则用户端会一直读 CDN 上的旧文件（反馈第 11 条）。
+  console.log(`\n提醒：更新源走 jsDelivr 的 @main，实测约 12 小时才刷新。发版（${pkgVer}）后请：`);
+  console.log(`   curl "https://purge.jsdelivr.net/gh/<owner>/<repo>@main/version.json"`);
+  console.log('   或把引用改成 @v' + pkgVer + ' 这类 tag —— 否则用户端仍会读到旧 version.json。');
+}
 console.log(FATAL.length ? '\n结论：✗ 不能打包' : '\n结论：✓ 可以打包（记得按上面的排除清单）');
 process.exit(FATAL.length ? 1 : 0);

@@ -13,7 +13,7 @@ import { getConfig, updateConfig, ROOT, DATA_DIR, isChatAllowed, setConfigProvid
 import { runUpgrades } from './upgrade.js';
 // QQ 版本 vs 协议端声明的只读核对（r132）：面向大众分发后用户 QQ 版本各异，
 // 版本错开时登录被拒/接口异常且排查方向极易跑偏 —— 状态接口和启动日志里必须能看见。
-import { OneBotClient, segmentsToText, extractMediaFromSegments, expandForwardNodes, fetchForwardNodes } from './onebot.js';
+import { OneBotClient, segmentsToText, extractMediaFromSegments, expandForwardNodes, fetchForwardNodes, pickQuoteMid } from './onebot.js';
 // 协议端配置探测（2026-10-24）：令牌是 SnowLuma 按账号随机生成的，让新用户
 // 从 WebUI 手抄两串 43 位字符串是首次配置最容易失败的一步 —— 这里直接读它的
 // 配置文件把端点与令牌填好。只读，且令牌不出进程（对外的 publicView 会删掉）。
@@ -615,8 +615,13 @@ export function createApp({ log = console.log, desktopPetHost = null, components
         text = msg.message;
       }
       // senderId 一并带回：引用块显示为 名字(QQ:xxx)，与发言人标签同口径 ——
-      // 没有它，模型分不清引用的是"哪个张三"
-      return { sender: String(senderName), senderId: String(msg?.sender?.user_id ?? ''), mid: fwdMid, text: String(text).slice(0, quoteCap) };
+      // 没有它，模型分不清引用的是"哪个张三"。
+      // mid：以前只在「被引用的那条本身是合并转发且展开成功」时才给，纯图片引用
+      //   一律没有编号 → 模型看见 `[引用 张三：[图片]]` 却拿不到消息号，没法调
+      //   get_message_images，只能回一句「图没收到」（0.4.9.1 起的用户报障）。
+      //   现在凡是被引用的消息里带图片，就把**被引用那条自己**的编号带进引用块；
+      //   纯文本仍不给，避免模型拿着引用号去乱试工具。判定抽成 pickQuoteMid 便于回归。
+      return { sender: String(senderName), senderId: String(msg?.sender?.user_id ?? ''), mid: pickQuoteMid(messageId, msg?.message, fwdMid), text: String(text).slice(0, quoteCap) };
     } catch {
       return null;
     }
@@ -1130,6 +1135,27 @@ export function createApp({ log = console.log, desktopPetHost = null, components
    *   又不影响控制台正常使用 —— 页面里的 fetch 虽然是同源，
    *   但浏览器会带 Referer（有来源信息），走的是上面两条正常校验。
    */
+  /**
+   * 控制台令牌校验（0.4.9.3）。
+   *
+   * `?token=` 为外部脚本保留（无头调用方不好加请求头），但它比请求头危险得多：
+   * URL 会进浏览器历史、代理日志、以及任何外链的 Referer。所以命中时记一条
+   * 一次性警告 —— 不改变行为，只给信号。
+   */
+  let urlTokenWarned = false;
+  function consoleTokenMatches(req, token) {
+    if (!token) return false;
+    if (req.headers['x-console-token'] === token) return true;
+    let url;
+    try { url = new URL(req.url, 'http://127.0.0.1'); } catch { return false; }
+    if (url.searchParams.get('token') !== token) return false;
+    if (!urlTokenWarned) {
+      urlTokenWarned = true;
+      logger.warn('server', '检测到用 ?token= 传控制台令牌：URL 会留在浏览器历史与代理日志里，建议改用 x-console-token 请求头');
+    }
+    return true;
+  }
+
   function originAllowed(req, opts = {}) {
     const host = String(req.headers.host ?? '');
     if (!isLoopbackHostHeader(host)) return false;
@@ -1153,10 +1179,8 @@ export function createApp({ log = console.log, desktopPetHost = null, components
     // 只通了一条（Origin 同源）。token 本身就是"本机可信进程"的凭据
     // （与 authorize 同口径），值匹配即放行写请求；没配 token 时行为不变。
     try {
-      const url = new URL(req.url, 'http://127.0.0.1');
       const token = String(getConfig().server?.token ?? '');
-      if (token
-        && (req.headers['x-console-token'] === token || url.searchParams.get('token') === token)) return true;
+      if (token && consoleTokenMatches(req, token)) return true;
       // 渲染进程凭据（主进程 webRequest 注入，每启动随机、不落盘不进 DOM），
       // 桌宠等本机上下文走它 —— 与 keyEndpointAllowed ① 同口径。
       if (rendererAuthToken && req.headers['x-console-token'] === rendererAuthToken) return true;
@@ -1177,9 +1201,7 @@ export function createApp({ log = console.log, desktopPetHost = null, components
   function authorize(req) {
     const token = String(getConfig().server?.token ?? '');
     if (!token) return true;
-    const url = new URL(req.url, 'http://127.0.0.1');
-    return req.headers['x-console-token'] === token
-      || url.searchParams.get('token') === token
+    return consoleTokenMatches(req, token)
       || req.headers['x-console-token'] === rendererAuthToken;
   }
 
@@ -1266,11 +1288,7 @@ export function createApp({ log = console.log, desktopPetHost = null, components
 
     // ② 用户自配的 server.token（给外部脚本用；也可放在 ?token= 上）。
     const token = String(getConfig().server?.token ?? '');
-    if (token) {
-      const url = new URL(req.url, 'http://127.0.0.1');
-      if (req.headers['x-console-token'] === token
-        || url.searchParams.get('token') === token) return true;
-    }
+    if (token && consoleTokenMatches(req, token)) return true;
     // ⚠️ 这里**不能**退化成 originAllowed 的"无来源即放行"（见上面 originAllowed 注释）：
     //   明文密钥端点全是只读 GET，若跟着放行，本机任意进程 curl 一下就能读走主 API Key。
     //   也没必要退化 —— ①② 已经覆盖了控制台（渲染进程凭据）和脚本（server.token）两条正路；
@@ -1589,6 +1607,12 @@ export function createApp({ log = console.log, desktopPetHost = null, components
       server.headersTimeout = 65000;
       server.listen(port, '127.0.0.1', () => {
         server.off('error', reject);
+        // 0.4.9.3：回环绑定挡不住本机其它程序。没配 server.token 时，
+        // 任何进程都能调写接口（发消息、改配置、读聊天记录）。这里只告警，
+        // 不擅自自动生成 —— 那会让已有外部脚本突然 401/403。
+        if (!String(getConfig().server?.token ?? '')) {
+          logger.warn('server', `控制台未设置 server.token：本机任意进程均可调用 127.0.0.1:${port} 的写接口，建议在设置页配置一个`);
+        }
         resolve(port); // 必须把实际端口传回去，Electron 壳要用它加载页面
       });
     });

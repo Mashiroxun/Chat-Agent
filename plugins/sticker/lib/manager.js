@@ -9,7 +9,8 @@ import { detectImageExt } from '../../../src/image-type.js';
 import {
   loadStickerStore, saveStickerStore, mergeStickerLibrary, isStickerFetchComplete,
   findSticker, findStickerExact, formatStickerList, applyStickerNote, markStickerUsed,
-  loadHiddenSet, saveHiddenSet, visibleEntries, isHidden, mergeDiskStickerStore
+  loadHiddenSet, saveHiddenSet, visibleEntries, isHidden, mergeDiskStickerStore,
+  describeStickerPayload
 } from './stickers.js';
 
 /**
@@ -26,6 +27,16 @@ import {
  * （见 stickers.js 的 isStickerFetchComplete）—— 剪枝只在这条证据成立时才做。
  */
 const SYNC_FETCH_COUNT = 500;
+
+// ── 同步异常降频（2026-11-11，反馈第 10 条）──────────────────────────────
+// 病灶：`fetch_custom_face_detail` 如果在该协议端不生效，会稳定返回空数组。
+// 那时 sync 仍算"成功"，定时器每 60 秒照打一次，日志里堆出上千行
+// `本次拿到 0 条（请求 500）` —— 既没信息量，又把真正的诊断信息（返回形状）
+// 漏掉了。所以：连续异常先降频，第一次异常必须把**返回形状**记下来。
+const SYNC_PROBLEM_LOG_EVERY_MS = 30 * 60 * 1000;   // 同类异常日志 30 分钟最多一行
+const SYNC_EMPTY_STREAK_BEFORE_BACKOFF = 3;         // 连续 3 次异常才开始降频
+const SYNC_BACKOFF_BASE_MS = 60000;                 // 正常间隔
+const SYNC_BACKOFF_MAX_MS = 30 * 60000;             // 封顶 30 分钟
 
 // ── 面板素材（缩略图 / 网络图缓存）─────────────────────────────────────────
 //
@@ -140,6 +151,53 @@ export class StickerManager {
     this.syncedAt = 0;
     this.syncing = null;
     this.collectTimes = [];
+    // 同步异常状态（见文件头 SYNC_* 常量注释）：
+    //   emptyStreak  连续"拿到 0 条 / 调用失败"的次数，拿到非空即清零
+    //   backoffUntil 降频截止时间；force=true 时忽略（用户主动刷新要立刻试）
+    //   backoffLogged 本轮降频是否已提示过，避免每次延长都刷一行
+    //   lastProblemLogAt 异常日志节流时间戳
+    this.emptyStreak = 0;
+    this.backoffUntil = 0;
+    this.backoffLogged = false;
+    this.lastProblemLogAt = 0;
+  }
+
+  /**
+   * 记一次同步异常（空结果或调用失败），必要时降频。
+   *
+   * 为什么要节流 + 降频：反馈里那台机器 1015 行日志里没有一行能看出"协议端
+   * 返回了什么"，噪音盖住了信号。这里把"第一次异常"和"降频动作"各记一行，
+   * 其余同类异常静默 —— 信息量不降，行数从上千降到个位。
+   * @param {string} text 已经写好的诊断文案
+   */
+  #noteSyncProblem(text) {
+    this.emptyStreak = Math.min((this.emptyStreak || 0) + 1, 20);
+    const now = Date.now();
+    if (!this.lastProblemLogAt || now - this.lastProblemLogAt > SYNC_PROBLEM_LOG_EVERY_MS) {
+      this.lastProblemLogAt = now;
+      try { this.api?.log?.(text); } catch { /* 日志失败不影响同步 */ }
+    }
+    if (this.emptyStreak >= SYNC_EMPTY_STREAK_BEFORE_BACKOFF) {
+      const ms = Math.min(SYNC_BACKOFF_MAX_MS, SYNC_BACKOFF_BASE_MS * 2 ** (this.emptyStreak - 2));
+      this.backoffUntil = now + ms;
+      if (!this.backoffLogged) {
+        this.backoffLogged = true;
+        try {
+          this.api?.log?.(`收藏同步连续 ${this.emptyStreak} 次异常，已自动降频到每 ${Math.max(1, Math.round(ms / 60000))} 分钟一次（拿到数据后自动撤销）`);
+        } catch { /* ignore */ }
+      }
+    }
+  }
+
+  /** 同步恢复正常：清空异常状态与降频。 */
+  #noteSyncRecovered(count) {
+    if (this.emptyStreak >= SYNC_EMPTY_STREAK_BEFORE_BACKOFF || this.backoffUntil) {
+      try { this.api?.log?.(`收藏同步已恢复（拿到 ${count} 条），降频撤销`); } catch { /* ignore */ }
+    }
+    this.emptyStreak = 0;
+    this.backoffUntil = 0;
+    this.backoffLogged = false;
+    this.lastProblemLogAt = 0;
   }
 
   /** 可见（未被隐藏）的那部分库。提示词 / list / 快照 / 发送一律用它。 */
@@ -443,13 +501,22 @@ export class StickerManager {
     if (!force && this.syncedAt && now - this.syncedAt < ttl) {
       return { entries: this.entries, fromCache: true };
     }
+    // 降频窗口内直接返回内存快照。force=true 不拦：用户在查看器里点"刷新"
+    // 或刚收藏完新表情时，必须能立刻真同步。
+    if (!force && this.backoffUntil && now < this.backoffUntil) {
+      return { entries: this.entries, fromCache: true, backoff: true };
+    }
     if (this.syncing) return this.syncing;
     this.syncing = (async () => {
       try {
         const count = SYNC_FETCH_COUNT;
         const data = await this.api.qqCall('fetch_custom_face_detail', { count });
         const fetched = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : null);
-        if (!fetched) throw new Error('fetch_custom_face_detail 返回 data 不是数组');
+        if (!fetched) {
+          // 把"返回了什么形状"带进错误 —— 原来只有一句"data 不是数组"，
+          // 既不知道是 null、对象还是字符串，也不知道键名对不对。
+          throw new Error(`fetch_custom_face_detail 返回的形状不对（${describeStickerPayload(data)}）`);
+        }
         // 只有"这次拉取是完整的一份"才允许剪枝。拿满 count 条 = 后面还有，
         // 此时不在列表里的表情只是"没翻到"，删掉就是永久丢数据（含备注/标签/使用次数）。
         const complete = isStickerFetchComplete(fetched.length, count);
@@ -471,15 +538,29 @@ export class StickerManager {
         } catch { /* 并入失败不阻塞正常同步 */ }
         saveStickerStore(this.entries);
         this.pruneOrphanImages();
+        if (fetched.length > 0) this.#noteSyncRecovered(fetched.length);
         if (merged.length < before) {
           this.api.log(`收藏同步：QQ 侧已移除 ${before - merged.length} 个表情，本地库同步删除`);
-        } else if (!complete) {
-          // 不剪枝时说明一句，免得用户看到"本地有 200 张、QQ 只有 150 张"时以为是 bug
+        } else if (!complete && fetched.length > 0) {
+          // 不剪枝时说明一句，免得用户看到"本地有 200 张、QQ 只有 150 张"时以为是 bug。
+          // 空结果不走这里：它归 #noteSyncProblem 管，否则一次同步会打两行。
           this.api.log(`收藏同步：本次拿到 ${fetched.length} 条（请求 ${count}），已按"不完整"处理 —— 只增不删`);
+        } else if (!fetched.length) {
+          // 0 条不是"成功同步了个空库"，而是最值得诊断的状态：把协议端返回的
+          // **形状**记下来（只记键名与长度），下一次有人看日志就能判断是
+          // 「收藏真的空」还是「接口没实现 / 参数不匹配」。
+          this.#noteSyncProblem(
+            `收藏同步：本次拿到 0 条（请求 ${count}）。协议端返回：${describeStickerPayload(data)}。`
+            + '若长期为 0，多半是该协议端未实现 fetch_custom_face_detail，或 QQ 侧收藏为空'
+          );
         }
         return { entries: this.entries, fromCache: false };
       } catch (error) {
-        return { entries: this.entries, fromCache: true, error: String(error?.message ?? error) };
+        const msg = String(error?.message ?? error);
+        // 原来这里完全静默：调用方虽然会写一条"最近一次收藏同步失败"到查看器，
+        // 但 data/logs 里一个字都没有 —— 用户报"表情不同步"时无从查起。
+        this.#noteSyncProblem(`收藏同步失败（连续 ${this.emptyStreak + 1} 次）：${msg.slice(0, 240)}`);
+        return { entries: this.entries, fromCache: true, error: msg };
       } finally {
         this.syncing = null;
       }

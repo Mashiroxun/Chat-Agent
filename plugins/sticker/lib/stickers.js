@@ -216,6 +216,40 @@ export function isStickerFetchComplete(fetchedCount, requestedCount) {
 }
 
 /**
+ * 把协议端返回的原始值描述成一行**结构摘要**（只讲形状与键名，不含内容）。
+ *
+ * 为什么需要它（2026-11-11，来自反馈第 10 条）：
+ *   日志里只有 `收藏同步：本次拿到 0 条（请求 500）`，那个 500 是**请求条数常量**，
+ *   却被读成了 HTTP 500 —— 排查成本全丢给用户。真正需要回答的是
+ *   「协议端到底回了什么形状」，因为这四种情况的处置完全不同：
+ *     · `数组(0)`             → 收藏确实为空，或协议端降级返回空数组
+ *     · `对象{...} data=数组(0)` → 正常包装但没数据
+ *     · `对象{...} data=缺失`    → 接口名/参数不匹配，或该 action 未实现
+ *     · `null` / 非对象        → 协议端直接返回异常值
+ *
+ * 只输出键名与长度，**不落任何表情内容**（可能是用户私藏）。
+ * @param {unknown} data
+ * @returns {string} 形如 `数组(0)` / `对象{code,data} data=数组(0)` / `null`
+ */
+export function describeStickerPayload(data) {
+  if (data === null) return 'null';
+  if (data === undefined) return 'undefined';
+  if (Array.isArray(data)) return `数组(${data.length})`;
+  const t = typeof data;
+  if (t !== 'object') return `${t}(${String(data).slice(0, 60)})`;
+  const keys = Object.keys(data);
+  const shown = keys.slice(0, 6).join(',');
+  const more = keys.length > 6 ? `,…共 ${keys.length} 键` : '';
+  let inner;
+  if (!Object.prototype.hasOwnProperty.call(data, 'data')) inner = 'data=缺失';
+  else if (Array.isArray(data.data)) inner = `data=数组(${data.data.length})`;
+  else if (data.data === null) inner = 'data=null';
+  else if (typeof data.data === 'object') inner = `data=对象{${Object.keys(data.data).slice(0, 5).join(',')}}`;
+  else inner = `data=${typeof data.data}`;
+  return `对象{${shown}${more}} ${inner}`.slice(0, 200);
+}
+
+/**
  * 合并远端收藏与本地库。
  *
  * ⚠️ 剪枝**默认关闭**（`opts.prune !== true` 就只合并不删除）。
