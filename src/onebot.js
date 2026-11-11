@@ -393,6 +393,10 @@ export class OneBotClient {
       e.wording = body.wording ?? '';
       throw e;
     }
+    // ⚠️ 对外约定：这里返回的是**已解包**的 body.data。
+    //    所有调用方都不要再写 `resp.data.xxx` —— 那会拿到 undefined 且不抛错，
+    //    症状是"接口明明 200、功能却永远返回空"。0.4.9.3 的 fetchSysFaces 与
+    //    group_highlights 就是这么静默失效过一个版本。
     return body.data;
   }
 
@@ -475,6 +479,96 @@ export class OneBotClient {
     }
     return this.call('group_poke', { group_id: Number(id), user_id: Number(targetUserId || id) }).catch(() =>
       this.call('send_poke', { group_id: Number(id), user_id: Number(targetUserId || id) }));
+  }
+
+  /**
+   * 给一条消息点表情回应（0.4.9.3）。
+   *
+   * SnowLuma 同时提供两个口径：
+   *   · set_msg_emoji_like  —— NapCat 口径，只要 message_id + emoji_id，
+   *     内部自己查 message meta 判断群聊/私聊；
+   *   · set_group_reaction  —— go-cqhttp 口径，参数是 code + is_set。
+   * 优先用前者（少传一个 group_id、私聊也能用），失败再退到后者。
+   *
+   * 这是"轻量回应"：只在消息下面挂一个小表情，不产生新的发言。
+   */
+  async setMsgEmojiLike(messageId, emojiId, set = true) {
+    const mid = Number(messageId);
+    const payload = { message_id: mid, emoji_id: String(emojiId), set: !!set };
+    return this.call('set_msg_emoji_like', payload).catch(() =>
+      this.call('set_group_reaction', { message_id: mid, code: String(emojiId), is_set: !!set }));
+  }
+
+  /**
+   * 撤回一条消息（0.4.9.3）。
+   * 协议端只认 message_id，不判断归属 —— 能不能撤别人的，取决于机器人是不是管理员。
+   * 权限判断必须放在上层（sender/tool），这里只负责发请求。
+   */
+  async deleteMsg(messageId) {
+    return this.call('delete_msg', { message_id: Number(messageId) });
+  }
+
+  /**
+   * 拉 QQ 系统表情目录（0.4.9.3）。
+   * 返回按分组打包的全量映射，每项含 q_sid（就是 set_msg_emoji_like 要的编号）
+   * 与 q_des（如「/赞」）。调用方据此建立"名字 → 编号"的索引，
+   * 模型就能用「笑」「赞」这类语义选表情，而不是背数字。
+   */
+  async fetchSysFaces(refresh = false) {
+    return this.call('fetch_sys_faces', refresh ? { refresh: true } : {});
+  }
+
+  /** 按编号 / 名称 / 别名搜系统表情。目录里没命中时用它兜底。 */
+  async searchSysFaces(query) {
+    return this.call('search_sys_faces', { query: String(query) });
+  }
+
+  /** 群荣誉榜（龙王 / 话痨 / 群聊之火 / 魅力 / 萌新）。 */
+  async getGroupHonor(groupId, type = 'all') {
+    return this.call('get_group_honor_info', { group_id: Number(groupId), type: String(type) });
+  }
+
+  /** 群今日打卡名单。 */
+  async getGroupSignedList(groupId) {
+    return this.call('get_group_signed_list', { group_id: Number(groupId) });
+  }
+
+  /** 给某人的名片点赞。times 受 QQ 侧每日上限约束（一般 10 次）。 */
+  async sendLike(userId, times = 1) {
+    return this.call('send_like', { user_id: Number(userId), times: Number(times) });
+  }
+
+  /** 群公告：普通公告与新成员公告合并返回（send_to_new_members 区分）。 */
+  async getGroupNotice(groupId) {
+    return this.call('_get_group_notice', { group_id: Number(groupId) });
+  }
+
+  /** 群系统消息（入群申请 / 已进群 / 退群）。传 group_id 只取该群。 */
+  async getGroupSystemMsg(groupId = null) {
+    const params = {};
+    if (groupId) params.group_id = Number(groupId);
+    return this.call('get_group_system_msg', params);
+  }
+
+  /** 一条消息上的全部表情回应（谁点了什么）。 */
+  async getMsgEmojiLikes(messageId) {
+    return this.call('get_msg_emoji_likes', { message_id: Number(messageId) });
+  }
+
+  /**
+   * 发送合并转发（0.4.9.3）。
+   * messages 是 OneBot 标准节点数组：[{ type:'node', data:{ qq, name, content } }]。
+   * ⚠️ 节点树由**调用方**构造 —— 不要把这个结构直接暴露给模型，它拼不对。
+   * 对外只暴露 forward_recent（转发最近 N 条），节点在工具里拼好。
+   */
+  async sendForwardMsg(kind, id, messages, opts = {}) {
+    const payload = {
+      messages,
+      message_type: kind === 'group' ? 'group' : 'private',
+      ...(kind === 'group' ? { group_id: Number(id) } : { user_id: Number(id) }),
+      ...opts
+    };
+    return this.call('send_forward_msg', payload);
   }
 
   async getMsg(messageId) {
@@ -581,6 +675,33 @@ export async function fetchForwardNodes(onebot, messageId, segments = null, time
  * onebot: OneBot 客户端，仅语音转写需要（`media.transcribe` 取语音文件用）；
  *         不传则语音保持 `[语音]` 占位。
  */
+/**
+ * 引用块要不要把「被引用消息自己的 #编号」交给模型（2026-11-11 反馈核查补）。
+ *
+ * 背景：`segmentsToText` 会把 `info.mid` 拼成引用块的开头 `#数字`。原先只有
+ * 「被引用的那条本身是合并转发、且就地展开成功」才有 mid —— 引用一条纯图片时
+ * 编号为空，模型只看到 `[引用 张三：[图片]]`，想看图也无从下手（看图工具要的是
+ * 消息编号），于是只能回「图没收到」。用户实测报障过。
+ *
+ * 规则刻意收得很窄：
+ *   · 合并转发的 fwdMid 优先（那是给 read_forward 用的，别被覆盖）；
+ *   · 只有真的带 image 段才给 —— 纯文本引用不给，免得模型拿引用号去乱试工具；
+ *   · 只回传编号，不在这里发请求、不查存档，保持纯函数、可单测。
+ *
+ * @param {string|number} messageId 被引用消息自己的 message_id
+ * @param {unknown} segments 被引用消息的 message 段数组
+ * @param {string|null} fwdMid 已解析出的合并转发编号
+ * @returns {string|null}
+ */
+export function pickQuoteMid(messageId, segments, fwdMid = null) {
+  if (fwdMid !== null && fwdMid !== undefined && String(fwdMid) !== '') return String(fwdMid);
+  if (!Array.isArray(segments)) return null;
+  const hasImage = segments.some((s) => String(s?.type ?? '') === 'image');
+  if (!hasImage) return null;
+  const mid = String(messageId ?? '').trim();
+  return mid ? mid : null;
+}
+
 export async function segmentsToText(segments, { resolveReply = null, resolveAtName = null, includeReply = true, onebot = null } = {}) {
   if (typeof segments === 'string') return sanitizeUserText(segments.trim());
   const out = [];

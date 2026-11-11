@@ -219,8 +219,17 @@ export function readFileTool(ctx, args) {
   const lines = text.split('\n');
   // 单文件最多回 400 行 —— 草稿都不长，超了说明模型该拆文件了
   const shown = lines.slice(0, 400);
-  const body = shown.map((l, i) => `${String(i + 1).padStart(4)}| ${l}`).join('\n');
-  return { content: `${r.rel}（共 ${lines.length} 行）\n${body}${lines.length > 400 ? '\n…（已截断，只看前 400 行）' : ''}` };
+  let body = shown.map((l, i) => `${String(i + 1).padStart(4)}| ${l}`).join('\n');
+  // ⚠️ 按行截断挡不住"一行超长"：第三方包里常见的压缩产物（xxx.min.js）或内联
+  //    base64，单个行就有几百 KB，400 行的窗口照样把整份塞进上下文 —— 一次读取
+  //   就能把这一轮的 token 打满。所以再按字符兜一道。
+  const MAX_CHARS = 40000;
+  let note = lines.length > 400 ? '\n…（已截断，只看前 400 行）' : '';
+  if (body.length > MAX_CHARS) {
+    body = body.slice(0, MAX_CHARS);
+    note = `\n…（已按体积截断到 ${MAX_CHARS} 字符：这个文件可能有压缩/超长行，先看头部判断结构）`;
+  }
+  return { content: `${r.rel}（共 ${lines.length} 行）\n${body}${note}` };
 }
 
 /** 列出草稿里的文件。 */

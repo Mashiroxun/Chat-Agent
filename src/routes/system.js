@@ -64,6 +64,10 @@ export function systemRoutes(deps, shared) {
         // 给可能很慢的便携 QQ 探测套短超时，避免拖垮整条状态接口（定义见上方 withStatusTimeout）。
         const qqPortable = await withStatusTimeout(qqPortableStatus(), QQ_PORTABLE_DEGRADED, 1500);
         return json(res, 200, {
+          // 运维脚本不必再去猜 /api/version：状态接口自己带上实际安装版本
+          //（dataDir 本就在返回体末尾）。localVersion() 只读一次本地 package.json，
+          // 秒级轮询热路径上开销可忽略。
+          version: localVersion(),
           degraded: !!qqPortable?.degraded,
           onebot: {
             connected: onebot.connected,

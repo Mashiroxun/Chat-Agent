@@ -95,10 +95,11 @@ const DANGER_RULES = [
     //   自动生成的扩展没有任何正当用途需要它 → 与导入高危模块同档，直接 block。
     id: 'builtin-module-bypass',
     level: 'block',
-    re: /process\s*\.\s*getBuiltinModule\b/,
-    title: 'process.getBuiltinModule（绕过模块导入检查）',
+    re: /process\s*\.\s*getBuiltinModule\b|process\s*\.\s*binding\s*\(/,
+    title: 'process.getBuiltinModule / process.binding（绕过模块导入检查）',
     why: 'Node 22+ 的 process.getBuiltinModule 能不经 import/require 直接拿到 fs / child_process '
-      + '等模块，等于绕开本闸门的模块检查。扩展需要的能力请走 api.*。'
+      + '等模块；process.binding("fs") 是同类的内部通道，静态检查更看不见它。'
+      + '两者都等于绕开本闸门的模块检查，扩展需要的能力请走 api.*。'
   },
   {
     id: 'path-escape',

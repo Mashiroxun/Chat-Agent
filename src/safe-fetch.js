@@ -7,8 +7,12 @@
 // - 响应体限量读取，避免超大响应拖垮进程；
 // - 大文件（视频）走 safeFetchBinaryToFile：边收边写盘，内存占用与文件大小无关。
 //
-// 例外开关：security.allowPrivateImageHosts = true 时，图片下载跳过内网检查
-// （仅供本地测试/自建图床使用，默认关闭）。
+// 例外开关（默认全部关闭）：
+//   · security.allowPrivateImageHosts = true → 跳过内网检查（本地测试/自建图床）；
+//     注意它放开的是**整段内网**，LAN 与云元数据也一并放行，范围偏大。
+//   · security.allowLoopback = true → 只放行 127.0.0.0/8 与 ::1 / localhost，
+//     LAN、链路本地、CGNAT、IPv6 ULA 等仍照拦。给插件调本机 Ollama/OneBot/
+//     宿主 HTTP 用，不必为了一个本地服务把整张内网打开。
 import dns from 'node:dns';
 import net from 'node:net';
 import http from 'node:http';
@@ -63,6 +67,22 @@ function parseEmbeddedIpv4(h) {
   return null;
 }
 
+/**
+ * 是否环回地址。用于 allowLoopback 的窄例外 —— 与 isPrivateIp 不同：
+ * 192.168.x / 10.x / 169.254.169.254 / fc00::/7 一律不算环回。
+ * IPv4-mapped / 6to4 里内嵌的 127.x 也按环回处理（否则换个写法就绕过了）。
+ */
+export function isLoopbackIp(ip) {
+  const h = String(ip || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (net.isIP(h) === 4) return h.startsWith('127.');
+  if (net.isIP(h) === 6) {
+    if (h === '::1') return true;
+    const embedded = parseEmbeddedIpv4(h);
+    return !!embedded && String(embedded).startsWith('127.');
+  }
+  return false;
+}
+
 export function isPrivateIp(ip) {
   const h = String(ip || '').toLowerCase().replace(/^\[|\]$/g, '');
   if (!h) return true;
@@ -111,14 +131,17 @@ async function lookupWithTimeout(hostname) {
   return Promise.race([dnsLookup(hostname, { all: true, verbatim: true }), timeout]).finally(() => clearTimeout(timer));
 }
 
-async function resolveSafeHost(hostname, { allowPrivate = false } = {}) {
+async function resolveSafeHost(hostname, { allowPrivate = false, allowLoopback = false } = {}) {
   const h = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
   if (!h) throw new Error('主机名为空');
-  if (!allowPrivate && (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local'))) {
+  const localName = h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local');
+  // 环回例外只认字面量 localhost；*.localhost / *.local 仍一律拒绝
+  if (!allowPrivate && localName && !(allowLoopback && h === 'localhost')) {
     throw new Error('禁止访问内网/本机地址');
   }
+  const blocked = (ip) => isPrivateIp(ip) && !(allowLoopback && isLoopbackIp(ip));
   if (net.isIP(h)) {
-    if (!allowPrivate && isPrivateIp(h)) throw new Error('禁止访问内网/本机地址');
+    if (!allowPrivate && blocked(h)) throw new Error('禁止访问内网/本机地址');
     return h;
   }
   let addresses;
@@ -130,14 +153,19 @@ async function resolveSafeHost(hostname, { allowPrivate = false } = {}) {
   if (!addresses.length) throw new Error('域名没有解析结果');
   if (!allowPrivate) {
     for (const { address } of addresses) {
-      if (isPrivateIp(address)) throw new Error('域名解析到内网/本机地址，已阻止');
+      if (blocked(address)) throw new Error('域名解析到内网/本机地址，已阻止');
+    }
+    // localhost 被 hosts 改到公网/内网时不能借环回例外蒙混过关：
+    // 要求**每一条**解析结果都真的是环回。
+    if (allowLoopback && h === 'localhost' && !addresses.every((a) => isLoopbackIp(a.address))) {
+      throw new Error('localhost 解析到了非环回地址，已阻止');
     }
   }
   return addresses[0].address;
 }
 
 /** 校验 URL 的 scheme 与主机（DNS 级）。返回 { url, ip }。 */
-export async function validateFetchUrl(raw, { allowPrivate = false } = {}) {
+export async function validateFetchUrl(raw, { allowPrivate = false, allowLoopback = false } = {}) {
   let url;
   try {
     url = new URL(String(raw ?? '').trim());
@@ -146,7 +174,7 @@ export async function validateFetchUrl(raw, { allowPrivate = false } = {}) {
   }
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('仅允许 http/https');
   if (url.username || url.password) throw new Error('URL 不能包含凭据');
-  const ip = await resolveSafeHost(url.hostname, { allowPrivate });
+  const ip = await resolveSafeHost(url.hostname, { allowPrivate, allowLoopback });
   return { url, ip };
 }
 
@@ -394,6 +422,10 @@ export function hasFetchProvider() {
 }
 
 export async function safeFetch(urlString, { browseLocked = false, headers = null, maxBytes = TEXT_BODY_DEFAULT, timeoutMs = null, proxy = '' } = {}) {
+  // 环回例外（2026-11-11）：只放行 127.x / ::1 / localhost，LAN 仍拦。
+  // 默认两个开关都是关的，老行为逐字节不变。
+  const allowPrivate = getConfig().security?.allowPrivateImageHosts === true;
+  const allowLoopback = getConfig().security?.allowLoopback === true;
   // 启动组合（0.4.9.3）：provider 只接管"怎么发请求"，**安全检查不外包**。
   // 入口 URL 的浏览锁与 SSRF 校验照做 —— 否则层里写个裸 fetch() 就能读 127.0.0.1
   // 的内部服务。重定向后的逐跳校验由 provider 自己负责（内核看不到它的跳转）。
@@ -402,7 +434,7 @@ export async function safeFetch(urlString, { browseLocked = false, headers = nul
       const lock = checkBrowseLock(urlString);
       if (!lock.allowed) throw new Error(`浏览锁定：${lock.host || '该地址'} 不在允许的域名清单内`);
     }
-    await validateFetchUrl(urlString);
+    await validateFetchUrl(urlString, { allowPrivate, allowLoopback });
     return fetchProvider(urlString, { browseLocked, headers, maxBytes, timeoutMs, proxy });
   }
   // ⚠️ `maxBytes` 必须真的生效（2026-10-08 修，用户报障"联网搜图经常搜不了"）。
@@ -421,7 +453,7 @@ export async function safeFetch(urlString, { browseLocked = false, headers = nul
   // 锁定校验放在**最前面**，连 DNS 都不做 —— 不在白名单就根本不该发起连接
   const lock = browseLocked ? checkBrowseLock(urlString) : { enabled: false, allowed: true, host: '' };
   if (!lock.allowed) throw new Error(`浏览锁定：${lock.host || '该地址'} 不在允许的域名清单内`);
-  let { url, ip } = await validateFetchUrl(urlString);
+  let { url, ip } = await validateFetchUrl(urlString, { allowPrivate, allowLoopback });
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     const result = await requestOnce(url, ip, { asBinary: false, maxBytes: cap, headers, timeoutMs: timeout });
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
@@ -433,7 +465,7 @@ export async function safeFetch(urlString, { browseLocked = false, headers = nul
         const nl = checkBrowseLock(next);
         if (!nl.allowed) throw new Error(`浏览锁定：重定向目标 ${nl.host || '未知'} 不在允许的域名清单内`);
       }
-      ({ url, ip } = await validateFetchUrl(next));
+      ({ url, ip } = await validateFetchUrl(next, { allowPrivate, allowLoopback }));
       continue;
     }
     const body = result.body || '';
@@ -498,12 +530,16 @@ async function discardBody(res) {
  * @param {object} [opts]
  *   browseLocked  = true    浏览锁定开启时逐跳校验（与 web_fetch 工具同口径）
  *   allowPrivate  = undefined  未指定时跟随 security.allowPrivateImageHosts
+ *   allowLoopback = undefined  未指定时跟随 security.allowLoopback（只放环回，不放 LAN）
  *   maxRedirects  = 5
  */
-export async function guardedFetch(input, init = {}, { browseLocked = true, allowPrivate, maxRedirects = MAX_REDIRECTS } = {}) {
+export async function guardedFetch(input, init = {}, { browseLocked = true, allowPrivate, allowLoopback, maxRedirects = MAX_REDIRECTS } = {}) {
   const doAllowPrivate = allowPrivate === undefined
     ? getConfig().security?.allowPrivateImageHosts === true
     : allowPrivate === true;
+  const doAllowLoopback = allowLoopback === undefined
+    ? getConfig().security?.allowLoopback === true
+    : allowLoopback === true;
 
   const rawUrl = typeof input === 'string'
     ? input
@@ -522,7 +558,7 @@ export async function guardedFetch(input, init = {}, { browseLocked = true, allo
 
   let target = rawUrl;
   for (let hop = 0; ; hop += 1) {
-    const { url } = await validateFetchUrl(target, { allowPrivate: doAllowPrivate });
+    const { url } = await validateFetchUrl(target, { allowPrivate: doAllowPrivate, allowLoopback: doAllowLoopback });
     // 与 safeFetch 一致：锁定校验放在**发起连接之前**（连 DNS 都算白做，先拦掉）
     if (browseLocked) {
       const lock = checkBrowseLock(url.toString());
@@ -572,7 +608,8 @@ export async function safeFetchBinary(urlString, maxBytes = 12 * 1024 * 1024, { 
   const timeout = resolveTimeoutMs(timeoutMs);
   noteProxyUnsupported(proxy);
   const allowPrivate = getConfig().security?.allowPrivateImageHosts === true;
-  let { url, ip } = await validateFetchUrl(urlString, { allowPrivate });
+  const allowLoopback = getConfig().security?.allowLoopback === true;
+  let { url, ip } = await validateFetchUrl(urlString, { allowPrivate, allowLoopback });
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     const result = await requestOnce(url, ip, { asBinary: true, maxBytes, headers, timeoutMs: timeout });
     if ([301, 302, 303, 307, 308].includes(result.statusCode)) {
@@ -583,7 +620,7 @@ export async function safeFetchBinary(urlString, maxBytes = 12 * 1024 * 1024, { 
         const nl = checkBrowseLock(next);
         if (!nl.allowed) throw new Error(`浏览锁定：重定向目标 ${nl.host || '未知'} 不在允许的域名清单内`);
       }
-      ({ url, ip } = await validateFetchUrl(next, { allowPrivate }));
+      ({ url, ip } = await validateFetchUrl(next, { allowPrivate, allowLoopback }));
       continue;
     }
     if (result.statusCode !== 200) throw new Error(`HTTP ${result.statusCode}`);
@@ -700,11 +737,12 @@ export async function safeFetchBinaryToFile(urlString, destPath, maxBytes, { tim
   const lock = browseLocked ? checkBrowseLock(urlString) : { enabled: false, allowed: true, host: '' };
   if (!lock.allowed) throw new Error(`浏览锁定：${lock.host || '该地址'} 不在允许的域名清单内`);
   const allowPrivate = getConfig().security?.allowPrivateImageHosts === true;
+  const allowLoopback = getConfig().security?.allowLoopback === true;
 
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   let ok = false;
   try {
-    let { url, ip } = await validateFetchUrl(urlString, { allowPrivate });
+    let { url, ip } = await validateFetchUrl(urlString, { allowPrivate, allowLoopback });
     for (let i = 0; i <= MAX_REDIRECTS; i++) {
       const r = await requestToFile(url, ip, dest, { limit, timeoutMs, headers });
       if (r.redirect !== undefined) {
@@ -715,7 +753,7 @@ export async function safeFetchBinaryToFile(urlString, destPath, maxBytes, { tim
           const nl = checkBrowseLock(next);
           if (!nl.allowed) throw new Error(`浏览锁定：重定向目标 ${nl.host || '未知'} 不在允许的域名清单内`);
         }
-        ({ url, ip } = await validateFetchUrl(next, { allowPrivate }));
+        ({ url, ip } = await validateFetchUrl(next, { allowPrivate, allowLoopback }));
         continue;
       }
       if (r.statusCode !== 200) throw new Error(`HTTP ${r.statusCode}`);
@@ -732,7 +770,8 @@ export async function safeFetchBinaryToFile(urlString, destPath, maxBytes, { tim
 
 /**
  * 图片地址校验（供 send_sticker / 图片下载使用）。
- * 默认内网地址一律拒绝；security.allowPrivateImageHosts=true 时放行（仅本地测试/自建图床）。
+ * 默认内网地址一律拒绝；security.allowPrivateImageHosts=true 时全放行，
+ * security.allowLoopback=true 时只放行环回（本机服务场景，LAN 仍拦）。
  */
 export async function validateImageUrl(raw) {
   let url;
@@ -743,6 +782,7 @@ export async function validateImageUrl(raw) {
   }
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('只允许 http(s) 图片地址');
   if (getConfig().security?.allowPrivateImageHosts === true) return url.toString();
-  const { url: safeUrl } = await validateFetchUrl(url.toString());
+  const allowLoopback = getConfig().security?.allowLoopback === true;
+  const { url: safeUrl } = await validateFetchUrl(url.toString(), { allowLoopback });
   return safeUrl.toString();
 }
