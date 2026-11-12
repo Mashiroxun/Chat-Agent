@@ -1,7 +1,7 @@
-# QQ Agent（洛版 v0.4.9.2 · 桌面端）
+# QQ Agent（洛版 v0.4.9.3 · 桌面端）
 ![平台](https://img.shields.io/badge/platform-Windows%20%7C%20Electron-lightgrey)
 ![技术栈](https://img.shields.io/badge/stack-Node.js%20%7C%20原生前端-orange)
-![测试](https://img.shields.io/badge/tests-346%20cases-brightgreen)
+![测试](https://img.shields.io/badge/tests-536%20cases-brightgreen)
 一个跑在你自己电脑上的 QQ 群聊机器人：装完双击启动，扫码登录，填个模型 Key 就能用。
 事件驱动 + 无状态会话架构，每次处理的 token 成本恒定可控；所有操作都在图形控制台里完成，不用碰命令行。
 从 [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge) 彻底改造而来的独立 QQ agent 应用。
@@ -10,6 +10,7 @@
 - **记住每个群友**：双向长期记忆——它记得谁是什么风格、爱什么梗、雷点是什么，下次聊天自然带上；记忆页随时可查看、手动编辑
 - **看得懂图、上得了网**：视觉模型直接看消息里的图片；内置 6 家搜索服务（含免 Key 的 Bing 网页解析），还能自己加任意兼容搜索服务
 - **花多少看多少**：每次调用的 token 和成本精确记录，按天 / 按会话 / 按模型 / 按插件四个维度统计，缓存命中率、峰谷分时计价、图片计费口径全标清楚
+- **思考量按需分配**：拍一拍、接短话这类轻互动只给最低强度思考，@ 提问、复杂任务才放开全力；DeepSeek / 通义 / GLM / Kimi 等各家思考参数自动适配（方言层），档位切换不破坏提示词缓存
 - **零编程门槛**：所有配置都在控制台点选——白名单从 QQ 里直接勾选群，模型从模型目录里点选切换，不用查群号、不用写配置
 ## 技术架构
 **事件驱动 + 无状态会话（成本控制的核心）**
@@ -33,6 +34,7 @@
 - 视觉开关：模型不支持图片时关掉，看图工具自动从提示词移除
 **聊天设置**
 - **响应档位滑条**（省 token 核心）：0~100 无级调节——1 档仅 @ 响应、2 档 +关键词、3 档按概率随机响应（滑条位置线性决定概率）、4 档全响应；没命中的消息直接标已读，零 token 消耗。触发原因决定上下文条数：被 @ 时永远带最多上下文
+- **思考档自动分流**：按触发内容判"这轮要多重"，轻互动不空烧 reasoning token；可在设置里一键关闭。档位切换对前缀缓存零冲击（DeepSeek 实测定标）
 - **表情包积极程度** 0~3 档：不鼓励 / 偶尔 / 较积极 / 表情包爱好者（提示词层面引导，不强制）
 - 人设系统：内置「小鲸鱼」角色卡开箱即用，多套模板一键填充可改；参与度风格（安静/普通/活跃）可调
 - 关键词、每群独立开关、私聊开关、屏蔽名单（被屏蔽者不存档、不触发、不进提示词）
@@ -153,13 +155,13 @@ git clone https://github.com/Mashiroxun/Chat-Agent.git
 cd Chat-Agent
 npm install
 npx electron .      # 需要自备 Electron 运行时；日常使用请用发布包
-npm test            # 全量测试：346 个用例（node --test tests/*.test.mjs）
+npm test            # 全量测试：536 个用例（node --test tests/*.test.mjs）
 npm run baseline    # 改了 plugins/ 或 skills/ 后重算内置指纹基线
 ```
 源码只声明了 `js-yaml` / `undici` / `ws` 三个运行时依赖，桌面壳（Electron）由发布包提供。
 
 ### 测试
-`npm test`（等价 `npm run check`）跑 `tests/*.test.mjs`，当前 **346 个用例**，覆盖启动组合装配与生命周期、
+`npm test`（等价 `npm run check`）跑 `tests/*.test.mjs`，当前 **536 个用例**，覆盖启动组合装配与生命周期、
 能力审计、协议与消息规范化、发送闸与白名单、记忆与提示词注入、用量统计、头像缓存、便携 QQ 进程管理等。
 
 ### QQ 怎么来的？（免安装包，推荐）
