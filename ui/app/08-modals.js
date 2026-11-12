@@ -995,6 +995,17 @@ function openModelConfigModal() {
         overlay.querySelector('#mc-model-pick').value = (names[el.dataset.model] || el.dataset.model);
         overlay.querySelector('#mc-picked').value = `${activePid}|||${el.dataset.model}`;
         overlay.querySelector('#mc-baseurl').value = p.baseURL || '';
+        // ⚠️ 2026-11-12（三连 bug ②）：换了目标提供商，Key 输入框里"已显示的
+        //    已存 Key 明文"属于旧提供商 —— 值和标记都必须清掉，否则测试/保存
+        //    会把旧 Key 当新输入提交（显式传给 test-chat → key 不对；保存则把
+        //    旧 Key 写进新提供商）。清成空串 = "保持该提供商已存的 Key"。
+        const kEl = overlay.querySelector('#mc-apikey');
+        if (kEl) {
+          kEl.value = '';
+          kEl.placeholder = '留空保持所选服务商已存的 Key；输入新 Key 可替换';
+          delete kEl.dataset.revealedValue;
+          delete kEl.dataset.revealedPid;
+        }
         closeModelModal(pickOverlay);
       }));
     };
@@ -1091,13 +1102,26 @@ function openModelConfigModal() {
   });
 
   // Key 显示/清除：与主页面同款（fetchRealKey 走 /api/providers/key）
+  //
+  // ⚠️ 2026-11-12 修（0.4.9.2 外部反馈）三连状态 bug：
+  //   ① pid 用弹窗打开时的快照 c.api?.provider —— 弹窗里切换模型目录后，
+  //      「显示」读到的仍是**旧提供商**的 Key；
+  //   ② 显示出来的明文灌进 input.value —— 后续「连通性测试」/「保存」把它
+  //      当成用户输入的新 Key 显式提交：测试拿旧 Key 打新服务商（报 key 不对），
+  //      保存则把旧 Key 写进新提供商（配置污染）。
+  //   修法：pid 实时跟随当前选中（#mc-picked 优先）；显示成功后把明文记进
+  //      dataset.revealedValue，测试/保存遇到与它相等的值一律视为"未修改"。
+  const mcKeyPid = () => {
+    const pickedV = overlay.querySelector('#mc-picked').value;
+    return pickedV ? String(pickedV).split('|||')[0] : (c.api?.provider || '');
+  };
   overlay.querySelector('#mc-apikey-toggle').addEventListener('click', async () => {
     const input = overlay.querySelector('#mc-apikey');
     const btn = overlay.querySelector('#mc-apikey-toggle');
     const show = input.type === 'password';
     if (show) {
       try {
-        const pid = c.api?.provider;
+        const pid = mcKeyPid();
         const r = pid ? await api(`/api/providers/key?providerId=${encodeURIComponent(pid)}`) : await api('/api/api-key');
         input.type = 'text';
         // 2026-10-23 修复：没存过 Key 时不要把「（无）」写进 value。
@@ -1107,6 +1131,16 @@ function openModelConfigModal() {
         //   改用 placeholder：看得见、但不会被读成用户输入。
         input.value = String(r.apiKey || '');
         input.placeholder = r.apiKey ? '' : '（无）';
+        // 2026-11-12：记下"这个值是从服务端读出来的已存 Key" —— 测试/保存遇到
+        //   与它相等的输入一律视为未修改，防止已存 Key 被当新 Key 提交到
+        //   另一家提供商（见上方三连 bug 注释）。用户随后编辑过（值变了）则失效。
+        if (r.apiKey) {
+          input.dataset.revealedValue = String(r.apiKey);
+          input.dataset.revealedPid = pid || '';
+        } else {
+          delete input.dataset.revealedValue;
+          delete input.dataset.revealedPid;
+        }
         btn.textContent = '隐藏';
       } catch (e) { qaAlert(`读取密钥失败：${e.message}`); }
     } else {
@@ -1159,7 +1193,10 @@ function openModelConfigModal() {
       const model = picked ? pickedModel : (c.api?.model || '');
       const keyInput = overlay.querySelector('#mc-apikey');
       const raw = (keyInput.value || '').trim();
-      const apiKey = (raw && raw !== '******') ? raw : '';
+      // 2026-11-12（三连 bug ③）：与「显示」读出的已存 Key 相等的输入视为未修改 ——
+      //   否则显示过的明文会被当成用户输入显式提交，拿旧 Key 打新服务商必报 key 不对。
+      const revealed = (keyInput.dataset.revealedValue || '').trim();
+      const apiKey = (raw && raw !== '******' && raw !== revealed) ? raw : '';
       const r = await api('/api/providers/test-chat', {
         method: 'POST',
         body: JSON.stringify({
@@ -1210,9 +1247,12 @@ function openModelConfigModal() {
     //    还是用旧 Key。清除按钮早就走了 providers/set-key，只有保存这条漏了 ——
     //    两条路径必须对称。
     const raw = (overlay.querySelector('#mc-apikey').value || '').trim();
+    // 2026-11-12（三连 bug ③）：与「显示」读出的已存 Key 相等的输入视为未修改，
+    //   防止旧提供商的 Key 被写进新提供商（配置污染）。
+    const revealedRaw = (overlay.querySelector('#mc-apikey').dataset.revealedValue || '').trim();
     // 2026-10-23：除掩码外，再把旧版残留的占位符「（无）」一起挡掉 ——
     //   即使某处（旧缓存 / 粘贴）把它塞进了 value，也不会被当成真 Key 落盘。
-    const newKey = (raw && raw !== '******' && raw !== '（无）') ? raw : '';
+    const newKey = (raw && raw !== '******' && raw !== '（无）' && raw !== revealedRaw) ? raw : '';
     // 目标提供商：本次新选的模型目录优先（可能换了家），否则用当前生效的那个
     const keyPid = picked ? String(picked).split('|||')[0] : (c.api?.provider || '');
     if (newKey && !keyPid) patch.apiKey = newKey;

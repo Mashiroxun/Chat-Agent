@@ -16,6 +16,7 @@
 
 ### 修复 · 外部反馈（0.4.9.2 专用模型路由）
 
+- **模型配置弹窗切换服务商后 API Key 三连串台**：反馈「切换模型后 apiKey 似乎不会跟着立即切换，不关窗口点显示会显示之前模型的 apiKey；不点显示时连通性测试还能连上，一旦点了显示再测试就连不通，返回 key 不对」。三处叠加：① 「显示」读 Key 用弹窗打开时的快照 `c.api?.provider`，不跟随弹窗内选中的新提供商；② 显示出的旧 Key 明文灌进 `#mc-apikey.value`，连通性测试把它当用户输入显式提交（拿旧 Key 打新服务商）；③ 直接保存则把旧 Key 经 providers/set-key 写进新提供商（配置污染）。修：pid 实时跟随 `#mc-picked`；显示成功后明文记入 `dataset.revealedValue`，测试/保存遇到相等值一律视为未修改；切换模型目录时清空 Key 输入框与标记。前端改动，刷新即生效。
 - **图片/视频专用模型只换名、不换端点**：反馈原文「设置了专用的视频模型和图片模型后，会话里读到图片或视频 gif，就会往主模型的 base url 发送配置模型的调用请求，导致会话失败报错」。根因：`specializedModelFor` 的结果以 `{ ...api, model: forced }` 应用 —— 专用模型配在别的服务商上时，请求拿着专用模型名发往主 baseUrl，404/400 整轮失败。新增 `resolveSpecializedRoute()`（`src/llm.js`，导出供测试）：按模型名查 providers 注册表归属，命中连 baseUrl / apiKey（dshProviderKeys → 提供商明文回落）/ 协议 / provider 一起切；主端点托管时只换名（不冲账号池挑好的 Key）；无归属保持旧行为。顺带给 `resolveProviderEndpoint` 加可选 cfg 参数（归属判定与端点解析必须用同一份数据）。测试 `tests/specialized-model-endpoint.test.mjs` 8 条。
 
 ### 修复 · 缓存
