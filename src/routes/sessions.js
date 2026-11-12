@@ -60,7 +60,13 @@ export function sessionsRoutes(deps, shared) {
       method: 'GET', pattern: '/api/sessions',
       handler: async ({ res, json, url }) => {
         const limit = Math.min(1048576, Math.max(1, Number(url.searchParams.get('limit')) || 1048576));
-        return json(res, 200, { sessions: sessions.listSummaries(limit) });
+        return json(res, 200, {
+          sessions: sessions.listSummaries(limit),
+          // 聊天花名册（2026-11-12）：出现过会话的全部 chatKey + 最近会话时间。
+          // 会话文件按 keepSessionFiles 滚动清理，但左栏的群列表不该跟着滚动
+          // 消失 —— 前端把名单里"近期没有会话"的群也渲染出来（排在后面）。
+          knownChats: sessions.listKnownChats()
+        });
       }
     },
     {

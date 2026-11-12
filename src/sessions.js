@@ -22,6 +22,14 @@ const INDEX_CACHE_VERSION = 2;
 // r92（R78-1）：僵尸回收改为只处理索引里仍为 running/waiting 的条目
 //（见 #reclaimZombies 注释），不再需要 mtime 窗口常量。
 
+// 聊天花名册（2026-11-12）：会话文件按 keepSessionFiles 滚动清理，但"出现过
+// 的聊天对象"是长期实体，不该跟着会话窗口滚动从会话页左栏消失（用户实测：
+// 群里没新会话，重进界面后这个群就从列表里没了）。这里单独持久化一张
+// chatKey → 最近会话时间 的花名册：会话创建时登记、会话文件被清理前把它的
+// chatKey 也记进来。左栏列表 = 近期会话的群 ∪ 花名册（无近期会话的排后面）。
+const CHAT_DIR_FILE = path.join(DATA_DIR, 'session-groups.json');
+const CHAT_DIR_SAVE_DEBOUNCE_MS = 3000;
+
 /**
  * 会话文件的原子写（tmp + rename）。
  *
@@ -78,8 +86,45 @@ export class SessionRegistry {
     this.keepFiles = Math.max(0, Number.isFinite(Number(keepFiles)) ? Math.round(Number(keepFiles)) : 0);
     this.index = [];   // [{ id, chatKey, startedAt, endedAt, status, outcome, usage, trigger, model, promptChars }]
     this.current = new Map(); // id -> session object（运行中的在内存里）
+    this.chatDir = new Map(); // chatKey -> 最近一次会话时间（持久花名册，见 CHAT_DIR_FILE 注释）
+    this.#loadChatDir();
     fs.mkdirSync(SESSIONS_DIR, { recursive: true });
     this.#loadIndex();
+  }
+
+  /** 花名册落盘（防抖；掉电最坏丢最近一次登记，下次该群有会话时自动补上）。 */
+  #chatDirSaveTimer = null;
+  #noteChatDir(chatKey, ts) {
+    const key = String(chatKey || '');
+    if (!key) return;
+    const t = Math.max(0, Number(ts) || Date.now());
+    if ((this.chatDir.get(key) || 0) >= t) return;   // 只前进不回退
+    this.chatDir.set(key, t);
+    if (this.#chatDirSaveTimer) return;
+    this.#chatDirSaveTimer = setTimeout(() => {
+      this.#chatDirSaveTimer = null;
+      try {
+        atomicWriteText(CHAT_DIR_FILE, JSON.stringify(
+          Object.fromEntries([...this.chatDir.entries()])
+        ));
+      } catch (e) { logger.error('sessions', `花名册写入失败：${e?.message ?? e}`); }
+    }, CHAT_DIR_SAVE_DEBOUNCE_MS);
+  }
+
+  #loadChatDir() {
+    try {
+      const raw = JSON.parse(fs.readFileSync(CHAT_DIR_FILE, 'utf8'));
+      for (const [k, v] of Object.entries(raw || {})) {
+        if (k && Number.isFinite(Number(v))) this.chatDir.set(k, Number(v));
+      }
+    } catch { /* 文件不存在/损坏：空表起家，后续登记会重建 */ }
+  }
+
+  /** 花名册全量（给 /api/sessions；按最近会话时间倒序）。 */
+  listKnownChats() {
+    return [...this.chatDir.entries()]
+      .map(([chatKey, lastSessionAt]) => ({ chatKey, lastSessionAt }))
+      .sort((a, b) => b.lastSessionAt - a.lastSessionAt);
   }
 
   /**
@@ -114,7 +159,12 @@ export class SessionRegistry {
         //    在用量页里永远少算 —— 用户报"今日 200 次运行只算 120 次"，
         //    根因就是默认 keepSessionFiles=120 裁文件、而统计只认文件。
         //    appendUsageLedger 按 id 幂等，正常路径下这里已是空操作。
-        try { appendUsageLedger(this.#ledgerSourceOfFile(id)); } catch { /* 兜底失败不阻塞清理 */ }
+        //    （2026-11-12）同一次解析顺带把 chatKey 记进花名册：会话文件删了，
+        //    这个群也该继续留在会话页左栏里 —— 那是列表消失 bug 的根修。
+        let src = null;
+        try { src = this.#ledgerSourceOfFile(id); } catch { /* ignore */ }
+        try { appendUsageLedger(src); } catch { /* 兜底失败不阻塞清理 */ }
+        if (src?.chatKey) this.#noteChatDir(src.chatKey, Number(src.startedAt) || 0);
         try { fs.rmSync(path.join(SESSIONS_DIR, f), { force: true }); } catch { /* ignore */ }
       }
     } catch { /* ignore */ }
@@ -375,6 +425,7 @@ export class SessionRegistry {
     };
     this.current.set(session.id, session);
     this.#persist(session);
+    this.#noteChatDir(chatKey, session.startedAt);
     this.index.unshift(this.#summary(session));
     if (this.keepFiles > 0) this.index = this.index.slice(0, this.keepFiles);
     this.#scheduleIndexCacheWrite();
