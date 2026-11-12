@@ -532,13 +532,56 @@ function specializedModelFor(messages, cfg) {
 }
 
 /**
+ * 解析「图片/视频专用模型」的完整路由（0.4.9.2 外部反馈 bug 修复）。
+ *
+ * 旧行为只换 model 名：专用模型配在**别的服务商**上时，请求拿着专用模型的
+ * 模型名发往主模型的 baseUrl —— 404/400，整轮会话失败。
+ * 现在按模型名在 providers 注册表里找归属：
+ *   ① 没媒体部件 / 没配专用模型 → 原样返回（forced=''）
+ *   ② 专用模型就在主端点（baseURL 相同）→ 只换名（保留账号池挑好的 Key）
+ *   ③ 注册表里有提供商托管此模型 → 连 baseUrl / apiKey / 协议 / provider 一起切
+ *   ④ 找不到归属 → 只换名（保持旧行为；同端点自会报错，但不至于指向别家）
+ * @returns {{api: object, forced: string}} forced 为空表示未切专用模型。
+ */
+export function resolveSpecializedRoute(messages, cfg, api) {
+  const forced = specializedModelFor(messages, cfg);
+  if (!forced || !api || forced === api.model) return { api: api ?? {}, forced: '' };
+  const providers = Array.isArray(cfg?.providers) ? cfg.providers : [];
+  const hit = providers.find(
+    (p) => Array.isArray(p?.models) && p.models.some((x) => String(x) === forced)
+  );
+  if (!hit) return { api: { ...api, model: forced }, forced };
+  // 主端点本来就托管这个模型 → 只换名，别把账号池挑好的 Key 冲掉
+  if (String(hit.baseURL ?? '').trim() === String(api.baseUrl ?? '').trim()) {
+    return { api: { ...api, model: forced }, forced };
+  }
+  const ep = resolveProviderEndpoint(hit.id, cfg);
+  if (!ep) return { api: { ...api, model: forced }, forced };
+  return {
+    api: {
+      ...api,
+      baseUrl: ep.baseUrl,
+      apiKey: ep.apiKey || api.apiKey,
+      protocol: ep.protocol,
+      provider: hit.id,
+      model: forced
+    },
+    forced
+  };
+}
+
+/**
  * 解析某个提供商 id 对应的 { baseUrl, apiKey }。
  * 用于备选模型跨提供商切换：备选项指定了 provider 时，要用那个提供商的
  * baseUrl + Key 发请求，而不是主模型的。
  * 找不到该提供商时返回 null（调用方应跳过这个备选）。
+ * @param {string} providerId 提供商 id
+ * @param {object} [cfgNow] 可选传入配置（2026-11-12 加）：图片/视频专用模型路由
+ *   用调用方持有的 cfg 做归属判定，必须用**同一份**数据解析端点，否则测试注入
+ *   的提供商会被 getConfig() 的真实配置顶掉（表现为永远查不到）。
  */
-function resolveProviderEndpoint(providerId) {
-  const cfg = getConfig();
+function resolveProviderEndpoint(providerId, cfgNow) {
+  const cfg = cfgNow || getConfig();
   const pid = String(providerId ?? '').trim();
   if (!pid) return null;
   const p = (cfg.providers || []).find((x) => x.id === pid);
@@ -790,8 +833,9 @@ export async function chatCompletion({ messages, tools = null, toolChoice = 'aut
     } catch (error) {
       skillManager.recordError('account-pool', error);
     }
-    const forced = specializedModelFor(messages, getConfig());
-    if (forced && forced !== api.model) api = { ...api, model: forced };
+    // ── 图片/视频专用模型（0.4.9.2 反馈修复）：连端点一起切，不再只换名 ──
+    const route = resolveSpecializedRoute(messages, getConfig(), api);
+    if (route.forced) api = route.api;
   }
   const ctx = skillContext || { api, model: api.model, messages };
 
