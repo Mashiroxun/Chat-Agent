@@ -27,6 +27,10 @@
 - **模型配置弹窗切换服务商后 API Key 三连串台**：反馈「切换模型后 apiKey 似乎不会跟着立即切换，不关窗口点显示会显示之前模型的 apiKey；不点显示时连通性测试还能连上，一旦点了显示再测试就连不通，返回 key 不对」。三处叠加：① 「显示」读 Key 用弹窗打开时的快照 `c.api?.provider`，不跟随弹窗内选中的新提供商；② 显示出的旧 Key 明文灌进 `#mc-apikey.value`，连通性测试把它当用户输入显式提交（拿旧 Key 打新服务商）；③ 直接保存则把旧 Key 经 providers/set-key 写进新提供商（配置污染）。修：pid 实时跟随 `#mc-picked`；显示成功后明文记入 `dataset.revealedValue`，测试/保存遇到相等值一律视为未修改；切换模型目录时清空 Key 输入框与标记。前端改动，刷新即生效。
 - **图片/视频专用模型只换名、不换端点**：反馈原文「设置了专用的视频模型和图片模型后，会话里读到图片或视频 gif，就会往主模型的 base url 发送配置模型的调用请求，导致会话失败报错」。根因：`specializedModelFor` 的结果以 `{ ...api, model: forced }` 应用 —— 专用模型配在别的服务商上时，请求拿着专用模型名发往主 baseUrl，404/400 整轮失败。新增 `resolveSpecializedRoute()`（`src/llm.js`，导出供测试）：按模型名查 providers 注册表归属，命中连 baseUrl / apiKey（dshProviderKeys → 提供商明文回落）/ 协议 / provider 一起切；主端点托管时只换名（不冲账号池挑好的 Key）；无归属保持旧行为。顺带给 `resolveProviderEndpoint` 加可选 cfg 参数（归属判定与端点解析必须用同一份数据）。测试 `tests/specialized-model-endpoint.test.mjs` 8 条。
 
+### 修复 · 界面
+
+- **会话页左栏的群不再"消失"**（用户反馈：群里没新会话，重进界面后这个群就从左栏列表里没了）：根因是左栏列表从**会话索引**现场推导，而会话文件按 `keepSessionFiles`（120）滚动清理——触发量大的时段，几小时就把老群的记录全部挤出窗口。群是长期实体，不该依附在易滚动的会话窗口上。修：新增**持久聊天花名册**（`data/session-groups.json`，chatKey → 最近会话时间）——会话创建时登记、会话文件被清理前把它的群也记进来；`/api/sessions` 带出 `knownChats`，左栏把名单里"近期没有会话"的群也渲染出来（排在后面，行上标"无近期会话"），点开右栏保持原样。会话文件清理逻辑与用量账本口径不变。
+
 ### 修复 · 缓存
 
 - **思考档位注击穿前缀缓存（92%→13%）**：`thinking-note` 属 `VOLATILE_SECTION_IDS`，被 2026-10-12 方向B 前置进 userPrompt 稳定区第 3 段（【当前状态说明】，"78/78 字节相同"的观测早于分流上线）。分流上线后该段内容随档位变化（light 显示 on / full 显示 auto），每次翻转断点落在第 3 段，其后【记忆】【场景】【过去状态】全部重算。修法：`promptSections()` 改用空上下文调 `shapeThinkingApi`，段内容只描述静态配置；测试加防回归断言（light/full/off 三档内容全等、段存在性稳定）。教训：**userPrompt 稳定区里的段必须逐字节稳定**。

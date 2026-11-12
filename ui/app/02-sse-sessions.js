@@ -269,6 +269,9 @@ async function loadSessions({ quiet = false } = {}) {
     if (quiet && state.sessionsSig === sig) return;
     state.sessionsSig = sig;
     state.sessions = next;
+    // 聊天花名册（2026-11-12）：会话滚动清理后仍要留在左栏的"历史群"。
+    // 只增不减地合并 —— SSE 推来的增量更新不带 knownChats，别把已拿到的冲掉。
+    if (Array.isArray(data.knownChats)) state.knownChats = data.knownChats;
     renderSessionList();
     // 自动跟随最新运行中的会话
     if (state.autoFollowRunning && !state.currentSessionId) {

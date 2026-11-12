@@ -246,7 +246,11 @@
     try { return (STATUS_LABEL && STATUS_LABEL[s.status]) || s.status || '-'; } catch (e) { return s.status || '-'; }
   }
 
-  /** 按 chatKey 去重成「聊天对象」，顺序 = 最近有会话的排前面 */
+  /** 按 chatKey 去重成「聊天对象」，顺序 = 最近有会话的排前面。
+   *  2026-11-12 合并「聊天花名册」（state.knownChats，来自 /api/sessions）：
+   *  会话文件按 keepSessionFiles 滚动清理，只看会话的话，群里没新会话
+   *  它就会从左栏消失（用户实测的"列表消失"bug）。花名册里的群没有近期
+   *  会话时排后面、行上标"无近期会话"，点开右栏保持原样。 */
   function chatGroups() {
     var map = {}, out = [];
     S().forEach(function (s) {
@@ -264,6 +268,22 @@
         g.last = String(s.trigger || s.triggerSummary || '').replace(/\s+/g, ' ').trim().slice(0, 42);
       }
     });
+    // 花名册兜底：有会话记录的群已经建过条目（map 命中直接跳过），
+    // 只补"最近没有会话"的群 —— 它们在会话滚动窗口里已经没有记录了。
+    var known = null;
+    try { known = (state && state.knownChats) || null; } catch (e) { known = null; }
+    if (known && known.length) {
+      for (var i = 0; i < known.length; i++) {
+        var kc = known[i]; var k = kc && kc.chatKey;
+        if (!k || map[k]) continue;
+        out.push(map[k] = {
+          key: k, kind: kindOf(k), name: chatDisplayName(k),
+          total: 0, active: 0, last: '',
+          newest: Number(kc.lastSessionAt) || 0, newestId: null,
+          knownOnly: true
+        });
+      }
+    }
     out.sort(function (a, b) { return b.newest - a.newest; });
     return out;
   }
@@ -409,13 +429,17 @@
   }
 
   function chatRow(g) {
-    var pill = g.active
-      ? '<span class="cc-pill cc-running">' + g.active + ' 个进行中</span>'
-      : '<span class="cc-pill cc-gray">' + g.total + ' 个会话</span>';
+    // 花名册里"近期没有会话"的群：没有 total/last 可显示，明确标出来，
+    // 免得用户以为 0 个会话是数据丢了（这正是这个兜底要修的观感问题）。
+    var pill = g.knownOnly
+      ? '<span class="cc-pill cc-gray">无近期会话</span>'
+      : g.active
+        ? '<span class="cc-pill cc-running">' + g.active + ' 个进行中</span>'
+        : '<span class="cc-pill cc-gray">' + g.total + ' 个会话</span>';
     return '<div class="bp-row chat-row' + (g.key === st.chat ? ' on' : '') + '" data-chat="' + esc2(g.key) + '" role="button" tabindex="0">' +
       avHtml(g.key, g.name) +
       '<span class="bp-rl"><span class="bp-rt">' + esc2(g.name) + '</span>' +
-      '<span class="bp-ri">' + esc2(g.last || '—') + '</span></span>' +
+      '<span class="bp-ri">' + esc2(g.last || (g.knownOnly ? '—' : '—')) + '</span></span>' +
       pill + '</div>';
   }
 
