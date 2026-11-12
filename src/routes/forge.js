@@ -160,7 +160,7 @@ export function forgeRoutes(deps, shared) {
         // · 无进展（请求全挂死/端点不通）**不续段**：那种情况下续段只是把同一笔
         //   预算再烧一遍，保持直接报错（错误文案与旧版一致）。
         // · ⚠️ 改这里的任何数字，必须同步 ui/app/13-doctor.js 里适配按钮的客户端超时
-        //   （560000ms ≈ 前置闸门 + 2×240s + 后置闸门/diff + 余量）。三层（客户端 /
+        //   （620000ms ≈ 前置闸门 + 2×240s + 后置闸门/diff + 余量）。三层（客户端 /
         //   本段墙 / llm.js 单请求 180s）互有耦合，注释互指，别让它们再次漂移。
         const ADAPT_SEGMENT_MS = 240000;
         const ADAPT_MAX_SEGMENTS = 2;
@@ -169,6 +169,7 @@ export function forgeRoutes(deps, shared) {
         const t0 = Date.now();
         let round = 0;              // 跨段累计轮次（1 起；日志 tag 与进度都用它）
         let seg = 1;                // 当前段（续段时 +1）
+        let lastTipRound = 0;       // 上次推「快到点了」提醒的轮次（防每轮刷一条，2026-11-11）
         let timedOut = false;       // 段墙中止但**有进展**（进度已保留，可再次点击继续）
         let noProgressWall = false; // 段墙中止且**毫无进展**（环境问题，按失败处理）
         let summary = '';
@@ -322,9 +323,15 @@ export function forgeRoutes(deps, shared) {
               while (round < ADAPT_MAX_ROUNDS) {
                 // 提醒：轮次/时间任一接近枯竭就打招呼 —— 模型对时间没有感知，
                 // 不告诉它"还剩多少"，它会把预算花在细节上（2026-10-16 升级为时间提醒）。
+                //
+                // ⚠️ 2026-11-11：这两个条件在**临近收尾时会连续成立**（最后 2 轮、最后 60 秒
+                //   都是逐轮满足的），原来每轮都 push 一条几乎相同的提醒 —— 实测最后几分钟
+                //   能堆 4~6 条，白吃 token，还会把模型的注意力挤到"别再改"上。
+                //   改成同一提醒至少隔 2 轮才重复。
                 const leftRounds = ADAPT_MAX_ROUNDS - round;
                 const leftSec = Math.max(0, Math.round((ADAPT_SEGMENT_MS - (Date.now() - segStart)) / 1000));
-                if (leftRounds <= 2 || leftSec <= 60) {
+                if ((leftRounds <= 2 || leftSec <= 60) && round - lastTipRound >= 2) {
+                  lastTipRound = round;
                   const tips = [];
                   if (leftRounds <= 2) tips.push(`总轮次只剩 ${leftRounds} 轮`);
                   if (leftSec <= 60) tips.push(`本段剩余时间约 ${leftSec} 秒`);
@@ -378,10 +385,18 @@ export function forgeRoutes(deps, shared) {
             }
 
             if (!wallHit) break;                          // 段内正常收尾（拿到总结/轮次用满）→ 不续段
-            if (!trace.length) { noProgressWall = true; break; }   // 毫无进展 → 环境问题，不续段
+            // 2026-11-11：判「有进展」要看**有没有真的改写草稿**，不能只看工具调用次数。
+            //   原来用 trace.length —— 但 read_file / list_files 也会往里记，于是模型
+            //   "只是在读、什么都没写"也会被当成有进展，续段后把同样的 240s 再烧一遍
+            //   （而且读文件的结果还会把上下文再撑大一圈，见下面上下文无预算的问题）。
+            const wroteSomething = trace.some((t) => /forge_(write|delete)_file$/.test(String(t.tool)) && !t.isError);
+            if (!wroteSomething) { noProgressWall = true; break; }   // 只读没写 → 环境/判断问题，不续段
             timedOut = true;                              // 有进展但时间用尽 → 进度保留
             if (seg >= ADAPT_MAX_SEGMENTS || round >= ADAPT_MAX_ROUNDS) break;
-            progress.st.seg = seg;
+            // ⚠️ 2026-11-11：这里要写 seg+1，不能写 seg —— for 的 seg++ 在这之后才执行，
+            //   而这条事件里的 label 已经在说"接着跑第 seg+1 段"。原来写成 seg，
+            //   进度条上的「第 x/2 段」会整段滞后一档（第 2 段全程显示 1/2）。
+            progress.st.seg = seg + 1;
             progress('segment', {
               label: `第 ${seg} 段时间用尽，接着跑第 ${seg + 1} 段（已改的 ${progress.st.changed} 处都保留着）`
             });

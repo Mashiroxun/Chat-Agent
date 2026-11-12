@@ -29,6 +29,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { withinWindow } from '../elapsed.js';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -100,7 +101,7 @@ function libraryFolders(steamRoot) {
 
 /** 找到 wallpaper64.exe 与它的安装目录（结果缓存 60 秒，磁盘变动不需要秒级感知）。 */
 function detectWe({ force = false } = {}) {
-  if (!force && _weCache && Date.now() - _weCache.at < 60_000) return _weCache.value;
+  if (!force && _weCache && withinWindow(_weCache.at, 60_000)) return _weCache.value;
 
   const roots = new Set();
   const reg = regSteamPath();

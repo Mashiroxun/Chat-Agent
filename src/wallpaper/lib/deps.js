@@ -6,6 +6,7 @@
 // 检测永不抛错：缺工具返回 { ok:false, detail } 供 UI 引导。
 import fs from 'node:fs';
 import os from 'node:os';
+import { withinWindow } from '../../elapsed.js';
 import path from 'node:path';
 import { execFileP } from './exec.js';
 
@@ -113,7 +114,7 @@ async function ffmpegVersion(exe) {
 export async function checkFfmpeg() {
   const now = Date.now();
   const ttl = ffmpegCache.result?.ok ? 60000 : 15000;
-  if (ffmpegCache.result && now - ffmpegCache.at < ttl) return ffmpegCache.result;
+  if (ffmpegCache.result && withinWindow(ffmpegCache.at, ttl, now)) return ffmpegCache.result;
   const override = process.env.QQ_AGENT_FFMPEG;
   const candidates = [
     ...(override && isFile(override) ? [override] : []),

@@ -9,6 +9,7 @@ import { sleep, randInt, createSendChain, formatClockTime } from './util.js';
 import { mdToPlain, splitForQQ, unwrapStrayBrackets } from './md-to-plain.js';
 import { logger } from './logger.js';
 import { noteSendRejected } from './ban-state-client.js';
+import { withinWindow } from './elapsed.js';
 
 // 限频回退值统一取自 DEFAULT_CONFIG，杜绝"代码默认 80 / 回退值 8 / UI 回退 8"三处打架。
 const DEFAULT_MAX_PER_MINUTE = DEFAULT_CONFIG.send.maxPerMinute;
@@ -78,8 +79,10 @@ export class SendQueue {
   #checkRate(chatKey) {
     const now = Date.now();
     const cfg = getConfig().send;
-    const minute = (this.minuteTimes.get(chatKey) || []).filter((t) => now - t < 60000);
-    const hour = (this.hourTimes.get(chatKey) || []).filter((t) => now - t < 3600000);
+    // 裁到最近窗口内。时钟回拨时旧写法会把「未来时间戳」全留下来（负差值 < 窗口），
+    // 限流表从此永远满的 —— 所有发送都被判超限。withinWindow 会把未来时间戳判为过期。
+    const minute = (this.minuteTimes.get(chatKey) || []).filter((t) => withinWindow(t, 60000, now));
+    const hour = (this.hourTimes.get(chatKey) || []).filter((t) => withinWindow(t, 3600000, now));
     // 回退值必须与 config.js 的默认值一致（80）。此前这里是 8，
     // 配置缺失/为 0 时限频突然收紧 10 倍，行为不可预测。
     if (minute.length >= Math.max(1, Number(cfg.maxPerMinute) || DEFAULT_MAX_PER_MINUTE)) {
@@ -119,7 +122,7 @@ export class SendQueue {
     const win = this.#dedupeWindow();
     if (!win) return false;
     const last = this.recentSent.get(`${chatKey}::${String(text)}`);
-    return Boolean(last && Date.now() - last < win);
+    return Boolean(last && withinWindow(last, win));
   }
 
   /** 发送成功后记账（去重指纹）。 */

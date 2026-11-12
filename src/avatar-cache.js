@@ -24,6 +24,7 @@ import path from 'node:path';
 import { DATA_DIR } from './config.js';
 import { logger } from './logger.js';
 import { safeFetchBinary } from './safe-fetch.js';
+import { expiredSinceFile, withinWindow } from './elapsed.js';
 
 const MAX_BYTES = 512 * 1024;                       // 头像最大 512KB（qlogo s=640 实测 <100KB，余量足够）
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;             // 缓存 7 天（头像改起来以天计）
@@ -70,17 +71,17 @@ function dropFile(p) { try { fs.unlinkSync(p); } catch { /* 已被删/不存在 
 
 function prune() {
   const now = Date.now();
-  if (now - lastPrune < PRUNE_INTERVAL_MS) return;
+  if (withinWindow(lastPrune, PRUNE_INTERVAL_MS, now)) return;
   lastPrune = now;
   try {
     for (const f of fs.readdirSync(dir())) {
       const p = path.join(dir(), f);
       if (f.endsWith('.tmp')) {
-        try { if (now - fs.statSync(p).mtimeMs > TMP_MAX_AGE_MS) fs.unlinkSync(p); } catch { /* 忽略 */ }
+        try { if (expiredSinceFile(fs.statSync(p).mtimeMs, TMP_MAX_AGE_MS, now)) fs.unlinkSync(p); } catch { /* 忽略 */ }
         continue;
       }
       if (!CACHE_FILE_RE.test(f)) continue;
-      try { if (now - fs.statSync(p).mtimeMs > TTL_MS) fs.unlinkSync(p); } catch { /* 忽略 */ }
+      try { if (expiredSinceFile(fs.statSync(p).mtimeMs, TTL_MS, now)) fs.unlinkSync(p); } catch { /* 忽略 */ }
     }
   } catch { /* 目录还不存在等，忽略 */ }
 }
@@ -89,9 +90,12 @@ function prune() {
 function readCache(qq, size) {
   const p = fileOf(qq, size);
   let buffer;
+  let expired = false;
   try {
     const st = fs.statSync(p);
-    if (Date.now() - st.mtimeMs > TTL_MS) return null;   // 过期：当作没有，走重拉
+    expired = expiredSinceFile(st.mtimeMs, TTL_MS);
+    // ⚠️ 不在过期时提前 return：坏档校验与删除必须照常跑，否则一张错误页
+    //    会永远留在盘上（每次读都返回 null、浏览器又按 max-age 缓着破图）。
     buffer = fs.readFileSync(p);
   } catch {
     return null;
@@ -104,6 +108,7 @@ function readCache(qq, size) {
     logger.warn('avatar-cache', `缓存内容不是图片，已丢弃并重拉 ${qq} s=${size}`);
     return null;
   }
+  if (expired) return null;   // 内容没问题但过期了 → 走重拉（重拉成功会覆盖）
   return { buffer, contentType };
 }
 
@@ -155,7 +160,7 @@ export async function getAvatar(qq, size) {
   if (hit) return hit;
   // 负缓存期内不再出网（UI 有首字兜底，404 是可接受的答案）
   const negAt = negative.get(key);
-  if (negAt && Date.now() - negAt < NEG_TTL_MS) return null;
+  if (negAt && withinWindow(negAt, NEG_TTL_MS)) return null;
   // 并发去重：同头像共用同一次下载
   if (!inflight.has(key)) {
     const p = downloadOne(id, s)

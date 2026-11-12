@@ -16,6 +16,23 @@
 // 识别出"这是图片导致的拒绝"，摘掉图片重发一次：
 // 宁可这轮看不见图，也不要整轮报错什么都发不出去。
 //
+// ── 情况三：服务端回了一句「只支持文本」（2026-11-11 修）──────────────
+// 真机日志 11-06/11-07 共 20 次**真实请求** 400：
+//   "model only supports text input; image, video and audio is not supported"
+// 旧正则只认 image_url / invalid image 这类**格式**措辞，一个字都匹配不上 →
+// 顾问返回 null → 整轮对话直接失败，用户只看到英文 JSON、QQ 里什么都没发出去。
+//
+// ⚠️ 2026-11-11 结论更正：**别从这句错误反推「模型是纯文本模型」**。
+//    用同一份真实配置实测：sensenova-6.8-flash-lite 是官方定义的原生多模态
+//    智能体模型；合法 PNG(base64) 走 image_url 返回 HTTP 200，tool 消息里带图
+//    （即日志那种 msgs=5 形态）也是 200。这句 400 当天已无法复现，更可能是
+//    当时服务端策略，或请求里带了不被接受的部件 —— 实测 video_url 与公网 URL
+//    形式的图片都会 400（inference request is invalid / image download failed）。
+//
+// 所以这里**只做兜底**：服务端既然明说这次不接受媒体，就摘掉重发一次救回整轮，
+// 绝不拿它当模型能力结论，也不据此在设置页关掉看图。剥除范围含 video_url，
+// 因为错误正文把 video 也列了，只摘图片会让重试再 400 一次。
+//
 // ── 边界 ──────────────────────────────────────────────────────────────
 // 它只提供"判断"和"改写请求体"两个纯函数，**不自己发请求**（重试由 llm.js 执行），
 // 这样超时预算、abort、计费口径都不变。
@@ -44,9 +61,18 @@ export function isUnsupportedMime(mime, list = null) {
  * 只在 400 / 415 / 422 上判定，且错误文本要真的提到图片相关字段 ——
  * 否则会把"模型名写错""Key 无效"这类无关错误也重试一遍，白白多花一次调用。
  */
+// 图片"格式/编码"被拒：原有措辞。
+const FORMAT_REJECTION = /base64 encoded image|image_url|invalid image|unsupported (image|media)|must be a base64/i;
+// 模型"能力"不支持多模态：措辞与上面完全不同，且各家写法不一。
+// 故意不用反斜杠类（\s 等），也不绑具体厂商；只认语义明确的说法，
+// 避免把 "model not found" / "context length" 这类无关 400 也重试一遍。
+const TEXT_ONLY_REJECTION =
+  /only supports text|text[- ]only|仅支持文本|不支持(?:图片|图像|视频|音频|多模态)|(?:image|video|audio|vision|multimodal)[^.;]{0,60}(?:is|are)[ ]not[ ]supported|(?:does not|doesn't|cannot|can't|do not)[ ]support[^.;]{0,40}(?:image|video|audio|vision|multimodal)/i;
+
 export function isImageRejection(status, text) {
   if (![400, 415, 422].includes(Number(status))) return false;
-  return /base64 encoded image|image_url|invalid image|unsupported (image|media)|must be a base64/i.test(String(text || ''));
+  const s = String(text || '');
+  return FORMAT_REJECTION.test(s) || TEXT_ONLY_REJECTION.test(s);
 }
 
 /**
@@ -60,27 +86,41 @@ export function stripImageParts(messages) {
   const out = (messages || []).map((m) => {
     if (!Array.isArray(m?.content)) return m;
     const kept = [];
-    let dropped = 0;
+    let images = 0;
+    let videos = 0;
     for (const part of m.content) {
-      if (part?.type === 'image_url') { dropped += 1; continue; }
+      // 错误正文明确写了 image/video/audio 都不支持：只摘 image_url 的话，
+      // 剩下的 video_url 会让重试**再 400 一次**，白花一次调用。
+      if (part?.type === 'image_url') { images += 1; continue; }
+      if (part?.type === 'video_url') { videos += 1; continue; }
       kept.push(part);
     }
-    if (!dropped) return m;
+    if (!images && !videos) return m;
     touched = true;
-    kept.push({ type: 'text', text: `（有 ${dropped} 张图片无法传给当前模型：接口不支持这种格式，已省略）` });
+    const bits = [];
+    if (images) bits.push(`${images} 张图片`);
+    if (videos) bits.push(`${videos} 段视频`);
+    // 说明里明确要求"别假装看过图"：否则模型容易照着配文编一段画面出来。
+    kept.push({
+      type: 'text',
+      text: `[此处有 ${bits.join('、')}，当前模型不接受图片/视频输入，已省略。请按文字内容回应，不要假装看过图]`
+    });
     return { ...m, content: kept };
   });
   return touched ? out : null;
 }
 
-/** 请求体里有没有图片部分（用于判断值不值得为图片降级重试）。 */
-export function hasImageParts(messages) {
+/** 请求体里有没有多模态部分（用于判断值不值得降级重试）。 */
+export function hasMediaParts(messages) {
   for (const m of (messages || [])) {
     if (!Array.isArray(m?.content)) continue;
-    if (m.content.some((p) => p?.type === 'image_url')) return true;
+    if (m.content.some((p) => p?.type === 'image_url' || p?.type === 'video_url')) return true;
   }
   return false;
 }
+
+/** 历史导出名，保留兼容；现在也认 video_url。 */
+export function hasImageParts(messages) { return hasMediaParts(messages); }
 
 // ── Skill 生命周期 ────────────────────────────────────────────────────────
 
@@ -108,7 +148,7 @@ export const providers = {
   'llm.retry-advisor': async ({ body, errorText, status } = {}) => {
     if (cfg().stripOnReject === false) return null;
     if (!isImageRejection(status, errorText)) return null;
-    if (!hasImageParts(body?.messages)) return null;   // 没有图片就别瞎重试
+    if (!hasMediaParts(body?.messages)) return null;   // 没有图片/视频就别瞎重试
     // 第一优先：GIF 换首帧（只换 GIF 图，普通图不动）
     const firstFrame = await replaceGifWithFirstFrame(body.messages);
     if (firstFrame) {
@@ -178,5 +218,5 @@ async function replaceGifWithFirstFrame(messages) {
 export function available() { return { ok: true }; }
 
 export const internals = {
-  isUnsupportedMime, isImageRejection, stripImageParts, hasImageParts, unsupportedList
+  isUnsupportedMime, isImageRejection, stripImageParts, hasImageParts, hasMediaParts, unsupportedList
 };

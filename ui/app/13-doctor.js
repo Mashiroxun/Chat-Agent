@@ -110,6 +110,14 @@ const doctorState = {
 
     // ── 第三方包导入 / 适配 ──
     mode: 'create',   // 'create'（自己造）| 'import'（改别人的）
+    // 场景意图（2026-11-11）：'' = 常规；'install' = 从市场/口令安装进来的。
+    // 两者界面该不一样 —— 安装场景下用户要的是"装上"，不是"造一个"：
+    //   · 顶部给三步式场景横幅（下载→适配→确认），并明确"现在还没装到系统里"；
+    //   · 隐藏模式 Tab 与起草输入区 —— 否则闸门一通过，顶部就是空的需求输入框，
+    //     用户输点什么再点「开始起草」会新建草稿、把这份待装草稿顶掉（P0-1）。
+    intent: '',
+    queuedDraft: '',  // 暂存区忙时被排队的待适配草稿（不再静默丢弃）
+    queuedName: '',   // 排队草稿的显示名
     importing: false,
     imported: null,   // { zipName, files, skipped }
     adapting: false,
@@ -874,6 +882,19 @@ async function enablePluginInline(pluginId, btn, afterEnable) {
   }
 }
 
+/**
+ * 页头说明文案（2026-11-11）：安装场景不能再用「自己造一个」那一套。
+ * 用户是从市场点「安装」过来的，页头却在讲「用自然语言描述需求，模型起草一个扩展」——
+ * 这和下面的三步安装横幅直接打架，而且白占三行。
+ */
+function doctorHeaderHint(sub) {
+  const f = doctorState.forge;
+  if (sub.id === 'forge' && f.intent === 'install' && !f.installed) {
+    return '这个包是从市场下载的：已经进了暂存区，模型会按本机环境做最小修补，<b>你确认后</b>才会写入插件目录。';
+  }
+  return sub.hint;
+}
+
 function renderDoctorPage() {
   const box = $('#harness-page');
   if (!box) return;
@@ -915,7 +936,7 @@ function renderDoctorPage() {
             <span class="ds-icon">${s.icon}</span>${s.label}
           </button>`).join('')}
       </div>
-      <div class="hint" style="margin-bottom:12px">${sub.hint}</div>
+      <div class="hint" style="margin-bottom:12px">${doctorHeaderHint(sub)}</div>
 
       <div class="doctor-sub-body" id="doctor-sub-body">
         ${renderDoctorSubBody()}
@@ -2610,8 +2631,74 @@ const FORGE_LEVEL = {
   notice: { icon: '💡', label: '提示', cls: 'is-notice' }
 };
 
+/**
+ * 安装场景横幅（2026-11-11，操作逻辑审查 P0-1 / P2-1）。
+ *
+ * 为什么需要：用户点的是「安装」，落地页原来只有"扩展锻造台 / 草稿 / 暂存区 / 闸门 /
+ * 签票"这套系统词汇，没有一句"你正在装什么、现在到哪一步、还差什么"。于是最常见
+ * 的困惑是"我点了安装，怎么到了一个造东西的页面"。
+ * 这里把三步讲清楚，并明确「现在还没装到系统里」—— 避免用户以为已经装好了。
+ */
+function renderForgeInstallBanner() {
+  const f = doctorState.forge;
+  if (f.intent !== 'install' || f.installed) return '';
+  const name = forgeDraftName(f.draftId) || '第三方扩展包';
+  const gateOk = f.gate?.ok === true;
+  // ② 的三种态（2026-11-11）：适配**跑完了但闸门没过**时，原实现把它画成"未开始"（灰的），
+  // 真机上看着像系统卡在第一步 —— 实际上适配已经结束，是结论不通过。
+  const step2Cls = f.adapting ? ' is-now' : (f.gate ? (gateOk ? ' is-done' : ' is-fail') : '');
+  const step2Text = f.adapting ? '② 适配本机环境 · 进行中'
+    : (f.gate ? (gateOk ? '② 适配本机环境 · 已完成' : '② 适配本机环境 · 未通过') : '② 适配本机环境');
+  const nowText = f.adapting
+    ? '正在让模型适配本机环境…'
+    : (gateOk ? '适配结束，看过下面的结论后确认安装即可' : (f.gate ? '适配结束，但闸门还有阻断项 —— 见下方说明' : '准备开始适配…'));
+  return `
+    <div class="forge-install-banner">
+      <div class="fib-title">📦 你正在安装：<b>${esc(name)}</b></div>
+      <div class="fib-steps">
+        <span class="fib-step is-done">① 下载到暂存区 · 已完成</span>
+        <span class="fib-step${step2Cls}">${step2Text}</span>
+        <span class="fib-step${gateOk && !f.adapting ? ' is-now' : ''}">③ 你确认后写入插件目录</span>
+      </div>
+      <div class="fib-note">${esc(nowText)}　现在<b>还没有装到系统里</b> —— 适配只改暂存区的副本，不点确认不会落地。</div>
+    </div>`;
+}
+
+/**
+ * 暂存区正忙时的排队横幅（2026-11-11，审查 P1-1）。
+ *
+ * 原来 busy 时只 switchTab 就 return：市场刚弹完「正在打开锻造台并让模型适配…」，
+ * 用户却被扔到一个正在跑别的事的页面，自己的包没打开、没适配、也没人告诉他为什么。
+ * 现在记下 draftId，给一句解释和两个出口（立即开始 / 先看看草稿）。
+ */
+function renderForgeQueuedBanner() {
+  const f = doctorState.forge;
+  if (!f.queuedDraft) return '';
+  const busy = forgeBusy();
+  return `
+    <div class="forge-queued">
+      <div class="fq-title">⏳ 暂存区正忙，这次没有自动开始适配</div>
+      <div class="fq-sub">
+        有另一个任务在跑（起草 / 适配 / 安装）。两份任务同时改同一份草稿会互相覆盖，所以先排队。<br />
+        你的包已经下载好了：<b>${esc(f.queuedName || f.queuedDraft)}</b>，不会丢。
+      </div>
+      <div class="fq-actions">
+        <button class="btn btn-small btn-primary" id="forge-queued-start"${busy ? ' disabled title="当前任务还没结束，等它跑完再点"' : ''}>现在开始适配</button>
+        <button class="btn btn-small" id="forge-queued-open">先看看这个草稿</button>
+      </div>
+    </div>`;
+}
+
 function renderForgeModule() {
   const f = doctorState.forge;
+  // 安装场景（2026-11-11）：从市场/口令装进来的，界面只留"确认安装"这一件事。
+  // 隐藏模式 Tab 与起草区，是为了防住 P0-1 —— 闸门一通过，顶部原本会显示空的需求
+  // 输入框，用户输点什么再点「开始起草」就会新建草稿，把这份待装草稿顶掉。
+  //
+  // installScene 管"藏 Tab"，installing 管"藏起草区"—— 两者不能合并：
+  // 闸门不通过时得把起草区还回来当修改入口（见下方注释）。
+  const installScene = f.intent === 'install' && !f.installed;
+  const installing = installScene && !(f.gate && f.gate.ok === false);
 
   // 连不上控制台 ≠ 插件没启用（2026-10-28）。把两者混在一起会让人去查一个本来
   // 开着的插件；这里如实说"读不到状态"并给重试。
@@ -2703,18 +2790,21 @@ function renderForgeModule() {
   }
 
   return `
-    <div class="forge-modes" role="tablist">
+    ${renderForgeInstallBanner()}
+    ${renderForgeQueuedBanner()}
+
+    ${installScene ? '' : `<div class="forge-modes" role="tablist">
       <button class="forge-mode${f.mode === 'create' ? ' is-active' : ''}" type="button" data-forge-mode="create">
         ✏️ 自己造一个
       </button>
       <button class="forge-mode${f.mode === 'import' ? ' is-active' : ''}" type="button" data-forge-mode="import">
         📦 改别人的包
       </button>
-    </div>
+    </div>`}
 
-    ${f.mode === 'import' ? renderForgeImportArea() : renderForgeCreateArea()}
+    ${installing ? '' : (f.mode === 'import' ? renderForgeImportArea() : renderForgeCreateArea())}
 
-    ${f.error ? `<div class="forge-error">⚠️ ${esc(f.error)}</div>` : ''}
+    ${f.error ? `<div class="forge-error">⚠️ ${esc(f.error)}${(f.draftId && f.files?.length && !forgeBusy()) ? '<button class="btn btn-small" id="forge-retry-adapt" style="margin-left:10px">再适配一次</button>' : ''}</div>` : ''}
     ${f.drafting ? `<div class="forge-wait">${f.revising ? '🔧 正在修改草稿…模型会在原草稿上修，改完自动重跑闸门。' : '⚒️ 正在起草…模型会先把文件写进暂存区，完成后自动过闸门。'}</div>` : ''}
     ${f.importing ? `<div class="forge-wait">📦 正在解包…内容会落到暂存区（不会被执行）。</div>` : ''}
     ${f.adapting ? renderForgeProgress('adapt') : ''}
@@ -2844,7 +2934,7 @@ function renderForgeCreateArea() {
         <span class="forge-hint">${revise
           ? '修改和起草一样只在暂存区里进行，改完会自动重跑闸门。'
           : '起草通常几秒到半分钟。模型只会写进暂存区，不会影响正在运行的系统。'}</span>
-        <button class="btn btn-primary btn-small" id="forge-draft-btn"${forgeBusy() ? ' disabled' : ''}>${f.drafting ? (f.revising ? '修改中…' : '起草中…') : (revise ? '继续修改这个草稿' : '开始起草')}</button>
+        <button class="btn btn-primary btn-small" id="forge-draft-btn"${forgeBusy() ? ' disabled title="有任务在跑（起草/适配/安装），等它结束再点"' : ''}>${f.drafting ? (f.revising ? '修改中…' : '起草中…') : (revise ? '继续修改这个草稿' : '开始起草')}</button>
       </div>
     </div>`;
 }
@@ -2893,7 +2983,7 @@ function renderForgeImported() {
           <input type="text" id="forge-adapt-note" class="fi-adapt-input"
             placeholder="补充说明（可留空），如：去掉联网，改成读本地缓存"
             value="${esc(f.adaptNote || '')}" />
-          <button class="btn btn-primary btn-small" id="forge-adapt-btn"${forgeBusy() ? ' disabled' : ''}>
+          <button class="btn btn-primary btn-small" id="forge-adapt-btn"${forgeBusy() ? ' disabled title="有任务在跑（起草/适配/安装），等它结束再点"' : ''}>
             ${f.adapting ? '适配中…' : '🔧 让模型适配到本机'}
           </button>
           <span class="fi-adapt-note">模型只改清单、代码只做最小修补，改完会把 diff 给你看。</span>
@@ -2941,9 +3031,19 @@ function renderForgeDiff() {
 function renderForgeResult() {
   const f = doctorState.forge;
   if (!f.gate && !f.trace.length) return '';
+  // 安装场景下把「确认安装」做成吸底操作条（审查 P0-2）：
+  // 原来它排在闸门横幅 / 计划 / 问题明细 / 元信息 / 代码 / 轨迹 / 模型说明的末尾，
+  // 而单文件包的代码块默认展开，真机上要滚一整屏才能摸到最后那一步。
+  // ⚠️ 闸门不通过时不算"纯安装"——那时要保留页面里的修改入口。
+  const installing = f.intent === 'install' && !f.installed && !(f.gate && f.gate.ok === false);
 
   const g = f.gate || {};
-  const blocking = g.blocking || 0;
+  // 闸门把「因为结构不过所以没跑」也记成 block 级 issue（gate.js 的 skip()），
+  // 于是真机上出现「5 项阻断」里有 4 项是同一句「结构未通过，跳过 XX 检查」。
+  // 计数必须把 skipped 摘出来，否则用户以为自己有 5 个问题要修（2026-11-11 真机截图）。
+  const allIssues = Array.isArray(g.issues) ? g.issues : [];
+  const skipped = allIssues.filter((i) => i && i.code === 'skipped');
+  const blocking = Math.max(0, Number(g.blocking || 0) - skipped.length);
   const confirm = g.confirm || 0;
   const notice = g.notice || 0;
 
@@ -2959,9 +3059,11 @@ function renderForgeResult() {
     : '';
   let verdict;
   if (!g.ok) {
+    const skipNote = skipped.length ? `，另有 ${skipped.length} 项检查因结构未通过没有执行` : '';
+    const fixNote = f.autoFix > 0 ? `；已自动修复 ${f.autoFix} 轮仍未清零` : '';
     verdict = `<div class="forge-verdict is-block">
       <span class="fv-icon">⛔</span>
-      <div><b>闸门未通过</b><div class="fv-sub">${blocking} 项阻断 —— 已自动修复 ${f.autoFix || 0} 轮仍未清零。在上方输入框补充说明（可留空），点「继续修改这个草稿」让模型在原稿上修。</div>${delta}${autoFixNote}</div>
+      <div><b>闸门未通过</b><div class="fv-sub">${blocking} 项需要修${skipNote}${fixNote}。在上方补充说明（可留空），点「继续修改这个草稿」让模型在原稿上修。</div>${delta}${autoFixNote}</div>
     </div>`;
   } else if (confirm > 0) {
     verdict = `<div class="forge-verdict is-confirm">
@@ -2969,9 +3071,16 @@ function renderForgeResult() {
       <div><b>通过，但有 ${confirm} 项需要你确认</b><div class="fv-sub">这些不是错误，是需要你知道的能力（如联网 / 动态执行）。看下面的说明再决定。</div>${delta}${autoFixNote}</div>
     </div>`;
   } else {
+    // 适配跑过但一行没改：说清楚"这包本来就能用"。
+    // 否则 diff 为空 + 闸门通过，用户会以为适配白跑了、或者自己漏看了什么。
+    const sm0 = f.diff?.summary || {};
+    const changed0 = Number(sm0.added || 0) + Number(sm0.changed || 0) + Number(sm0.removed || 0);
+    const noChangeNote = (f.gateBefore && !changed0)
+      ? '<div class="fv-delta">这个包不用改 —— 模型没有动任何代码，它本来就能在本机安装和运行，直接确认安装即可。</div>'
+      : '';
     verdict = `<div class="forge-verdict is-ok">
       <span class="fv-icon">✅</span>
-      <div><b>闸门通过</b><div class="fv-sub">结构 / 语法 / 危险模式 / 声明-实现 / 本地环境 五项检查都过了${notice ? `（另有 ${notice} 条提示）` : ''}。</div>${delta}${autoFixNote}</div>
+      <div><b>闸门通过</b><div class="fv-sub">结构 / 语法 / 危险模式 / 声明-实现 / 本地环境 五项检查都过了${notice ? `（另有 ${notice} 条提示）` : ''}。</div>${delta}${autoFixNote}${noChangeNote}</div>
     </div>`;
   }
 
@@ -2983,9 +3092,10 @@ function renderForgeResult() {
       <div class="fs-title">📋 起草计划（模型动笔前定的方向）</div>
       <div class="fs-body">${doctorMiniMd(f.plan)}</div>
     </div>` : '';
-  const issues = (g.issues || []).length ? `
+  const shownIssues = allIssues.filter((i) => i && i.code !== 'skipped');
+  const issues = (shownIssues.length || skipped.length) ? `
     <div class="forge-issues">
-      ${g.issues.map((it) => {
+      ${shownIssues.map((it) => {
         const m = FORGE_LEVEL[it.level] || FORGE_LEVEL.notice;
         return `<div class="forge-issue ${m.cls}">
           <div class="fi-head"><span class="fi-badge">${m.icon} ${m.label}</span>${esc(it.title)}</div>
@@ -2993,6 +3103,7 @@ function renderForgeResult() {
           ${it.snippet ? `<pre class="fi-code">${esc(it.snippet)}</pre>` : ''}
         </div>`;
       }).join('')}
+      ${skipped.length ? `<div class="forge-skipnote">⋯ 因结构未通过，以下 ${skipped.length} 项检查已跳过：${skipped.map((s) => esc(String(s.title || '').replace(/^结构未通过，跳过/, ''))).join(' / ')}</div>` : ''}
     </div>` : '';
 
   // 清单摘要
@@ -3002,13 +3113,13 @@ function renderForgeResult() {
       <span>类型 <b>${esc(g.kind === 'plugin' ? '插件' : '技能')}</b></span>
       <span>id <b>${esc(man.id)}</b></span>
       <span>名称 <b>${esc(man.name || '-')}</b></span>
-      <span>工具 <b>${(man.tools || []).length}</b></span>
+      ${(man.tools || []).length ? `<span>工具 <b>${man.tools.length}</b></span>` : ''}
       <span>文件 <b>${f.files.length}</b></span>
     </div>` : '';
 
   // 生成代码
   const codeHtml = f.files.length ? `
-    <details class="forge-code"${f.files.length === 1 ? ' open' : ''}>
+    <details class="forge-code"${f.files.length === 1 && !installing ? ' open' : ''}>
       <summary>📄 查看生成的代码（${f.files.length} 个文件）</summary>
       <div class="forge-code-body">
         ${f.files.map((file) => `
@@ -3043,20 +3154,45 @@ function renderForgeResult() {
     : (isUpgrade ? `我已核对，覆盖更新 ${esc(f.upgradeOf.id || f.upgradeOf.dir)}` : '我已核对，确认安装');
   const oldV = isUpgrade ? String(f.upgradeOf.version || '') : '';
   const newV = isUpgrade ? String(g.manifest?.version || '') : '';
-  const verLine = isUpgrade && oldV && newV && oldV !== newV ? `（${esc(oldV)} → ${esc(newV)}）` : '';  const installHtml = `
-    <div class="forge-install">
+  const verLine = isUpgrade && oldV && newV && oldV !== newV ? `（${esc(oldV)} → ${esc(newV)}）` : '';
+
+  // ── 阻断态：单独一套布局（2026-11-11）─────────────────────────────────
+  // 原来它和"可以安装"共用同一套排版：最左边是一颗 disabled 的「确认安装」，
+  // 占位最大、视觉最重；唯一能点的按钮挤在旁边，提示压成最灰的 12px 小字放在最右。
+  // 真机上用户第一眼看到的是"我不能装"，然后停在那儿 —— 截图复现。
+  //
+  // 现在阻断态换成：红左条 + 一句"为什么不能装 / 下一步做什么" + 主按钮**直接开修**。
+  // 「让模型修好这 N 项」不再要求用户先去上面填一句说明（那是给想补充的人留的备选）。
+  const blockedHtml = `
+    <div class="forge-install is-blocked${installing ? ' is-sticky' : ''}">
+      <div class="fi-lock">
+        <div class="fi-lock-title">⛔ 现在还不能安装 —— ${blocking} 项需要先修掉</div>
+        <div class="fi-lock-sub">
+          闸门已经拦下这个包，所以「确认安装」暂时是灰的。点右边的按钮，模型会在原草稿上按上面的问题逐项改；
+          改完自动重跑闸门，通过之后这里才会出现可点的确认按钮。
+        </div>
+      </div>
+      <div class="fi-lock-acts">
+        <button class="btn btn-primary" id="forge-fix-now"${forgeBusy() ? ' disabled title="有任务在跑（起草/适配/安装），等它结束再点"' : ''}>让模型修好这 ${blocking} 项</button>
+        <button class="btn btn-small" id="forge-fix-note">先补充说明</button>
+        <button class="btn btn-small" id="forge-discard-btn">丢弃草稿</button>
+      </div>
+    </div>`;
+
+  const installHtml = canInstall ? `
+    <div class="forge-install${installing ? ' is-sticky' : ''}">
       ${needCheck ? `
         <label class="forge-confirm-check">
           <input type="checkbox" id="forge-allow-confirm"${f.allowConfirm ? ' checked' : ''} />
           <span>我已知悉上面 <b>${confirm}</b> 项需确认的能力，仍要${isUpgrade ? '更新' : '安装'}</span>
         </label>` : ''}
-      <button class="btn ${canInstall ? 'btn-primary' : ''} btn-small" id="forge-install-btn"
-        ${!canInstall || f.installing || (forgeBusy() && !f.installing) || (needCheck && !f.allowConfirm) ? ' disabled' : ''}>
+      <button class="btn btn-primary btn-small" id="forge-install-btn"
+        title="${f.installing ? '正在安装…' : ((forgeBusy() && !f.installing) ? '有别的任务在跑（起草/适配/安装），等它结束' : ((needCheck && !f.allowConfirm) ? '先勾选上面的确认框' : '确认安装'))}"
+        ${f.installing || (forgeBusy() && !f.installing) || (needCheck && !f.allowConfirm) ? ' disabled' : ''}>
         ${installBtnText}
       </button>
       <button class="btn btn-small" id="forge-discard-btn">丢弃草稿</button>
-      ${!canInstall ? '<span class="forge-install-note">有阻断项 —— 在上方补充说明（可留空）后点「继续修改这个草稿」。</span>' : ''}
-      ${canInstall && needCheck && !f.allowConfirm ? '<span class="forge-install-note">勾选上面的确认框后按钮才会可用。</span>' : ''}
+      ${needCheck && !f.allowConfirm ? '<span class="forge-install-note">勾选上面的确认框后按钮才会可用。</span>' : ''}
     </div>
     ${canInstall ? (isUpgrade ? `<div class="forge-install-warn">
       ⬆ 这是对已装${esc(g.kind === 'plugin' ? '插件' : '技能')} <code>${esc(f.upgradeOf.id || f.upgradeOf.dir)}</code>${verLine} 的<b>覆盖更新</b>：
@@ -3067,13 +3203,18 @@ function renderForgeResult() {
       ⏸ 装好后它是<b>关闭状态</b>，不会自己开始工作 —— 去「下载 → 已安装 → ${esc(g.kind === 'plugin' ? '插件' : '技能')}」里点开启才会生效。<br />
       🔐 点「我已核对，确认安装」= 你本人签一张 <b>10 分钟内有效、一次性的</b>确认票据，
       绑定当前这份代码；这期间代码若有任何改动，票据自动失效，需要你重新核对。
-    </div>`) : ''}`;
+    </div>`) : ''}`
+    : blockedHtml;
 
-  return `${verdict}${planHtml}${issues}${meta}${codeHtml}${traceHtml}${f.summary ? `
-    <div class="forge-summary">
-      <div class="fs-title">模型说明</div>
-      <div class="fs-body">${doctorMiniMd(f.summary)}</div>
-    </div>` : ''}${installHtml}`;
+  return `${verdict}${planHtml}${issues}${meta}${codeHtml}${traceHtml}${f.summary ? (String(f.summary).length > 320
+    ? `<details class="forge-summary is-long">
+        <summary>模型说明（${String(f.summary).length} 字，点开看全文）</summary>
+        <div class="fs-body">${doctorMiniMd(f.summary)}</div>
+      </details>`
+    : `<div class="forge-summary">
+        <div class="fs-title">模型说明</div>
+        <div class="fs-body">${doctorMiniMd(f.summary)}</div>
+      </div>`) : ''}${installHtml}`;
 }
 
 /** 暂存区里已有的草稿（往往是上次没装完的）。 */
@@ -3684,6 +3825,31 @@ function bindForgeEvents(box) {
     });
   }
   $('#forge-adapt-btn')?.addEventListener('click', () => runForgeAdapt());
+  // 适配/起草失败后的一键重试（2026-11-11，审查 P2-5）：
+  // 原来适配请求本身抛错（网络、620s 超时、后端 500）时，闸门仍是上一轮的结论，
+  // 「继续修改」的显隐条件（gate.ok === false）未必成立 —— 用户只剩一行红字，
+  // 不知道该点哪里才能再来一次。
+  $('#forge-retry-adapt')?.addEventListener('click', () => runForgeAdapt());
+  // 排队横幅的两个出口（2026-11-11，审查 P1-1）：原来 busy 时只切页就 return，
+  // 用户既不知道包在哪、也不知道什么时候能开始。
+  $('#forge-queued-start')?.addEventListener('click', () => {
+    const id = doctorState.forge.queuedDraft;
+    if (!id) return;
+    forgeOpenAndAdapt(id).catch((e) => {
+      doctorState.forge.error = `打开排队的草稿失败：${e?.message || e}`;
+      renderDoctorPage();
+    });
+  });
+  $('#forge-queued-open')?.addEventListener('click', () => {
+    const id = doctorState.forge.queuedDraft;
+    if (!id) return;
+    doctorState.forge.queuedDraft = '';
+    doctorState.forge.queuedName = '';
+    openForgeDraft(id, { intent: 'install' }).catch((e) => {
+      doctorState.forge.error = `打开草稿失败：${e?.message || e}`;
+      renderDoctorPage();
+    });
+  });
   // 补充说明边打边存 —— 适配过程中状态重绘会重建输入框，只靠 value 回填会丢字
   $('#forge-adapt-note')?.addEventListener('input', (e) => { doctorState.forge.adaptNote = e.target.value; });
 
@@ -3696,6 +3862,18 @@ function bindForgeEvents(box) {
 
   $('#forge-install-btn')?.addEventListener('click', () => runForgeInstall());
   $('#forge-discard-btn')?.addEventListener('click', () => discardForgeDraft(doctorState.forge.draftId));
+  // 阻断态的两颗按钮（2026-11-11 二改）：主按钮**直接开修**，不再要求先填说明；
+  // 次按钮才滚动到输入框，给想补充细节的人。
+  $('#forge-fix-now')?.addEventListener('click', () => {
+    document.querySelectorAll('#forge-fix-now, #forge-fix-note').forEach((b) => { b.disabled = true; });
+    runForgeDraft().catch(() => { /* 错误态由 runForgeDraft 自己渲染 */ });
+  });
+  $('#forge-fix-note')?.addEventListener('click', () => {
+    const ta = $('#forge-req');
+    if (!ta) return;
+    try { ta.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch { /* 旧内核不支持平滑滚动 */ }
+    try { ta.focus({ preventScroll: true }); } catch { /* ignore */ }
+  });
 
   $$('[data-forge-drop-draft]', box).forEach((el) => {
     el.addEventListener('click', () => discardForgeDraft(el.getAttribute('data-forge-drop-draft')));
@@ -3761,7 +3939,10 @@ function resetForgeDraftState(f = doctorState.forge) {
     draftId: '', gate: null, gateBefore: null, files: [], trace: [],
     summary: '', allowConfirm: false, imported: null, diff: null, upgradeOf: null,
     plan: '', prog: null, progStartAt: 0, revising: false, reviseNote: '', adaptNote: '',
-    installed: null, error: ''
+    installed: null, error: '',
+    // 场景意图与排队标记也要复位：否则「再做一个」之后还挂着安装横幅，
+    // 或者上一个包的排队横幅留在界面上让人以为还能点。
+    intent: '', queuedDraft: '', queuedName: ''
   });
   return f;
 }
@@ -4077,9 +4258,15 @@ async function runForgeAdapt(noteOverride = null) {
   renderDoctorPage();
 }
 
-/** 打开一个已有草稿：读代码 + 重跑闸门。 */
-async function openForgeDraft(draftId) {
+/**
+ * 打开一个已有草稿：读代码 + 重跑闸门。
+ * @param {{ intent?: 'install'|'' }} [opts] intent='install' 表示这次是从市场/口令安装进来的，
+ *   渲染层据此切到「安装场景」（顶部三步横幅、隐藏起草区、确认区吸底）。
+ *   从草稿列表点「查看」进来不带 intent —— 那是主动翻看，不是安装。
+ */
+async function openForgeDraft(draftId, opts = {}) {
   const f = doctorState.forge;
+  f.intent = opts && opts.intent === 'install' ? 'install' : '';
   f.draftId = draftId; f.error = ''; f.installed = null; f.allowConfirm = false;
   f.imported = null; f.diff = null; f.gateBefore = null;
   f.upgradeOf = null;   // 是否为「升级扩展」创建的升级草稿 —— gate 响应里会给
@@ -4106,6 +4293,13 @@ async function openForgeDraft(draftId) {
   renderDoctorPage();
 }
 
+/** 从草稿列表里取一个可读名字（安装场景横幅 / 排队横幅都要用）。 */
+function forgeDraftName(draftId) {
+  const f = doctorState.forge;
+  const d = (f.drafts || []).find((x) => String(x.draftId) === String(draftId));
+  return String(d?.name || d?.originName || d?.dir || draftId || '').trim();
+}
+
 /**
  * 从别处（市场安装 / 批量口令）一步进到锻造台：切页 → 打开草稿 → 直接开始适配。
  *
@@ -4116,24 +4310,52 @@ async function openForgeDraft(draftId) {
  *
  * 自动开始适配不构成"未经确认就安装"：适配只写暂存区，碰不到 skills/ 与 plugins/，
  * 落地仍然必须由人签票（见 /api/forge/confirm）。
+ *
+ * 2026-11-11 按操作逻辑审查改了三条（原来都是"静默"）：
+ *   ① busy 时不再只切页就走 —— 记下排队的草稿，顶部给横幅与两个出口；
+ *   ② 打开草稿失败（包括 draftId 被另一个操作顶掉的竞态）必须说明原因，
+ *      否则市场刚说完"正在适配"，用户对着一动不动的一页不知道发生了什么；
+ *   ③ 传 intent='install'，让渲染层切成安装场景（三步横幅 + 隐藏起草区 + 确认区吸底）。
  */
-async function forgeOpenAndAdapt(draftId, { adapt = true } = {}) {
+async function forgeOpenAndAdapt(draftId, { adapt = true, intent = 'install' } = {}) {
   if (!draftId) return;
   const f = doctorState.forge;
   // 有任务在跑就不抢：两个适配同时写同一份草稿会互相覆盖，比"没自动开始"糟得多。
   // 但仍然把人送到锻造台 —— 他要看的是"现在在忙什么"，而不是回到原页面什么都不知道。
   if (forgeBusy()) {
+    f.intent = intent === 'install' ? 'install' : '';
+    f.queuedDraft = draftId;
+    f.queuedName = forgeDraftName(draftId);
     doctorState.sub = 'forge';
     switchTab('harness');
+    // 顺手刷新草稿列表：排队横幅要显示包名，而这个名字来自 /api/forge。
+    // 失败静默 —— 取不到名字只是横幅上少几个字，不影响排队本身。
+    loadForgeStatus().then(() => renderDoctorPage()).catch(() => {});
+    renderDoctorPage();
     return;
   }
+  f.queuedDraft = ''; f.queuedName = '';
   doctorState.sub = 'forge';
   switchTab('harness');
   await loadForgeStatus();
-  await openForgeDraft(draftId);
+  await openForgeDraft(draftId, { intent });
   if (!adapt) return;
-  // 打开失败（草稿被删 / 接口报错）就别硬跑适配 —— 那只会拿一个空草稿去烧 token
-  if (f.draftId !== draftId || f.error || !f.files?.length) return;
+  // 打开失败（草稿被删 / 接口报错 / 竞态被顶掉）就别硬跑适配 —— 那只会拿一个空草稿去烧 token。
+  // 但必须把"为什么没开始"说出来：市场那边刚承诺过"正在适配"。
+  if (f.draftId !== draftId) {
+    f.error = '没能打开这个草稿：界面状态被另一个操作替换了。可在下面「暂存区里的草稿」里找到它再打开。';
+    renderDoctorPage();
+    return;
+  }
+  if (f.error) {
+    renderDoctorPage();
+    return;
+  }
+  if (!f.files?.length) {
+    f.error = '草稿里没有任何文件 —— 可能刚被删除，或下载不完整。可在下面「暂存区里的草稿」里确认，或回市场重新下载一次。';
+    renderDoctorPage();
+    return;
+  }
   // 自动跑的这一轮要**收着改**：它没有输入框可写补充说明，默认话术把范围钉死在
   // "装得上、跑得起来"，避免对本来就好用的包做无谓重写（那种改动最容易被用户当成"改坏了"）。
   await runForgeAdapt(

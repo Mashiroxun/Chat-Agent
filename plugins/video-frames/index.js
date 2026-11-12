@@ -15,6 +15,7 @@
 //   这三件事都符合"可插拔能力"的定位，而"决定走哪条路"是核心的职责。
 
 import { extractFrames, findFfmpeg, probeDuration } from './frames.js';
+import { withinWindow } from '../../src/elapsed.js';
 
 let cfg = () => ({});
 let log = () => {};
@@ -66,7 +67,7 @@ const PROBE_RETRY_MS = 60000;
 function probeFfmpegInBackground() {
   if (probing) return;
   if (ffmpegKnown) return;                                     // 成功结果长期有效
-  if (ffmpegKnown !== null && Date.now() - probeAt < PROBE_RETRY_MS) return;
+  if (ffmpegKnown !== null && withinWindow(probeAt, PROBE_RETRY_MS)) return;
   probing = true;
   findFfmpeg()
     .then((p) => { ffmpegKnown = p || ''; probeAt = Date.now(); })

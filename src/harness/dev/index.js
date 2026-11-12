@@ -19,6 +19,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { withinWindow } from '../../elapsed.js';
 import { fileURLToPath } from 'node:url';
 import { DATA_DIR } from '../../config.js';
 import { runTurn, trimMessagesToBudget, isCtxNote, CTX_NOTE_PREFIX } from './executor.js';
@@ -515,7 +516,7 @@ function handleIncoming({ chatKey, senderId, senderName, text, mid, send }) {
   if (!ck) return false;
   const cacheKey = String(mid || `${ck}|${senderId}|${String(text || '').slice(0, 80)}`);
   const cached = routeCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < ROUTE_CACHE_MS) return cached.handled;
+  if (cached && withinWindow(cached.at, ROUTE_CACHE_MS)) return cached.handled;
 
   let handled = false;
   try {

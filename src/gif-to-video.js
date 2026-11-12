@@ -28,6 +28,7 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { detectImageType } from './image-type.js';
+import { withinWindow } from './elapsed.js';
 
 /** 转换后最大边（像素）。 */
 export const GIF_VIDEO_MAX_DIM = 480;
@@ -72,7 +73,7 @@ let _checkedAt = 0;
 const FFMPEG_RETRY_MS = 60000;
 async function findFfmpeg() {
   if (_checked && _ffmpeg) return _ffmpeg;
-  if (_checked && Date.now() - _checkedAt < FFMPEG_RETRY_MS) return _ffmpeg;
+  if (_checked && withinWindow(_checkedAt, FFMPEG_RETRY_MS)) return _ffmpeg;
   _checked = true;
   _checkedAt = Date.now();
   _ffmpeg = null;

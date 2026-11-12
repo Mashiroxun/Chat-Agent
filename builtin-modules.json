@@ -8,7 +8,7 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "index.js": "b3c52252ae71f441",
+        "index.js": "b0acbbef96015aae",
         "plugin.json": "75d526dd6156bc57"
       }
     },
@@ -43,17 +43,17 @@
         "lib/archive.js": "c2624125c80fd642",
         "lib/budget.js": "e5a0b81efa94ae50",
         "lib/cards.js": "05020b8cdea7e6a0",
-        "lib/conflict.js": "b348e1eea33b9b61",
+        "lib/conflict.js": "fe22fe4654e8e60e",
         "lib/consolidate.js": "52a9d9e629c87557",
         "lib/crossturn.js": "8d935389ea61f224",
         "lib/env.js": "4f84553caf87c6ac",
         "lib/gist.js": "2cc0ea5b58eb964b",
-        "lib/inject.js": "707c8c427cf1e7f9",
+        "lib/inject.js": "ad4932c4a906e95f",
         "lib/peek.js": "41d55a805056f4a3",
         "lib/pending.js": "998e5e2d0c8258c3",
         "lib/recall.js": "6a76f256c75dfdd7",
-        "lib/stats.js": "5025c7d249725af8",
-        "lib/store.js": "5004b600353ff454",
+        "lib/stats.js": "b7831ac14538ebb6",
+        "lib/store.js": "e8651f5caaabb28f",
         "lib/util.js": "14be37b2a6694893",
         "plugin.json": "b262840db6ab352f",
         "README.md": "8ad43a8d2d6fad2e",
@@ -72,7 +72,7 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "index.js": "5b442fc6c496e4cf",
+        "index.js": "b593a23bd9935878",
         "plugin.json": "45e22ff63453959e"
       }
     },
@@ -82,10 +82,10 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "bili.js": "89fe9164ece68cb6",
-        "douyin.js": "e0d5b89584d87b36",
+        "bili.js": "a68a310c009a7d95",
+        "douyin.js": "d14f60c7f6fa874d",
         "index.js": "434402d8822704d1",
-        "media-common.js": "2615ad0b10dfe8de",
+        "media-common.js": "afc571933de5c77b",
         "plugin.json": "656a6bfb3cd3f666"
       }
     },
@@ -115,7 +115,7 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "index.js": "89e6d779b26243a0",
+        "index.js": "faf848c4e13ae0ad",
         "plugin.json": "2c23269b7861f1fe"
       }
     },
@@ -136,8 +136,8 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "frames.js": "49c29580d0bffcc0",
-        "index.js": "c62c60a84b6999f3",
+        "frames.js": "8f51d945b44b0cbb",
+        "index.js": "a4044abd8753d871",
         "plugin.json": "2214fbac910caff7"
       }
     },
@@ -148,7 +148,7 @@
       "entry": "index.js",
       "files": {
         "index.js": "839733c7337e9382",
-        "lib/manager.js": "6557f0cb0084e59c",
+        "lib/manager.js": "9d840c658e3a4966",
         "lib/stickers.js": "2a14e5876888f3c9",
         "panel/viewer.css": "3004435cbea34a9b",
         "panel/viewer.html": "4255fbdb7ce0e459",

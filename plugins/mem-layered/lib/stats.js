@@ -5,6 +5,7 @@
 // 由 memory.status 能力暴露（宿主自带的 memory_status 工具会直接显示它）。
 import fs from 'node:fs';
 import path from 'node:path';
+import { withinWindow } from '../../../src/elapsed.js';
 import { ensureDir, readJson, writeJson } from './util.js';
 
 const FLUSH_INTERVAL_MS = 20000;
@@ -74,7 +75,7 @@ export class Stats {
   }
 
   flush({ force = false } = {}) {
-    if (!force && Date.now() - this.lastFlushAt < FLUSH_INTERVAL_MS) return false;
+    if (!force && withinWindow(this.lastFlushAt, FLUSH_INTERVAL_MS)) return false;
     // 只留最近 30 天，别让统计文件自己长成负担
     const days = Object.keys(this.data.days).sort();
     while (days.length > 30) delete this.data.days[days.shift()];

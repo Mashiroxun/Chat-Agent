@@ -240,6 +240,33 @@ const CASES = [
     })
   },
 
+  /* ── ④b 带图/带视频请求被服务商整轮退回（2026-11-11）──────────────
+     真机日志：400 + "model only supports text input; image, video and audio
+     is not supported"（11-06/11-07 共 20 次）。原有规则一条都不命中，
+     用户只看到一整串英文 JSON，而这一轮对话其实什么都没发出去。
+     现在 image-compat 会自动摘掉媒体重试一次；这条解释是降级也失败时的兜底。
+
+     ⚠️ 2026-11-11 结论更正：**不能从这句错误反推「模型只接受文字」**。
+        用同一份真实配置实测：sensenova-6.8-flash-lite 是官方定义的原生多模态
+        智能体模型，合法 PNG(base64) 走 image_url 返回 200，tool 消息里带图也 200；
+        这句 400 当天已无法复现。实测 video_url、公网 URL 形式的图片都会被拒
+        （分别回 inference request is invalid / image download failed）。
+        所以文案只列「可排查的原因与动作」，不替用户断言模型能力、不劝他换主模型。
+
+     ⚠️ 必须排在 ⑤（上下文超长）之前：两者都是 400，但修法完全不同。 */
+  {
+    test: ({ status, raw, serverMsg, msg }) =>
+      [400, 415, 422].includes(Number(status)) &&
+      /only supports text|text[- ]only|仅支持文本|不支持(?:图片|图像|视频|音频|多模态)|(?:image|video|audio|vision|multimodal)[^.;]{0,60}(?:is|are)[ ]not[ ]supported|(?:does not|doesn't|cannot|can't|do not)[ ]support[^.;]{0,40}(?:image|video|audio|vision|multimodal)/i
+        .test(`${raw} ${serverMsg} ${msg}`),
+    build: () => ({
+      title: '带图请求被服务商拒了',
+      what: '这次请求里带了图片或视频，服务商整轮退回了。常见原因是图片来源或格式不被这个接口接受、或请求里混进了视频/音频部件 —— 不一定说明模型不能看图，多模态模型同样会因为这些原因被拒。',
+      fix: '先到 设置 → 模型配置 关掉「视频输入」再试一次；图片尽量用本地下载后转 base64，别用外链地址。仍不行再给「图片输入专用模型」填一个确认可用的多模态模型，先别急着换主模型。',
+      target: 'settings-api'
+    })
+  },
+
   /* ── ⑤ 上下文超长 ────────────────────────────────────────────── */
   {
     test: ({ status, msg }) =>

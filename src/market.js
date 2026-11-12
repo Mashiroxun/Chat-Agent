@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, DATA_DIR, getConfig } from './config.js';
+import { withinWindow } from './elapsed.js';
 import { logger } from './logger.js';
 
 export const MARKET_API_BASE = 'https://www.kondius.cn/api/community';
@@ -440,7 +441,7 @@ export async function listMarketItems(kind, { force = false } = {}) {
   }
 
   const hit = marketListCache.get(key);
-  if (hit && Date.now() - hit.at < MARKET_LIST_TTL_MS) return hit.data;
+  if (hit && withinWindow(hit.at, MARKET_LIST_TTL_MS)) return hit.data;
 
   const running = marketListInflight.get(key);
   if (running) return running;      // 并发请求复用同一条上游请求

@@ -10,6 +10,7 @@ import { getConfig } from './config.js';
 import { isAtMe } from './prompt.js';
 import { logger } from './logger.js';
 import { normalizeMessageList } from './util.js';
+import { withinWindow } from './elapsed.js';
 import { looksLikeLeak } from './reply-confirm.js';
 import { skillManager } from './skills/manager.js';
 import { validateImageUrl, safeFetchBinary, browseLockState, checkBrowseLock } from './safe-fetch.js';
@@ -319,12 +320,26 @@ function resolveEmojiId(input) {
  * 「无语」，由代码翻成编号 —— 不用背数字，也不会点出个莫名其妙的表情。
  */
 const FACE_INDEX_TTL_MS = 60 * 60 * 1000;
+// 失败也要记一笔（2026-11-11 修）：原先只有成功才写 faceIndexAt，于是协议端
+// 不支持 / 不响应 fetch_sys_faces 时，**每一次** react_message 都会重新发一次
+// 请求并等满超时（get 类 15 秒），连续点两次就是 30 秒。表情目录是纯静态数据，
+// 5 分钟内没变的意义上不值得重试。
+const FACE_INDEX_FAIL_TTL_MS = 5 * 60 * 1000;
 let faceIndex = null;
 let faceIndexAt = 0;
+let faceIndexFailAt = 0;
 
 async function loadFaceIndex(ctx) {
-  if (faceIndex && Date.now() - faceIndexAt < FACE_INDEX_TTL_MS) return faceIndex;
-  const resp = await ctx.onebot.fetchSysFaces(false);
+  if (faceIndex && withinWindow(faceIndexAt, FACE_INDEX_TTL_MS)) return faceIndex;
+  // 上次失败且还在冷却窗口 → 直接认「目录不可用」，不再打协议端
+  if (!faceIndex && faceIndexFailAt && withinWindow(faceIndexFailAt, FACE_INDEX_FAIL_TTL_MS)) return null;
+  let resp;
+  try {
+    resp = await ctx.onebot.fetchSysFaces(false);
+  } catch (error) {
+    faceIndexFailAt = Date.now();
+    throw error;
+  }
   // ⚠️ OneBotClient.call() 最后是 `return body.data`，拿到的是**已解包**的对象。
   //    这里再写 resp.data.packs 就多剥了一层，永远是 undefined（这条踩过）。
   const packs = resp?.packs || [];
@@ -336,33 +351,44 @@ async function loadFaceIndex(ctx) {
       if (/^\d+$/.test(sid) && name && !idx.has(name)) idx.set(name, sid);
     }
   }
-  if (!idx.size) return null;
+  if (!idx.size) {
+    faceIndexFailAt = Date.now();   // 空目录同样按「暂时不可用」处理，别每次都重拉
+    return null;
+  }
   faceIndex = idx;
   faceIndexAt = Date.now();
+  faceIndexFailAt = 0;
   return idx;
 }
 
 /**
  * 把「like / 笑 / 76」解析成表情编号。
  * 数字直接透传，内置别名优先，再不行翻目录（精确 → 去斜杠 → 包含匹配）。
- * 目录取不到时返回空让调用方报错 —— 宁可说"不认识这个表情"，也不瞎猜一个号。
+ *
+ * 返回值带 `indexAvailable` 的原因（2026-11-11 修）：原来失败一律返回空串，
+ * 调用方只能报「不认识这个表情」。但那两种情况的处置完全相反 ——
+ *   · 目录正常、只是没这个名字 → 换个说法还能成
+ *   · 目录根本拿不到 → 换一百个中文名也全是失败，必须改用数字编号
+ * 不区分的话，模型会挨个试「笑」「微笑」「大笑」，每次都多等一轮超时。
+ *
+ * @returns {{id: string, indexAvailable: boolean}} id 为空表示没解析出来
  */
 async function resolveFaceId(ctx, input) {
   const raw = String(input ?? '').trim();
-  if (!raw) return EMOJI_ALIASES.like;
-  if (/^\d{1,4}$/.test(raw)) return raw;
+  if (!raw) return { id: EMOJI_ALIASES.like, indexAvailable: true };
+  if (/^\d{1,4}$/.test(raw)) return { id: raw, indexAvailable: true };
   const alias = EMOJI_ALIASES[raw.toLowerCase()];
-  if (alias) return alias;
+  if (alias) return { id: alias, indexAvailable: true };
   let idx = null;
   try { idx = await loadFaceIndex(ctx); } catch { /* 目录不可用，语义解析走不通 */ }
-  if (!idx) return '';
-  if (idx.has(raw)) return idx.get(raw);
+  if (!idx) return { id: '', indexAvailable: false };
+  if (idx.has(raw)) return { id: idx.get(raw), indexAvailable: true };
   const bare = raw.replace(/^\//, '');
-  if (idx.has(bare)) return idx.get(bare);
+  if (idx.has(bare)) return { id: idx.get(bare), indexAvailable: true };
   for (const [name, sid] of idx) {
-    if (name.includes(bare) || bare.includes(name)) return sid;
+    if (name.includes(bare) || bare.includes(name)) return { id: sid, indexAvailable: true };
   }
-  return '';
+  return { id: '', indexAvailable: true };
 }
 
 /** 名片点赞的每日去重：`chatKey|QQ` → 本地日期。防同一个群反复骚扰同一人。 */
@@ -708,9 +734,13 @@ function registerAllTools() {
         }
         const entry = ctx.store.findByMid(ctx.chatKey, midKey);
         if (!entry) return err(`当前会话找不到消息 #${midKey}。${midHint(ctx)}`);
-        const emojiId = await resolveFaceId(ctx, args.emoji);
+        const resolved = await resolveFaceId(ctx, args.emoji);
+        const emojiId = resolved.id;
         if (!emojiId) {
-          return err(`不认识这个表情：${JSON.stringify(args.emoji)}。可以传中文名（如「笑」「赞」「无语」）、'like'，或者 QQ 表情编号。`);
+          // 两种情况分开说：目录拿不到时再换中文名也没用，必须走数字
+          return err(resolved.indexAvailable
+            ? `不认识这个表情：${JSON.stringify(args.emoji)}。可以传中文名（如「笑」「赞」「无语」）、'like'，或者 QQ 表情编号。`
+            : `现在读不到表情目录（协议端 fetch_sys_faces 不可用），中文名解析不了。直接传编号：76 = 赞、14 = 微笑、13 = 呲牙；或者传 'like'。不要反复换中文名重试，会一直失败。`);
         }
         await ctx.sender.react(ctx.chatKey, midKey, emojiId);
         return {
@@ -1030,7 +1060,12 @@ function registerAllTools() {
     async execute(ctx) {
       try {
         const raw = await ctx.onebot.getGroupSystemMsg(ctx.kind === 'group' ? ctx.chatId : null);
-        const list = Array.isArray(raw) ? raw : [];
+        // 不同协议端对「列表」的包装不一致：SnowLuma 实测直接给数组，别家可能包一层
+        // messages / data / list。只认数组的话，包装型协议端会稳定误报「没有系统消息」。
+        const list = Array.isArray(raw) ? raw
+          : (Array.isArray(raw?.messages) ? raw.messages
+            : (Array.isArray(raw?.data) ? raw.data
+              : (Array.isArray(raw?.list) ? raw.list : [])));
         if (!list.length) return ok({ count: 0, note: '没有待处理或近期的系统消息。' });
         return ok({
           count: list.length,
@@ -1064,7 +1099,10 @@ function registerAllTools() {
         const raw = await ctx.onebot.getMsgEmojiLikes(midKey);
         const list = Array.isArray(raw) ? raw : [];
         if (!list.length) return ok({ count: 0, messageId: midKey, note: '这条消息还没有人点表情。' });
-        const reactions = list.slice(0, 8).map((r) => ({
+        // ⚠️ 必须先 map/filter 再 slice（2026-11-11 修）：原来先截断 8 条再过滤，
+        //    一旦协议端在列表前部塞了空占位对象，第 9 条之后的有效表情就被整段丢掉，
+        //    最后回一句「还没有人点表情」—— 与事实相反。
+        const reactions = list.map((r) => ({
           emojiId: String(r?.emoji_id ?? ''),
           count: Number(r?.count) || 0,
           // 只取 QQ 号，名字要另外从成员表查 —— 这里不做额外请求。
@@ -1078,7 +1116,7 @@ function registerAllTools() {
             })
             .filter(Boolean)
             .slice(0, 10)
-        })).filter((r) => r.emojiId !== '' || r.count > 0);
+        })).filter((r) => r.emojiId !== '' || r.count > 0).slice(0, 8);
         if (!reactions.length) return ok({ count: 0, messageId: midKey, note: '这条消息还没有人点表情。' });
         return ok({
           messageId: midKey,

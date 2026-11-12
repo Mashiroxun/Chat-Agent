@@ -11,6 +11,7 @@
 
 import fsModule from 'node:fs';
 import pathModule from 'node:path';
+import { withinWindow } from './elapsed.js';
 import netModule from 'node:net';
 import { spawn as spawnModule, execFile as execFileModule } from 'node:child_process';
 import { getConfig as getConfigModule, ROOT as ROOTModule } from './config.js';
@@ -426,7 +427,7 @@ export function createQqPortable({
   let localQqInFlight = null;
   async function detectLocalQqDir(opts = {}) {
     const now = Date.now();
-    if (!opts?.force && localQqCache.at && now - localQqCache.at < LOCAL_QQ_TTL) {
+    if (!opts?.force && localQqCache.at && withinWindow(localQqCache.at, LOCAL_QQ_TTL, now)) {
       return localQqCache.dir;
     }
     if (opts?.force) {

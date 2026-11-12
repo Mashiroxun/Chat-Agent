@@ -9,6 +9,8 @@
 // 同一会话（群/私聊）同时最多一个运行；运行期间新消息只写 JSON（未读），不叠加触发。
 // 不同会话之间并行，受 maxConcurrentRuns 全局限流。
 import { getConfig, storeConfigForChat, personaForChat, commandMuteTier, isChatAllowed, getConfigVersion, DATA_DIR } from './config.js';
+import { withinWindow } from './elapsed.js';
+import { routeThinking, escalateForTools } from './thinking-route.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { vendorOfConfig } from './model-prices.js';
@@ -417,7 +419,7 @@ export class Orchestrator {
     const gid = String(chatId || '');
     if (!gid) return fallback;
     const hit = this.selfCardCache.get(gid);
-    if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.card || fallback;
+    if (hit && withinWindow(hit.at, 10 * 60 * 1000)) return hit.card || fallback;
     const selfId = String(this.onebot.selfId || '').trim();
     if (!selfId) return fallback;
     // 断线时不发请求：这一轮本来就发不出消息，别让唤醒卡在查询上
@@ -1688,6 +1690,32 @@ export class Orchestrator {
     const visionEnabled = effectiveVisionEnabled(cfg);
     const searchEnabled = cfg.webSearch?.enabled !== false;
     const toolsCfg = cfg.tools || {};
+    // ── 本轮思考档分流（2026-11-12）──
+    // 缓存稳态命中 ~90% 后开销大头转到输出，其中 ~90% 是 reasoning token：
+    // 拍一拍、纯表情、接一句闲聊也在按平台默认的高思考档烧钱。这里只算
+    // 「这轮活儿有多重」的**意图**，落成哪个厂商参数由 thinking-adapters 的
+    // shapeThinkingApi 按方言决定 —— 换模型/换网关不用回来改编排器。
+    //
+    // ⚠️ 刻意不改 skillContext.thinkingMode/Effort：那两项是主设置的口径，
+    //    UI、其它 Skill、以及回复裁判的按次覆盖（thinkingMode:'off'）都读它们。
+    //    分流结果另开 thinkingRoute 字段，避免串味。
+    const thinkingRoute = (() => {
+      try {
+        return routeThinking({
+          triggerEntries, atMe, tierInfo, proactive, kind,
+          enabled: cfg.api?.thinkingRoute !== false,
+          allowOff: cfg.api?.thinkingRouteAllowOff !== false,
+          baseMode: cfg.api?.thinkingMode
+        });
+      } catch (error) {
+        // 分流只是省钱优化，判定出错绝不能让这一轮会话起不来。
+        logger.warn('thinking-route', `判定失败，本轮按默认思考档：${String(error?.message ?? error)}`);
+        return { tier: 'passthrough', reason: '判定异常', routed: false };
+      }
+    })();
+    if (thinkingRoute.routed) {
+      logger.info('thinking-route', `${chatKey} ${session.id} → ${thinkingRoute.tier}（${thinkingRoute.reason}）`);
+    }
     const skillContext = {
       chatKey, kind, chatId, chatName,
       model: cfg.api.model,
@@ -1701,6 +1729,7 @@ export class Orchestrator {
       thinkingMode: cfg.api.thinkingMode,
       thinkingEffort: cfg.api.thinkingEffort,
       thinkingBudget: cfg.api.thinkingBudget,
+      thinkingRoute,
       visionEnabled,
       searchEnabled,
       proactive,
@@ -1796,6 +1825,15 @@ export class Orchestrator {
     session.userPrompt = userPrompt;
     session.promptChars = systemPrompt.length + userPrompt.length;
     session.model = cfg.api.model;
+    // 把本轮意图档写进会话存档：上线后要按档位聚合 reasoning token 才能对比
+    // 全开/灰度的真实收益，只靠日志文本没法把档位和 usage 对到同一条记录上。
+    // escalatedTo 由工具链升档时补写（见下方循环）。
+    session.thinkingRoute = {
+      tier: thinkingRoute.tier,
+      reason: thinkingRoute.reason,
+      routed: thinkingRoute.routed,
+      escalatedTo: null
+    };
     // 记录本次调用走的是哪个渠道（A6API / openrouter / 本地中转…）。
     // 同名模型在不同渠道是不同商品，用量与价格要分开统计。
     session.vendor = vendorOfConfig(cfg);
@@ -2196,6 +2234,21 @@ export class Orchestrator {
         session.messages.push(structuredClone(assistantForSession));
       }
       session.rounds = round + 1;
+      // ── 思考档：工具链升档（2026-11-12）──
+      // 分流判定只吃触发批，看不到"模型这一轮决定调工具"。一旦进了工具循环，
+      // 后续消化工具结果、决定发不发言明显比拍一拍/纯附和更需要推理，off 档
+      // 必须补升一档，否则整条工具链都在零思考下跑。
+      // 用 finalToolCalls（已处理 finishReason=length 的残缺调用丢弃），与
+      // assistant 条目同源；只升 off→light，不回到 full，避免成本反弹。
+      if (finalToolCalls?.length) {
+        const escalated = escalateForTools(skillContext.thinkingRoute);
+        if (escalated) {
+          skillContext.thinkingRoute = escalated;
+          if (session.thinkingRoute) session.thinkingRoute.escalatedTo = escalated.tier;
+          logger.info('thinking-route', `${session.id} 工具链升档 off→light`);
+          this.sessions.update(session.id);
+        }
+      }
       markActivity('');
 
       // ⚠️ 必须用与 assistant 条目**同一个来源**（2026-10-07 修）。
@@ -2830,7 +2883,7 @@ export class Orchestrator {
       if (allowGroups.length > 0 ? !allowGroups.includes(id) : !cfg.allowAllWhenEmpty) continue;
       const meta = this.store.getChatMeta(chatKey);
       if (meta.unread > 0) continue;
-      if (Date.now() - meta.lastTs < idleMs) continue;
+      if (withinWindow(meta.lastTs, idleMs)) continue;
       if (this.runningChats.has(chatKey) || this.startingChats.has(chatKey)) continue;
       // ⚠️ 2026-10-16：指令禁言中的群不进主动开话题候选 —— 禁言语义是
       // "只响应 @我"，冷场主动开口与之冲突（wake 里的闸也会拦，这里提前

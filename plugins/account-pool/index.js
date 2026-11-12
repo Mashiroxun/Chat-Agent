@@ -17,6 +17,7 @@
 // 又会在重启后留下过期的"快照"误导判断。重启后权重归零重新学习更干净。
 
 import crypto from 'node:crypto';
+import { withinWindow } from '../../src/elapsed.js';
 
 let cfg = () => ({});
 let log = () => {};
@@ -50,7 +51,7 @@ function accountView(a, maskKey = true) {
     totalCalls: r.totalCalls || 0,
     lastUsed: r.lastUsed || 0,
     lastErrorAt,
-    coolingDown: rateLimited && cooldownMs > 0 && lastErrorAt > 0 && Date.now() - lastErrorAt < cooldownMs
+    coolingDown: rateLimited && cooldownMs > 0 && lastErrorAt > 0 && withinWindow(lastErrorAt, cooldownMs)
   };
 }
 

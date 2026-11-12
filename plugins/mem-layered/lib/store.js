@@ -19,6 +19,7 @@
 //    这里索引侧剪掉"高频短词"，并给每个会话一个词表上限作为兜底。
 import fs from 'node:fs';
 import path from 'node:path';
+import { withinWindow } from '../../../src/elapsed.js';
 import {
   safeName, ensureDir, readJson, writeJson, removeFile, clamp, num,
   tokenize, formatWhen
@@ -750,7 +751,7 @@ export class LayeredStore {
       const R = this.effectiveScore(meta, now);
       if (R < 0.5 || R > 0.95) continue;
       const lastReplay = Number(meta.lastReplayAt) || 0;
-      if (lastReplay && now - lastReplay < cooldownMs) continue;
+      if (lastReplay && withinWindow(lastReplay, cooldownMs, now)) continue;
       out.push({ id, dist: Math.abs(Math.log((gapDays + 1) / S)) });
     }
     out.sort((a, b) => a.dist - b.dist);

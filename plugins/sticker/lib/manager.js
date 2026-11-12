@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { DATA_DIR } from '../../../src/config.js';
 import { safeFetchBinary } from '../../../src/safe-fetch.js';
 import { detectImageExt } from '../../../src/image-type.js';
+import { withinWindow, expiredSinceFile } from '../../../src/elapsed.js';
 import {
   loadStickerStore, saveStickerStore, mergeStickerLibrary, isStickerFetchComplete,
   findSticker, findStickerExact, formatStickerList, applyStickerNote, markStickerUsed,
@@ -156,8 +157,11 @@ export class StickerManager {
     //   backoffUntil 降频截止时间；force=true 时忽略（用户主动刷新要立刻试）
     //   backoffLogged 本轮降频是否已提示过，避免每次延长都刷一行
     //   lastProblemLogAt 异常日志节流时间戳
+    //   backoffAt/backoffMs 降频起点与时长（时钟回拨安全，见 src/elapsed.js）
     this.emptyStreak = 0;
-    this.backoffUntil = 0;
+    this.backoffUntil = 0;   // 保留供恢复提示判断；实际窗口判定用 backoffAt/backoffMs
+    this.backoffAt = 0;
+    this.backoffMs = 0;
     this.backoffLogged = false;
     this.lastProblemLogAt = 0;
   }
@@ -173,13 +177,15 @@ export class StickerManager {
   #noteSyncProblem(text) {
     this.emptyStreak = Math.min((this.emptyStreak || 0) + 1, 20);
     const now = Date.now();
-    if (!this.lastProblemLogAt || now - this.lastProblemLogAt > SYNC_PROBLEM_LOG_EVERY_MS) {
+    if (!this.lastProblemLogAt || !withinWindow(this.lastProblemLogAt, SYNC_PROBLEM_LOG_EVERY_MS, now)) {
       this.lastProblemLogAt = now;
       try { this.api?.log?.(text); } catch { /* 日志失败不影响同步 */ }
     }
     if (this.emptyStreak >= SYNC_EMPTY_STREAK_BEFORE_BACKOFF) {
       const ms = Math.min(SYNC_BACKOFF_MAX_MS, SYNC_BACKOFF_BASE_MS * 2 ** (this.emptyStreak - 2));
       this.backoffUntil = now + ms;
+      this.backoffAt = now;
+      this.backoffMs = ms;
       if (!this.backoffLogged) {
         this.backoffLogged = true;
         try {
@@ -195,7 +201,9 @@ export class StickerManager {
       try { this.api?.log?.(`收藏同步已恢复（拿到 ${count} 条），降频撤销`); } catch { /* ignore */ }
     }
     this.emptyStreak = 0;
-    this.backoffUntil = 0;
+    this.backoffUntil = 0;   // 保留供恢复提示判断；实际窗口判定用 backoffAt/backoffMs
+    this.backoffAt = 0;
+    this.backoffMs = 0;
     this.backoffLogged = false;
     this.lastProblemLogAt = 0;
   }
@@ -464,7 +472,7 @@ export class StickerManager {
           const st = fs.statSync(fp);
           if (!st.isFile()) continue;
           if (wanted.has(path.resolve(fp).toLowerCase())) continue;
-          if (now - st.mtimeMs < GRACE_MS) continue;
+          if (!expiredSinceFile(st.mtimeMs, GRACE_MS, now)) continue;
           fs.unlinkSync(fp);
           removed += 1;
         } catch { /* ignore */ }
@@ -498,12 +506,12 @@ export class StickerManager {
     if (!this.enabled) return { entries: this.entries, fromCache: true, disabled: true };
     const ttl = 60000;
     const now = Date.now();
-    if (!force && this.syncedAt && now - this.syncedAt < ttl) {
+    if (!force && this.syncedAt && withinWindow(this.syncedAt, ttl, now)) {
       return { entries: this.entries, fromCache: true };
     }
     // 降频窗口内直接返回内存快照。force=true 不拦：用户在查看器里点"刷新"
     // 或刚收藏完新表情时，必须能立刻真同步。
-    if (!force && this.backoffUntil && now < this.backoffUntil) {
+    if (!force && this.backoffUntil && withinWindow(this.backoffAt, this.backoffMs, now)) {
       return { entries: this.entries, fromCache: true, backoff: true };
     }
     if (this.syncing) return this.syncing;
@@ -692,7 +700,7 @@ export class StickerManager {
       .filter(Boolean)
       .slice(0, 20);
     const normUsage = String(usage ?? '').trim().slice(0, 60);
-    this.collectTimes = this.collectTimes.filter((t) => now - t < 3600000);
+    this.collectTimes = this.collectTimes.filter((t) => withinWindow(t, 3600000, now));
     if (this.collectTimes.length >= Math.max(1, Number(this.config?.maxCollectPerHour) || 10)) {
       throw new Error('收藏太频繁了，一小时后再试');
     }
@@ -805,7 +813,7 @@ export class StickerManager {
           const st = fs.statSync(fp);
           if (!st.isFile()) continue;
           if (referenced.has(path.resolve(fp).toLowerCase())) continue;
-          if (now - st.mtimeMs < GRACE_MS) continue;
+          if (!expiredSinceFile(st.mtimeMs, GRACE_MS, now)) continue;
           fs.unlinkSync(fp);
           removed += 1;
         } catch { /* 单个文件删不掉（占用/权限）：跳过，不中断整轮清理 */ }
