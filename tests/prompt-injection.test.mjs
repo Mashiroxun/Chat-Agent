@@ -31,13 +31,13 @@ test('覆盖 anchor 后 anchorChunkFor 走注入实现', () => {
   }
 });
 
-test('anchorChunkFor 默认值：allCount 80→192（不变），40→160（2026-11-12 重定标）', () => {
-  // 系数 4.0（2026-11-12，三群真实消息回放）：maxLimit=40 → chunk=160，
-  // 跨块频率减半，全价字节 −10~12%；maxLimit=80 时 min(192, 320) 仍为 192。
-  assert.equal(anchorChunkFor(40), 160);
+test('anchorChunkFor 默认值：allCount 80→192（不变），40→128（2026-11-12 重定标）', () => {
+  // 系数 3.2（2026-11-12 两轮定标）：4.0（chunk=160）实测 prompt 均值涨 3k tok
+  // 被用户否决，回落 3.2（chunk=128）：窗口 [40,167] 行，保留跨块重付 −6.3%。
+  assert.equal(anchorChunkFor(40), 128);
   assert.equal(anchorChunkFor(80), 192);
   assert.equal(anchorChunkFor(200), 192);   // 上限封顶
-  assert.equal(anchorChunkFor(8), 32);      // 小窗口按比例缩放
+  assert.equal(anchorChunkFor(8), 26);      // 小窗口按比例缩放
 });
 
 test('anchor 返回值非法时回落默认', () => {

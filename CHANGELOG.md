@@ -18,7 +18,7 @@
 
 ### 修复 · 缓存
 
-- **滑窗锚定随 allCount=40 重定标（chunk 96→160）**：`ANCHOR_CHUNK_RATIO` 2.4→4.0。allCount 从 80 降到 40 后旧系数只给出 chunk=96，跨块频率翻倍。用三个真实群当天全量消息回放（40 条窗口、8 条/轮触发节奏）重扫：chunk 64/96/128/160/192/256 的全价字节 = 113/100/94/90/87/84%（三群方向一致）。取 160：跨块全价 −10~12%，窗口上限 135→199 行；`allCount` 调回 80 时 `min(192, 320)` 仍为 192，行为不变。注意这是行为变更——模型在跨块后能看到更多历史（多出的部分按缓存价计费）。测试 `tests/prompt-injection.test.mjs` 锁默认值。
+- **滑窗锚定随 allCount=40 重定标（chunk 96→128）**：`ANCHOR_CHUNK_RATIO` 2.4→3.2（两轮定标）。allCount 从 80 降到 40 后旧系数只给出 chunk=96，跨块频率翻倍。第一轮用三个真实群当天全量消息回放（40 条窗口、8 条/轮触发节奏）扫 chunk 64~256：全价字节 113/100/94/90/87/84%（三群一致），先取 4.0（chunk=160）；但实测 prompt 均值 15.5k→18.5k（窗口均值 88→120 行），判定历史量超出预期，回落 3.2（chunk=128）：窗口 [40,167] 行、均值 ~16k tok，保留跨块重付 −6.3% 的收益。`allCount` 调回 80 时 `min(192, 256)` 仍为 192，行为不变。注意锚定机制下 40 条是**保底下限**而非硬上限（设计如此，见 prompt.js 窗口起点锚定注释）。测试 `tests/prompt-injection.test.mjs` 锁默认值。
 - **DeepSeek 缓存键实测 + full 档并档**（2026-11-12 下午，同前缀对照实验 7 探针）：DeepSeek 的缓存键 = 消息前缀 + **思考开关（是否带 `reasoning_effort`）**——light（effort:low）与 full（不发参数）各占一个命名空间，群聊 light 为主、full 零星，每个 full 轮都是冷启动（实测单次命中跌到 11%）。另两条关键结论：两命名空间**并存互不驱逐**（回切立即命中）；effort 取值不分键（medium/high 首调即命中 low 建的缓存）、temperature 有无不参与。修：`shapeThinkingApi` 对 deepseek 方言的 full 档显式发 `reasoning_effort:'high'`（方言表 medium 本就映射 high，≈ 默认强度），与 light 并档，翻转零缓存成本；用户显式选择/按次覆盖照旧优先。⚠️ 只动 deepseek 方言——openai-o/xai 默认 medium、sensenova 默认档偏高，显式发档会单方面改变平台默认强度，未实测不跟进。测试 `tests/thinking-route.test.mjs` 相应新增；全量 535/535。
 - **请求体字段顺序澄清**（同上实验副产物）：`temperature` 与思考参数本就序列化在 messages/tools **之后**（`llm.js` buildBaseBody + L1001 追加），字节前缀理论不成立——若按裸字节分键，11% 那条应命中 97%。服务端按逻辑前缀 + 思考开关分键，与字段位置无关。
 
