@@ -14,6 +14,10 @@
 - **思考档分流**：`orchestrator` 按消息轻重判档（off/light/full）写 `skillContext.thinkingRoute`，`plugins/thinking-adapters` 的 `shapeThinkingApi()` 翻译成各思考方言的 mode/effort。判定在 `src/thinking-route.js`（测试 `tests/thinking-route.test.mjs` 21 条）；灰度开关 `api.thinkingRoute=false`、`api.thinkingRouteAllowOff=false`。
 - **拍一拍并行回应**：`personas.js` 的 `baseStyleRules()`【拍一拍与撤回】段明示模型把 `send_poke` 与 `send_message` 在同一次回复里并行调用，戳+说合并为一轮。
 
+### 修复 · 外部反馈（0.4.9.2 专用模型路由）
+
+- **图片/视频专用模型只换名、不换端点**：反馈原文「设置了专用的视频模型和图片模型后，会话里读到图片或视频 gif，就会往主模型的 base url 发送配置模型的调用请求，导致会话失败报错」。根因：`specializedModelFor` 的结果以 `{ ...api, model: forced }` 应用 —— 专用模型配在别的服务商上时，请求拿着专用模型名发往主 baseUrl，404/400 整轮失败。新增 `resolveSpecializedRoute()`（`src/llm.js`，导出供测试）：按模型名查 providers 注册表归属，命中连 baseUrl / apiKey（dshProviderKeys → 提供商明文回落）/ 协议 / provider 一起切；主端点托管时只换名（不冲账号池挑好的 Key）；无归属保持旧行为。顺带给 `resolveProviderEndpoint` 加可选 cfg 参数（归属判定与端点解析必须用同一份数据）。测试 `tests/specialized-model-endpoint.test.mjs` 8 条。
+
 ### 修复 · 缓存
 
 - **思考档位注击穿前缀缓存（92%→13%）**：`thinking-note` 属 `VOLATILE_SECTION_IDS`，被 2026-10-12 方向B 前置进 userPrompt 稳定区第 3 段（【当前状态说明】，"78/78 字节相同"的观测早于分流上线）。分流上线后该段内容随档位变化（light 显示 on / full 显示 auto），每次翻转断点落在第 3 段，其后【记忆】【场景】【过去状态】全部重算。修法：`promptSections()` 改用空上下文调 `shapeThinkingApi`，段内容只描述静态配置；测试加防回归断言（light/full/off 三档内容全等、段存在性稳定）。教训：**userPrompt 稳定区里的段必须逐字节稳定**。
