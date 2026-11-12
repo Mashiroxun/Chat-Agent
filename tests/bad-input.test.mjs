@@ -94,11 +94,11 @@ test('like_user：没传 userId 时错误文案不能印出字面量 undefined',
 
 test('msg_reactions：users 里的 null / {} 不能变成 "" 或 "[object Object]"', async () => {
   const { ctx } = makeCtx({
-    reactions: [{ emoji_id: '462', count: 2, users: [null, {}, { user_id: 1781636009 }, 'oops'] }]
+    reactions: [{ emoji_id: '462', count: 2, users: [null, {}, { user_id: 10001 }, 'oops'] }]
   });
   const { isError, body } = await call(ctx, 'msg_reactions', { messageId: 123 });
   assert.equal(isError, false);
-  assert.deepEqual(body.reactions[0].users, ['1781636009']);
+  assert.deepEqual(body.reactions[0].users, ['10001']);
   assert.doesNotMatch(JSON.stringify(body), /\[object Object\]/);
 });
 

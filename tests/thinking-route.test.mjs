@@ -51,7 +51,7 @@ test('纯表情 / 空文本 → off', () => {
 test('极短附和 → off；带 @ 或问号就不是附和', () => {
   assert.equal(routeThinking({ triggerEntries: [entry('666')] }).tier, ROUTE_TIERS.OFF);
   assert.equal(routeThinking({ triggerEntries: [entry('妈的')] }).tier, ROUTE_TIERS.OFF);
-  assert.equal(routeThinking(at({ triggerEntries: [entry('@小鲸鱼[AI](QQ:1781636009) 嗯')] })).tier,
+  assert.equal(routeThinking(at({ triggerEntries: [entry('@小鲸鱼[AI](QQ:10001) 嗯')] })).tier,
     ROUTE_TIERS.LIGHT);
   assert.equal(routeThinking({ triggerEntries: [entry('在吗？')] }).tier, ROUTE_TIERS.LIGHT);
 });
@@ -63,11 +63,11 @@ test('纯图片不判 off：看图要先决定要不要调取图工具', () => {
 });
 
 test('常规 @ / 单图 / 引用 / 主动机会 / 私聊 → light', () => {
-  assert.equal(routeThinking(at({ triggerEntries: [entry('@小鲸鱼[AI](QQ:1781636009) 锐评梁文峰')] })).tier,
+  assert.equal(routeThinking(at({ triggerEntries: [entry('@小鲸鱼[AI](QQ:10001) 锐评梁文峰')] })).tier,
     ROUTE_TIERS.LIGHT);
   assert.equal(routeThinking({ proactive: true, triggerEntries: [] }).tier, ROUTE_TIERS.LIGHT);
   assert.equal(routeThinking({ kind: 'private', triggerEntries: [entry('嗯')] }).tier, ROUTE_TIERS.LIGHT);
-  const quoted = routeThinking({ triggerEntries: [entry('[引用 小鲸鱼[AI](QQ:1781636009)：那你娶他吧]@小鲸鱼[AI](QQ:1781636009) 那你该叫我妈了')] });
+  const quoted = routeThinking({ triggerEntries: [entry('[引用 小鲸鱼[AI](QQ:10001)：那你娶他吧]@小鲸鱼[AI](QQ:10001) 那你该叫我妈了')] });
   assert.equal(quoted.tier, ROUTE_TIERS.LIGHT);
 });
 
@@ -86,14 +86,14 @@ test('复杂信号 → full（保持原行为，不冒降质风险）', () => {
 
 test('引用块里嵌套的 [AI] 不会让被引正文泄漏进实质文本', () => {
   const r = routeThinking({
-    triggerEntries: [entry('[引用 小鲸鱼[AI](QQ:1781636009)：那你娶他吧]@小鲸鱼[AI](QQ:1781636009) 嗯')]
+    triggerEntries: [entry('[引用 小鲸鱼[AI](QQ:10001)：那你娶他吧]@小鲸鱼[AI](QQ:10001) 嗯')]
   });
   assert.ok(!r.signals.plain.includes('那你娶他吧'));
   assert.equal(r.signals.plain.length <= DEFAULT_THRESHOLDS.shortChatter, true);
   // 但带 @ 仍不该判 off（明确召唤）
   assert.equal(routeThinking({
     atMe: true,
-    triggerEntries: [entry('[引用 小鲸鱼[AI](QQ:1781636009)：那你娶他吧]@小鲸鱼[AI](QQ:1781636009) 嗯')]
+    triggerEntries: [entry('[引用 小鲸鱼[AI](QQ:10001)：那你娶他吧]@小鲸鱼[AI](QQ:10001) 嗯')]
   }).tier, ROUTE_TIERS.LIGHT);
 });
 

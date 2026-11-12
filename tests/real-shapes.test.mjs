@@ -47,7 +47,7 @@ const REAL_SYS_MSGS = [{
   group_id: 2153083512,
   group_name: '示例群',
   request_id: 1793264934684295,
-  requester_uin: 1781636009,
+  requester_uin: 10001,
   requester_nick: '小鲸鱼',
   invitor_uin: 3100919560,
   invitor_nick: '二鸟清风',
@@ -64,12 +64,12 @@ const REAL_REACTIONS = [{
   emoji_type: 1,
   count: 2,
   last_reaction_time: 1794382903,
-  users: [{ user_id: 1781636009 }, { user_id: 2366267553 }]
+  users: [{ user_id: 10001 }, { user_id: 10002 }]
 }];
 
 // get_group_honor_info → Object（不是 { data }），字段全在顶层
 const REAL_HONOR = {
-  group_id: 707911218,
+  group_id: 987654321,
   current_talkative: null,
   talkative_list: [],
   performer_list: [],
@@ -145,7 +145,7 @@ test('真实系统消息形状：字段原样保留，count 是总数', async ()
   assert.equal(isError, false);
   assert.equal(body.count, 1);
   assert.equal(body.items[0].requester_nick, '小鲸鱼');
-  assert.equal(body.items[0].requester_uin, 1781636009);
+  assert.equal(body.items[0].requester_uin, 10001);
   assert.equal(body.items[0].checked, true);
 });
 
@@ -158,7 +158,7 @@ test('真实表情回应形状：users 里的 user_id 要解析成 QQ 号', asyn
   assert.equal(body.count, 1);
   assert.equal(body.reactions[0].emojiId, '462');
   assert.equal(body.reactions[0].count, 2);
-  assert.deepEqual(body.reactions[0].users, ['1781636009', '2366267553']);
+  assert.deepEqual(body.reactions[0].users, ['10001', '10002']);
 });
 
 // ── 荣誉 / 打卡 ───────────────────────────────────────────────────
