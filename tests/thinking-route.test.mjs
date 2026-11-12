@@ -156,6 +156,26 @@ test('shapeThinkingApi：DeepSeek 有强度档 → light 发 low，不再退化�
   assert.equal(req.params.reasoning_effort, 'low');
 });
 
+test('shapeThinkingApi：DeepSeek full → 显式 effort:high，与 light 共享缓存命名空间', () => {
+  // 2026-11-12 实测：DeepSeek 缓存键含思考开关（是否带 reasoning_effort），
+  // full 不发参数 = 与 light 分属两个命名空间，翻转即冷启动（实测命中跌到 11%）。
+  // full 显式发 effort:'high'（方言表 medium 本就映射 high，≈ 默认强度）后并档。
+  const shaped = adapters.shapeThinkingApi(apiOf(DS), { thinkingRoute: { tier: 'full', routed: true } });
+  assert.equal(shaped.thinkingMode, 'on');
+  assert.equal(shaped.thinkingEffort, 'high');
+  const req = adapters.resolveThinkingRequest(shaped, shaped.thinkingMode);
+  assert.equal(req.params.reasoning_effort, 'high');
+  assert.equal(req.omitTemperature, true);        // 思考模式与 temperature 互斥
+  // 用户显式选择 / 按次覆盖时，full 不插手
+  const explicit = { ...apiOf(DS), thinkingMode: 'off' };
+  assert.deepEqual(
+    adapters.shapeThinkingApi(explicit, { thinkingRoute: { tier: 'full', routed: true } }), explicit);
+  // 其余 effort 方言不跟进（openai-o/xai 默认 medium、sensenova 默认偏高，未实测）
+  const snFull = adapters.shapeThinkingApi(apiOf(SN), { thinkingRoute: { tier: 'full', routed: true } });
+  assert.equal(snFull.thinkingMode, 'auto');
+  assert.equal(snFull.thinkingEffort, '');
+});
+
 test('deepseek 方言：官方只认 low/high/max，medium→high、minimal→low', () => {
   const B = adapters.internals.buildThinkingParams;
   assert.deepEqual(B({ mode: 'on', dialect: 'deepseek', effort: 'low' }).params, { reasoning_effort: 'low' });

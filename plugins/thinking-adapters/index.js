@@ -64,7 +64,23 @@ export function shapeThinkingApi(api = {}, context = {}) {
   const userMode = String(api?.thinkingMode ?? '').trim().toLowerCase();
   const userExplicit = VALID_MODES.has(userMode) && userMode !== 'auto';
   if (perCall || userExplicit) return base;
-  if (route.tier === 'full') return base;
+  if (route.tier === 'full') {
+    // 2026-11-12 实测（api.deepseek.com / deepseek-flash，同前缀对照 7 探针）：
+    // DeepSeek 的缓存键 = 消息前缀 + **思考开关（是否带 reasoning_effort）**——
+    // light 发 effort:low、full 不发参数，就是两个缓存命名空间；群聊里 light 占
+    // 绝大多数，每个 full 轮都是该命名空间的冷启动（实测单次命中跌到 11%）。
+    // 另两条实测结论：两种命名空间**并存互不驱逐**（回切立即命中）；effort 取值
+    // （low/medium/high）不分键。所以 full 档显式发 effort:'high'——方言表里
+    // medium 本就映射到 high，'high' 即本插件词表的最高常规档，≈ 平台默认强度
+    // ——即可与 light 共享同一命名空间，档位翻转零缓存成本。
+    // ⚠️ 只对 deepseek 生效：openai-o/xai 默认 medium、sensenova 默认档偏高，
+    //    给它们显式发档会单方面改变平台默认思考强度，未实测不冒这个险。
+    const det = detectDialect({ baseUrl: api?.baseUrl || '', model: api?.model || '' });
+    if (det.dialect === 'deepseek' && det.supports.includes('effort')) {
+      return { ...base, thinkingMode: 'on', thinkingEffort: 'high' };
+    }
+    return base;
+  }
 
   const det = detectDialect({ baseUrl: api?.baseUrl || '', model: api?.model || '' });
   const supports = new Set(det.supports || []);

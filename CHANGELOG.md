@@ -16,6 +16,11 @@
 - **思考档分流**：`orchestrator` 按消息轻重判档（off/light/full）写 `skillContext.thinkingRoute`，`plugins/thinking-adapters` 的 `shapeThinkingApi()` 翻译成各思考方言的 mode/effort。判定在 `src/thinking-route.js`（测试 `tests/thinking-route.test.mjs` 21 条）；灰度开关 `api.thinkingRoute=false`、`api.thinkingRouteAllowOff=false`。
 - **拍一拍并行回应**：`personas.js` 的 `baseStyleRules()`【拍一拍与撤回】段明示模型把 `send_poke` 与 `send_message` 在同一次回复里并行调用，戳+说合并为一轮。
 
+### 修复 · 缓存
+
+- **DeepSeek 缓存键实测 + full 档并档**（2026-11-12 下午，同前缀对照实验 7 探针）：DeepSeek 的缓存键 = 消息前缀 + **思考开关（是否带 `reasoning_effort`）**——light（effort:low）与 full（不发参数）各占一个命名空间，群聊 light 为主、full 零星，每个 full 轮都是冷启动（实测单次命中跌到 11%）。另两条关键结论：两命名空间**并存互不驱逐**（回切立即命中）；effort 取值不分键（medium/high 首调即命中 low 建的缓存）、temperature 有无不参与。修：`shapeThinkingApi` 对 deepseek 方言的 full 档显式发 `reasoning_effort:'high'`（方言表 medium 本就映射 high，≈ 默认强度），与 light 并档，翻转零缓存成本；用户显式选择/按次覆盖照旧优先。⚠️ 只动 deepseek 方言——openai-o/xai 默认 medium、sensenova 默认档偏高，显式发档会单方面改变平台默认强度，未实测不跟进。测试 `tests/thinking-route.test.mjs` 相应新增；全量 535/535。
+- **请求体字段顺序澄清**（同上实验副产物）：`temperature` 与思考参数本就序列化在 messages/tools **之后**（`llm.js` buildBaseBody + L1001 追加），字节前缀理论不成立——若按裸字节分键，11% 那条应命中 97%。服务端按逻辑前缀 + 思考开关分键，与字段位置无关。
+
 ### 修复 · 外部反馈（0.4.9.2 专用模型路由）
 
 - **模型配置弹窗切换服务商后 API Key 三连串台**：反馈「切换模型后 apiKey 似乎不会跟着立即切换，不关窗口点显示会显示之前模型的 apiKey；不点显示时连通性测试还能连上，一旦点了显示再测试就连不通，返回 key 不对」。三处叠加：① 「显示」读 Key 用弹窗打开时的快照 `c.api?.provider`，不跟随弹窗内选中的新提供商；② 显示出的旧 Key 明文灌进 `#mc-apikey.value`，连通性测试把它当用户输入显式提交（拿旧 Key 打新服务商）；③ 直接保存则把旧 Key 经 providers/set-key 写进新提供商（配置污染）。修：pid 实时跟随 `#mc-picked`；显示成功后明文记入 `dataset.revealedValue`，测试/保存遇到相等值一律视为未修改；切换模型目录时清空 Key 输入框与标记。前端改动，刷新即生效。
