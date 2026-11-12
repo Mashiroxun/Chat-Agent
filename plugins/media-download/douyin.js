@@ -43,6 +43,7 @@
 // 安全：公共库供管理员放入 data/plugins/ 的可信插件调用，与内置工具同信任级。
 import fs from 'node:fs';
 import path from 'node:path';
+import { withinWindow } from '../../src/elapsed.js';
 import { safeFetch, safeFetchBinary } from '../../src/safe-fetch.js';
 import { safeFetchToFile } from './media-common.js';
 import { resolveParam, sleep, safeName, cleanupDir, createFailureNotifier, flattenMessageToText } from './media-common.js';
@@ -142,7 +143,7 @@ async function getTtwid(cookieOverride) {
     const m = userCookie.match(/(?:^|;\s*)ttwid=([^;]+)/);
     return (m ? m[1] : userCookie).trim();
   }
-  if (ttwidMemory && Date.now() - ttwidMemory.at < TTWID_TTL_MS) return ttwidMemory.value;
+  if (ttwidMemory && withinWindow(ttwidMemory.at, TTWID_TTL_MS)) return ttwidMemory.value;
 
   const cached = readCookieCache();
   if (cached && Date.now() - (Number(cached.at) || 0) < TTWID_TTL_MS) {

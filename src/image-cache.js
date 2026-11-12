@@ -12,6 +12,7 @@
 // 免得拿过期 url 反复打 CDN）。
 import fs from 'node:fs';
 import path from 'node:path';
+import { withinWindow } from './elapsed.js';
 import { DATA_DIR, getConfig } from './config.js';
 import { logger } from './logger.js';
 import { validateImageUrl, safeFetchBinary } from './safe-fetch.js';
@@ -116,7 +117,7 @@ function pump() {
 
 function prune() {
   const now = Date.now();
-  if (now - lastPrune < PRUNE_INTERVAL_MS) return;
+  if (withinWindow(lastPrune, PRUNE_INTERVAL_MS, now)) return;
   lastPrune = now;
   const idx = loadIndex();
   let removed = 0;

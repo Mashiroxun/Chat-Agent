@@ -17,6 +17,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { withinWindow } from '../../src/elapsed.js';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -52,7 +53,7 @@ export async function findFfmpeg() {
   // 成功结果长期缓存；失败（没找到）60 秒后允许重探——
   // 否则"首次探测时没装、后来装好了"就永远不可用，只能重启
   if (ffmpegChecked && ffmpegCache) return ffmpegCache;
-  if (ffmpegChecked && Date.now() - ffmpegCheckedAt < FFMPEG_RETRY_MS) return ffmpegCache;
+  if (ffmpegChecked && withinWindow(ffmpegCheckedAt, FFMPEG_RETRY_MS)) return ffmpegCache;
   ffmpegChecked = true;
   ffmpegCheckedAt = Date.now();
   ffmpegCache = null;

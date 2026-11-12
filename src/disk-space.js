@@ -15,6 +15,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { withinWindow } from './elapsed.js';
 import { DATA_DIR } from './config.js';
 
 const CACHE_MS = 60 * 1000;
@@ -26,7 +27,7 @@ let cache = { at: 0, free: null };
 /** 数据目录所在卷的剩余字节；取不到返回 null（老 Node 无 statfsSync / 路径不存在）。 */
 export function dataDirFreeBytes() {
   const now = Date.now();
-  if (cache.free !== null && now - cache.at < CACHE_MS) return cache.free;
+  if (cache.free !== null && withinWindow(cache.at, CACHE_MS, now)) return cache.free;
   let free = null;
   try {
     // DATA_DIR 可能还没建（首次启动）：退到它的父目录，卷是同一个

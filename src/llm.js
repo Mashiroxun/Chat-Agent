@@ -113,7 +113,48 @@ function watchToolset(tls) {
 //
 // 为什么不做成"每轮都打全量指纹"：那会让日志涨几十倍，而诊断只需要
 // 「哪一段变了」这一个信息。稳态时本函数一次 WARN 都不打，完全静默。
-const segWatch = { prev: null, tag: '' };
+//
+// ⚠️ 2026-11-12 改为**按群分桶**：原来 prev 是全局单槽，跨群切换时拿上一个群
+//    的 body 当基线，报「6/10 段变化、断点推到最前」的假告警 —— 两个群的段
+//    本来就不同（首段=角色卡、记忆、场景、过去状态全都群内私有）。改后对比
+//    只在**同群**的相邻调用之间进行，跨群切换不再触发 seg-fp / body-lcp。
+const BUCKET_MAX = 12;
+
+function makeBucketStore() {
+  return { map: new Map() };
+}
+
+function bucketGet(store, key) {
+  const v = store.map.get(key);
+  if (v !== undefined) {
+    // 重新插入 = touch 到最新（Map 迭代按插入序，FIFO 淘汰最旧的）
+    store.map.delete(key);
+  }
+  // ⚠️ 必须归一成 null：调用方用 `prev === null` 判首基线（沿用旧单槽口径），
+  //    若返回 undefined 会穿透该判断，首次比较拿 undefined 去算 LCP ——
+  //    TypeError 被外层 try/catch 吞掉，表现为「每个桶的第一轮日志静默丢失」。
+  //    实测：2026-11-12 12:02 重启后 body-lcp 零基线，即此因。
+  return v ?? null;
+}
+
+function bucketSet(store, key, val) {
+  if (store.map.has(key)) store.map.delete(key);
+  store.map.set(key, val);
+  while (store.map.size > BUCKET_MAX) {
+    store.map.delete(store.map.keys().next().value);
+  }
+}
+
+/** 从 user 文本的【场景】段提取会话桶标识（群名 / 私聊 / unknown）。 */
+function chatBucketOf(text) {
+  const t = String(text || '');
+  const m = t.match(/【场景】当前在群聊「([^」]{1,80})」/);
+  if (m) return `群「${m[1]}」`;
+  if (t.includes('【场景】当前在私聊')) return '私聊';
+  return '(unknown)';
+}
+
+const segWatch = makeBucketStore();
 
 /** 取消息的纯文本（content 可能是 string，也可能是多模态 parts 数组）。 */
 function msgText(c) {
@@ -152,14 +193,15 @@ function watchUserSegments(msgs, tag) {
     // 判据：user 消息短到装不下完整提示词（真实段序至少 6 段、近万字符）。
     if (segs.length < 3 || total < 2000) return;
 
-    const prev = segWatch.prev;
+    const bucket = chatBucketOf(text);
+    const prev = bucketGet(segWatch, bucket);
     // parts 一起留着：算"段内真正变了多少字节"要用原文（只看长度不够）。
-    segWatch.prev = { segs, total, parts };
+    bucketSet(segWatch, bucket, { segs, total, parts });
     if (!prev) {
       // 首轮只记基线：打印每段体积，装机后第一次就能看清提示词结构。
       logger.info(
         'seg-fp',
-        `基线：user ${total} 字符 / ${segs.length} 段 → ` +
+        `基线（${bucket}）：user ${total} 字符 / ${segs.length} 段 → ` +
         segs.map((s) => `${s.head}:${s.len}B`).join(' ')
       );
       return;
@@ -216,7 +258,7 @@ function watchUserSegments(msgs, tag) {
       // 旧实现按 /2.5 折算，等于把 400 tok 的未命中报成 160 —— 修完虚高后又变成低估。
       logger.warn(
         'seg-fp',
-        `⚠️ ${changed.length}/${segs.length} 段内容变化：${changed.join(' | ')}\n` +
+        `⚠️（${bucket}）${changed.length}/${segs.length} 段内容变化：${changed.join(' | ')}\n` +
         `  ⇒ 断点在【${segs[fromIdx].head}】段内第 ${inSeg} 字（段长 ${segs[fromIdx].len}，前一稳定段为【${anchor}】），` +
         `其后 ${segs.length - fromIdx} 段需重算（${tailBytes}B ≈${Math.round(tailBytes)}tok）` +
         (fromIdx === 0 ? '\n  ⚠️ 断点已推到最前 —— 检查是否有段被搬进稳定区却仍在变化。' : '')
@@ -240,7 +282,7 @@ function watchUserSegments(msgs, tag) {
 //
 // 这里直接对**整个 body** 求与上一轮的字节 LCP，把差额一次性定位：
 // LCP 落在 body 的哪个偏移、那里前后是什么。不猜。
-const bodyLcp = { prev: null };
+const bodyLcp = makeBucketStore();
 
 /**
  * 描述 body 里某个字符偏移所处的位置（粗粒度，够定位用）。
@@ -277,10 +319,24 @@ function watchBodyLcp(body, tag) {
   try {
     if (!String(tag || '').startsWith('real')) return;
     const s = JSON.stringify(body);
-    const prev = bodyLcp.prev;
-    bodyLcp.prev = s;
+    // 桶标识：从**任意** user 消息的【场景】段提取（与 seg-fp 同口径）。
+    // ⚠️ 不能只看最后一条 —— 带图请求的最后一条 user 可能是纯媒体部件
+    //    （没有场景文本），会掉进 (unknown) 桶与其它无标识请求互比（实测
+    //    958KB 的多图请求就这样丢了群名）。倒序扫，取最近一个能识别的。
+    let bucket = '(unknown)';
+    if (Array.isArray(body?.messages)) {
+      for (let i = body.messages.length - 1; i >= 0 && bucket === '(unknown)'; i--) {
+        const m = body.messages[i];
+        if (m && m.role === 'user') {
+          const t = msgText(m.content);
+          if (t) bucket = chatBucketOf(t);
+        }
+      }
+    }
+    const prev = bucketGet(bodyLcp, bucket);
+    bucketSet(bodyLcp, bucket, s);
     if (prev === null) {
-      logger.info('body-lcp', `基线：body ${s.length} 字符`);
+      logger.info('body-lcp', `基线（${bucket}）：body ${s.length} 字符`);
       return;
     }
     if (s === prev) return;
@@ -306,7 +362,7 @@ function watchBodyLcp(body, tag) {
       .replace(/[A-Za-z0-9+/]{16,}={0,2}/g, (m) => `<base64:${m.length}B>`);
     logger.info(
       'body-lcp',
-      `body ${prev.length}→${s.length} 字符  LCP=${lo} (${(lo / s.length * 100).toFixed(1)}%)  ` +
+      `（${bucket}）body ${prev.length}→${s.length} 字符  LCP=${lo} (${(lo / s.length * 100).toFixed(1)}%)  ` +
       `断点后全价=${tail}B ≈${Math.round(tail)}tok  位置=${hint}  附近="${around}"`
     );
   } catch { /* 永不抛错 */ }

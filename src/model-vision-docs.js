@@ -116,6 +116,12 @@ export const PROVIDER_DOCS = {
 
 // ── 模型级结论（官方能力，OpenAI 兼容 image_url 输入） ────────────────────
 export const MODEL_DOCS = {
+  // SenseNova（商汤日日新）—— 2026-11-11 补，别再被一句 400 误导成纯文本模型
+  'sensenova-6.8-flash-lite': {
+    verdict: 'vision',
+    note: '官方定义为原生多模态智能体模型；/v1/chat/completions 接受 OpenAI 兼容 image_url（base64 / 公网 URL）。2026-11-11 用真实配置实测：合法 PNG(base64) 返回 HTTP 200，tool 消息里带图也 200；video_url / input_audio 部件不接受（回 inference request is invalid / invalid content）。来源：sensenova.cn/models、platform.sensenova.cn/docs、OpenSenseNova/SenseNova6.8 API_CN.md + 本机实测'
+  },
+
   // DeepSeek
   'deepseek-chat': {
     verdict: 'vision',

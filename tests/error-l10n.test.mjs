@@ -93,3 +93,36 @@ test('extractServerMessage 能从各家形状里抠出 message', () => {
   assert.equal(extractServerMessage('<html><body>502 Bad Gateway</body></html>'), '502 Bad Gateway');
   assert.equal(extractServerMessage('not json at all'), 'not json at all');
 });
+
+// ── 2026-11-11：纯文本模型收到带图请求 ───────────────────────────────
+// 真机日志 20 次 [real:...] 400，原有规则一条都不命中 → 用户只看到英文 JSON。
+test('模型只支持文本输入：给出可操作的中文解释', () => {
+  const h = explain(400, {
+    error: {
+      message: 'model only supports text input; image, video and audio is not supported',
+      type: 'invalid_request_error', code: '3'
+    }
+  });
+  assert.ok(h, '必须命中，不能退回英文原文');
+  assert.equal(h.title, '带图请求被服务商拒了');
+  assert.match(h.what, /图片|视频/);
+  // 2026-11-11 更正：主模型其实是原生多模态，不能再劝用户「换个能看图的模型」
+  // 或断言「当前模型只接受文字」，那会把人引到完全错误的排查方向。
+  assert.match(h.what, /不一定说明模型不能看图/);
+  assert.doesNotMatch(h.fix, /把主模型换成多模态模型/);
+  assert.match(h.fix, /视频输入/);
+  assert.equal(h.target, 'settings-api');
+});
+
+test('④b 不抢占内容审核 / 上下文超长 / 参数错误 / 限流', () => {
+  const cases = [
+    [400, 'safety check failed', '被内容审核拦下了'],
+    [400, 'context length exceeded', '上下文太长了'],
+    [400, "Unsupported parameter: 'temperature'", '模型不认这个参数'],
+    [429, 'rate limit exceeded', '请求太频繁了'],
+  ];
+  for (const [status, message, title] of cases) {
+    const h = explain(status, { error: { message } });
+    assert.equal(h?.title, title, `被 ④b 抢走：${message}`);
+  }
+});

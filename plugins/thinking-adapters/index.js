@@ -26,6 +26,70 @@ export function setup(api) {
 /** 合法的思考模式取值。写错了以前会**静默不生效**，很难排查。 */
 const VALID_MODES = new Set(['off', 'auto', 'on']);
 
+/** orchestrator 传来的本轮思考意图档（src/thinking-route.js）。 */
+const ROUTE_TIERS = new Set(['off', 'light', 'full']);
+// 档位标签仅用于旧版「本轮档位」提示（2026-11-12 已移除——它随档位变化会击穿
+// userPrompt 稳定区前缀缓存，详见 promptSections 内注释）。保留导出供自检页/调试用。
+export const ROUTE_LABELS = { off: '不思考', light: '轻思考', full: '按默认' };
+
+/** 「按次覆盖」只在显式 off/on 时算数；auto 是主设置的默认占位，不算覆盖。 */
+function explicitOverride(context) {
+  const raw = String(context?.thinkingMode ?? '').trim().toLowerCase();
+  return VALID_MODES.has(raw) && raw !== 'auto' ? raw : undefined;
+}
+
+/**
+ * 把本轮「任务多重」的意图翻译成当前模型/网关方言能表达的 mode + effort。
+ *
+ * 为什么这层要放在插件里、而不是 orchestrator 直接写 thinkingMode：
+ *   · 同一个 light 档，商汤是 reasoning_effort:low、DeepSeek/GLM 只能用
+ *     thinking:{type:'disabled'}（它们没有强度字段）、generic 干脆一个字都不能发；
+ *   · 让编排器去认方言会重复 dialects.js 的规则表，换模型/换网关又要改两处。
+ *   编排器只说"这轮活儿轻"，参数由本插件（方言的所有者）决定。
+ *
+ * 三条安全边界：
+ *   ① 用户主设置显式选了 off/on、或调用方已有按次覆盖（回复裁判的 off），一律不路由；
+ *   ② full = 完全不干预，与原 auto 行为逐字节一致（复杂任务不冒降质风险）；
+ *   ③ 方言不支持对应能力时宁可退回原行为，也绝不给不支持 on 的网关强行开思考。
+ *
+ * 返回的是**新的 api 对象**，不改原对象；resolveThinkingRequest 从 api 里读
+ * thinkingEffort/budget，所以改写 api 就能同时覆盖 mode 和 effort，无需改它的签名。
+ */
+export function shapeThinkingApi(api = {}, context = {}) {
+  const base = { ...api };
+  const route = context?.thinkingRoute;
+  if (!route || route.routed === false || !ROUTE_TIERS.has(route.tier)) return base;
+
+  const perCall = explicitOverride(context);
+  const userMode = String(api?.thinkingMode ?? '').trim().toLowerCase();
+  const userExplicit = VALID_MODES.has(userMode) && userMode !== 'auto';
+  if (perCall || userExplicit) return base;
+  if (route.tier === 'full') return base;
+
+  const det = detectDialect({ baseUrl: api?.baseUrl || '', model: api?.model || '' });
+  const supports = new Set(det.supports || []);
+
+  if (route.tier === 'off') {
+    if (supports.has('off')) return { ...base, thinkingMode: 'off', thinkingEffort: '' };
+    // 该模型**不支持关闭思考**（GLM-5.3+、Kimi K3、qwen4）：退化为最低强度档。
+    // 比"什么都不发、走平台默认的 max"省得多，也不会因为发 disabled 被 400。
+    if (supports.has('effort')) return { ...base, thinkingMode: 'on', thinkingEffort: 'low' };
+    return base;   // generic / local-openai：保持不发参数
+  }
+
+  // light：能降档就降档；不能降档但能明确关闭，就关闭（比平台默认的高思考省）；
+  // 两者都不支持就一点不动 —— 尤其不能对只支持 on 的方言发 mode:on 把思考打开。
+  // ⚠️ 只看 effort，不要求同时有 on：Kimi K3 这类「始终思考、只能调强度」的模型
+  //    supports 只有 ['effort']，若要求 on 会让它的 light 档静默变成不发参数。
+  if (supports.has('effort')) {
+    return { ...base, thinkingMode: 'on', thinkingEffort: 'low' };
+  }
+  if (supports.has('off')) {
+    return { ...base, thinkingMode: 'off', thinkingEffort: '' };
+  }
+  return base;
+}
+
 /**
  * 把 messages 里的私有 `_reasoning` 按方言落到协议字段（历史思考内容回传）。
  *
@@ -116,7 +180,15 @@ export const providers = {
     // 开着思考只会多烧一轮 reasoning token 还更慢。
     // 这是"按次覆盖"，不改用户配置，下一次正常对话仍然按配置走。
     // api.thinkingMode（设置页-模型 API「思考强度」）同样按次传入，优先于插件自身设置。
-    const req = resolveThinkingRequest(api, context?.thinkingMode ?? api?.thinkingMode);
+    //
+    // 2026-11-12 分流：主对话的 skillContext.thinkingRoute 是「本轮任务多重」的意图，
+    // 由 shapeThinkingApi 按方言翻译成 mode/effort。⚠️ 不能写成原来的
+    // `context?.thinkingMode ?? api?.thinkingMode` —— 编排器传下来的 thinkingMode
+    // 恒为 'auto'（主设置默认值），`??` 不会回落，会把翻译结果整个压掉、分流静默失效。
+    // 所以只有**显式 off/on** 才算按次覆盖，auto 让位给分流。
+    const shaped = shapeThinkingApi(api, context);
+    const override = explicitOverride(context);
+    const req = resolveThinkingRequest(shaped, override ?? shaped.thinkingMode);
     // 历史思考内容回传：与本次是否发送 thinking 参数无关 ——
     // mode=auto 且模型默认思考时，上游照样会要求回传（这正是本次 400 的现场）。
     const withHistory = applyHistoryReasoning(body, req.dialect);
@@ -190,13 +262,27 @@ export function promptSections(context = {}) {
   // context 由 orchestrator 的 skillContext 提供（model / baseUrl /
   // thinkingMode / thinkingEffort / thinkingBudget，口径与 llm.js 的
   // effectiveApi() 一致）；context 缺失时各项回落插件自身配置。
-  const req = resolveThinkingRequest({
+  //
+  // ⚠️⚠️ 显示口径必须是**静态配置**，绝不能吃 thinkingRoute / 按次覆盖
+  // （2026-11-12 回归修，推翻上面 2026-10-16 的旧结论）：
+  //   本段虽属 VOLATILE_SECTION_IDS（不进系统提示），但 buildUserPrompt 把易变块
+  //   **前置**在 userPrompt 稳定区第 3 段（【当前状态说明】，2026-10-12 方向B，
+  //   依据"78/78 字节相同"——那是分流上线前的观测）。分流上线后 promptSections
+  //   也吃了 route → light 档 mode 显示 on、full 档显示 auto → 每次 light↔full
+  //   翻转这段都变几个字 → 缓存断点落在第 3 段 → 其后【记忆】【场景】【过去状态】
+  //   全部重算。实测：某轮 light→full，命中率 92%→13%（cached 2048/15927）。
+  //   所以这里只描述用户配置的静态模式；每轮真实的思考参数由 llm.request-params
+  //   里的 shapeThinkingApi（带 route）控制——那才是行为层，提示词无需逐轮复述。
+  //   代价：light 轮里这段说的「auto」与实际发的 effort:low 不完全一致，可接受
+  //   （模型不基于这句话做任何决策，它只是背景说明）。
+  const shaped = shapeThinkingApi({
     baseUrl: context.baseUrl || '',
     model: context.model || '',
     thinkingMode: context.thinkingMode,
     thinkingEffort: context.thinkingEffort,
     thinkingBudget: context.thinkingBudget
-  });
+  }, {});   // ← 空上下文：不吃路由、不吃按次覆盖，保证段内容逐字节稳定
+  const req = resolveThinkingRequest(shaped, shaped.thinkingMode);
   if (req.mode === 'off') return [];
   return [{
     // ⚠️ id 必须与 plugin.json 里那条**完全相同**（2026-09-20 修）。

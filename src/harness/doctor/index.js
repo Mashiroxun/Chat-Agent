@@ -593,6 +593,32 @@ function driftLines(snap) {
   });
 }
 
+// ── 缓存日指标判定（2026-11-12 抽出，便于单测）──────────────────────────
+// 重启当天的前十几轮必然未命中（新前缀要现写），样本越小越容易被它带偏。
+// 实测 2026-11-12 07:46 重启后只有 12 轮，就报了"缓存未命中率偏高：26.4%"；
+// 当天累计到 48 次调用后回落到 16%。这种误报会让用户对整张体检表失去信任。
+//
+// 门槛用 prompt token 而不是只数调用次数：一次 15k 的调用比十次 1k 的更能说明问题。
+export const CACHE_ALERT_MISS = 0.15;
+export const CACHE_ALERT_MIN_PROMPT = 120000;
+export const CACHE_ALERT_MIN_CALLS = 8;
+
+/**
+ * 判定某一天的缓存指标该报什么级别。
+ * @returns {{level:'ok'|'low-sample'|'high', miss:number, enoughSample:boolean}}
+ *   low-sample：未命中确实超标，但样本太少，降级为提示而不是告警。
+ */
+export function assessCacheDay(day = {}) {
+  const prompt = Number(day.prompt) || 0;
+  const cached = Number(day.cached) || 0;
+  const calls = Number(day.calls) || 0;
+  if (!prompt) return { level: 'ok', miss: 0, enoughSample: false };
+  const miss = 1 - cached / prompt;
+  const enoughSample = prompt >= CACHE_ALERT_MIN_PROMPT && calls >= CACHE_ALERT_MIN_CALLS;
+  if (miss <= CACHE_ALERT_MISS) return { level: 'ok', miss, enoughSample };
+  return { level: enoughSample ? 'high' : 'low-sample', miss, enoughSample };
+}
+
 function checkCachePlane() {
   const issues = [];
   let snap = null;
@@ -612,16 +638,23 @@ function checkCachePlane() {
   for (const day of days) {
     const s = snap.days[day];
     if (!s?.prompt) continue;
-    const miss = 1 - s.cached / s.prompt;
-    if (miss > 0.15) {
+    const v = assessCacheDay(s);
+    if (v.level === 'high') {
       const lines = dLines.slice();
       if (dOverflow > 0) lines.push(`…另有 ${dOverflow} 条更早的漂移记录未列出`);
       const it = issue('warning', 'cache', 'cache-miss-high',
-        `缓存未命中率偏高：${(miss * 100).toFixed(1)}%`,
-        `${day}：prompt ${s.prompt.toLocaleString()} tok，命中 ${(s.cached / s.prompt * 100).toFixed(1)}%。`,
+        `缓存未命中率偏高：${(v.miss * 100).toFixed(1)}%`,
+        `${day}：prompt ${Number(s.prompt).toLocaleString()} tok，命中 ${((1 - v.miss) * 100).toFixed(1)}%。`,
         '系统提示里的易变内容每漂移一次，就从变更点起击穿整段前缀 —— 下面就是最近的漂移记录。');
       it.lines = lines;
       issues.push(it);
+    } else if (v.level === 'low-sample') {
+      // 降级为 info：确实超标，但还没到能下结论的样本量。不展示漂移明细
+      // （那会让人以为已经定位到原因），只说明为什么先不报。
+      issues.push(issue('info', 'cache', 'cache-miss-low-sample',
+        `缓存样本不足（未命中 ${(v.miss * 100).toFixed(1)}%）`,
+        `${day}：仅 ${Number(s.calls) || 0} 次调用、prompt ${Number(s.prompt).toLocaleString()} tok —— 冷启动的前几轮必然未命中，暂不判为异常。`,
+        `累计到 ${CACHE_ALERT_MIN_CALLS} 次调用且 prompt 超过 ${Math.round(CACHE_ALERT_MIN_PROMPT / 1000)}k tok 后再看这项指标。`));
     }
   }
   const drift = (snap.drift || []).length;

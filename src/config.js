@@ -100,6 +100,17 @@ export const DEFAULT_CONFIG = {
     thinkingMode: 'auto',
     thinkingEffort: '',
     thinkingBudget: 0,
+    // 按触发类型分流思考档（2026-11-12）：拍一拍/纯表情/极短附和 → 不思考，
+    // 常规 @ / 引用 / 图片 / 闲聊 → 轻思考，长文本与明确任务意图 → 保持默认。
+    // 见 src/thinking-route.js（判定）与 plugins/thinking-adapters（方言翻译）。
+    // ⚠️ 仅当 thinkingMode === 'auto' 时生效：主设置里显式选了 off/on 就是用户
+    //    的全局意图，分流不覆盖。false = 完全退回改前的单一档行为（一键回滚）。
+    thinkingRoute: true,
+    // 「不思考」档默认关闭（2026-11-12 调整默认值）：
+    // 实测 off 档下 reasoning 直接归零、completion 掉到 37~107 tok，回复明显变短变干；
+    // 而它省的是思考 token，不是可见输出。默认只降档（light），不彻底关思考 ——
+    // 想要最省再在「发送与限速」里把「允许不思考档」打开。
+    thinkingRouteAllowOff: false,
     // 成本核算（仅本地估算展示，不参与任何请求）
     priceInputPerM: 0,      // 输入单价（元 / 百万 token）—— 兜底默认值
     priceOutputPerM: 0,     // 输出单价
@@ -409,7 +420,12 @@ export const DEFAULT_CONFIG = {
     keywords: [],               // 档2 的关键词表
     randomPercent: 10,          // 档3：y% 概率
     randomCount: 8,             // 档3：命中时读 z 条
-    allCount: 80,               // 档4：读全部（上限）
+    allCount: 40,               // 档4：读全部（上限）
+    // 2026-11-12：80 → 40。实测 4 档群带 80 条时【过去状态】占 userPrompt 的 57%
+    // （7,549 / 13,198 字符），单次 prompt 从 ~15k 涨到 ~19.6k tok；而且窗口越大
+    // 越容易滑动，反而更容易把前缀缓存击穿。40 条足够接上群聊上下文。
+    // ⚠️ 私聊也走档4（resolveContextTier 里 isPrivate 直接返回 tier4/allCount），
+    //    所以这项改动对私聊同样生效。
     // ── 响应档位的作用范围 ──
     unifiedTier: true,          // true = 上方滑条对所有会话生效；false = 可按群单独设置
     groupSliderPos: {},         // { [群号]: 0~100 } 仅 unifiedTier=false 时生效；未设置的群/私聊跟随全局滑条

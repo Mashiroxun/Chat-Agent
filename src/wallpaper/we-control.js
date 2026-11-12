@@ -18,6 +18,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { withinWindow } from '../elapsed.js';
 import os from 'node:os';
 import { execFile, execFileSync } from 'node:child_process';
 
@@ -165,7 +166,7 @@ let _detectCache = null;
  */
 export function detectInstall({ executable = '', force = false } = {}) {
   const now = Date.now();
-  if (!force && !executable && _detectCache && now - _detectCache.at < 60_000) return _detectCache.value;
+  if (!force && !executable && _detectCache && withinWindow(_detectCache.at, 60_000, now)) return _detectCache.value;
 
   const roots = new Set();
   const reg = regSteamPath();
@@ -304,7 +305,7 @@ let _scanCache = null;
  */
 export function scanWallpapers(install, { force = false, cacheSeconds = 45 } = {}) {
   const now = Date.now();
-  if (!force && _scanCache && install?.exe === _scanCache.exe && now - _scanCache.at < cacheSeconds * 1000) {
+  if (!force && _scanCache && install?.exe === _scanCache.exe && withinWindow(_scanCache.at, cacheSeconds * 1000, now)) {
     return _scanCache.list;
   }
   const list = [];

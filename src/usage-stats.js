@@ -17,6 +17,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { withinWindow } from './elapsed.js';
 import { DATA_DIR, getConfig } from './config.js';
 import { cacheHitRate } from './llm.js';
 import {
@@ -1322,12 +1323,12 @@ export async function buildUsageStats(opts = {}) {
   if (!force) {
     // ① 5 秒微缓存（先判，命中最快：轮询 + SSE 事件风暴不再叠加统计）
     if (usageStatsMicro.stats && usageStatsMicro.key === key
-        && Date.now() - usageStatsMicro.at < USAGE_STATS_MICRO_TTL_MS) {
+        && withinWindow(usageStatsMicro.at, USAGE_STATS_MICRO_TTL_MS)) {
       return usageStatsMicro.stats;
     }
     // ② 3 小时结果缓存
     const cached = usageStatsCache.get(key);
-    if (cached && Date.now() - cached.at < USAGE_STATS_CACHE_TTL_MS) {
+    if (cached && withinWindow(cached.at, USAGE_STATS_CACHE_TTL_MS)) {
       usageStatsMicro = { key, at: Date.now(), stats: cached.stats };
       return cached.stats;
     }

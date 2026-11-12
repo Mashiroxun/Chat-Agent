@@ -18,6 +18,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { DATA_DIR, getConfig } from './config.js';
+import { withinWindow } from './elapsed.js';
 import { safeFetchBinaryToFile } from './safe-fetch.js';
 import { resolveCachedMediaPath } from './media-path.js';
 import { skillManager } from './skills/manager.js';
@@ -139,7 +140,7 @@ const FF_RETRY_MS = 60000;
 async function ensureFf() {
   // 任一找到就长期缓存；都没找到（用户可能随后安装）60 秒后重探，免重启
   if (_ffChecked && (_ffprobePath || _ffmpegPath)) return { ffprobe: _ffprobePath, ffmpeg: _ffmpegPath };
-  if (_ffChecked && Date.now() - _ffCheckedAt < FF_RETRY_MS) return { ffprobe: _ffprobePath, ffmpeg: _ffmpegPath };
+  if (_ffChecked && withinWindow(_ffCheckedAt, FF_RETRY_MS)) return { ffprobe: _ffprobePath, ffmpeg: _ffmpegPath };
   _ffChecked = true;
   _ffCheckedAt = Date.now();
   // 常见位置：PATH 里的 ffprobe/ffmpeg
@@ -408,7 +409,7 @@ export class VideoReader {
       let total = entries.reduce((n, e) => n + e.size, 0);
       entries.sort((a, b) => a.mtime - b.mtime);   // 最旧优先淘汰
       for (const e of entries) {
-        if (now - e.mtime <= TTL_MS && total <= MAX_TOTAL_BYTES) break;
+        if (withinWindow(e.mtime, TTL_MS, now) && total <= MAX_TOTAL_BYTES) break;
         try { fs.unlinkSync(e.fp); total -= e.size; } catch { /* ignore */ }
       }
     } catch { /* 清理失败不影响下载（目录不存在等） */ }

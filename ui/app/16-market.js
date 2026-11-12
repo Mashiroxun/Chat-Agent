@@ -44,6 +44,35 @@ const marketState = {
   plugin: { all: [], categories: {}, q: '', cat: 'all', status: 'approved', sort: 'downloads', loaded: false, loading: false, error: '', rendered: false }
 };
 
+/* 暂存区草稿缓存（2026-11-11，操作逻辑审查 P1-3）。
+   市场卡片原来只有「安装 / 已安装」两态：点了安装、包进了暂存区、还没确认，
+   卡片上却是一个 disabled 的「待确认」—— 刷新就没了，也没法回到那份草稿。
+   这里缓存一份 /api/forge 的草稿列表，按安装口令匹配，让中间态变成可点的入口。 */
+let forgeDrafts = [];
+let forgeDraftsLoaded = false;
+
+function marketDraftCode(item) {
+  return String(item?.installCode || '').trim().toUpperCase();
+}
+
+/** 这个市场条目在暂存区里有没有对应的待确认草稿。 */
+function marketDraftFor(item) {
+  const code = marketDraftCode(item);
+  if (!code) return null;
+  return forgeDrafts.find((d) => String(d?.originCode || '').trim().toUpperCase() === code) || null;
+}
+
+/** 拉一次暂存区草稿列表。失败静默 —— 取不到只是少一个「待确认」入口，不影响浏览。 */
+async function refreshForgeDrafts(force = false) {
+  if (forgeDraftsLoaded && !force) return forgeDrafts;
+  try {
+    const d = await api('/api/forge', { timeoutMs: 8000 });
+    forgeDrafts = Array.isArray(d?.drafts) ? d.drafts : [];
+    forgeDraftsLoaded = true;
+  } catch { /* 锻造台没启用 / 超时：保持上一份缓存 */ }
+  return forgeDrafts;
+}
+
 /* 排序选项。官网无下载量以外的热度信号，所以「最新」用 updatedAt 兜底。 */
 const MARKET_SORTS = [
   { key: 'downloads', label: '下载最多' },
@@ -292,6 +321,8 @@ function renderMarketList(kind) {
     // R102：拿到"装在哪一类"，才能让「管理」钮跳到对的管理页
     const installedKind = approved ? marketInstalledKind(x) : null;
     const installed = !!installedKind;
+    // 已下载到暂存区、还没确认安装的（审查 P1-3）：卡片上得能回得去
+    const draft = (approved && !installed) ? marketDraftFor(x) : null;
     const cat = x.categoryName || st.categories[x.category] || '其他';
     const desc = String(x.description || '暂无简介').replace(/\s+/g, ' ').trim();
     const canInstall = approved && !!x.installCode;
@@ -316,9 +347,11 @@ function renderMarketList(kind) {
         <div class="mk-action">
           ${installed
             ? `<button class="mk-btn mk-btn-manage" type="button" data-mk-manage="${esc(installedKind)}|${esc(x.id)}" title="已安装 —— 点这里去开 / 关它">管理</button>`
-            : canInstall
-              ? `<button class="mk-btn mk-btn-install" type="button" data-mk-install="${esc(x.id)}">安装</button>`
-              : '<button class="mk-btn" type="button" disabled title="该条目尚未通过审核">不可用</button>'}
+            : draft
+              ? `<button class="mk-btn mk-btn-draft" type="button" data-mk-draft="${esc(draft.draftId)}" title="已下载到暂存区，还没确认安装 —— 点这里去确认（不会重新下载）">待确认</button>`
+              : canInstall
+                ? `<button class="mk-btn mk-btn-install" type="button" data-mk-install="${esc(x.id)}">安装</button>`
+                : '<button class="mk-btn" type="button" disabled title="该条目尚未通过审核">不可用</button>'}
         </div>
       </article>`;
   }).join('');
@@ -436,6 +469,20 @@ function bindMarketList(kind) {
   box.addEventListener('click', (e) => {
     const retry = e.target.closest?.('[data-mk-refresh]');
     if (retry) { marketState[kind].loaded = false; loadMarket(kind, { force: true }); return; }
+    // 「待确认」→ 回到暂存区里那份草稿（不重新下载、不重复生成草稿）。
+    const dbtn = e.target.closest?.('[data-mk-draft]');
+    if (dbtn) {
+      const id = dbtn.dataset.mkDraft;
+      if (!id) return;
+      if (typeof forgeOpenAndAdapt === 'function') {
+        forgeOpenAndAdapt(id, { adapt: false }).catch((err) => {
+          marketToast(`没能打开暂存区里的这个草稿（${err?.message || err}）`, 'warn');
+        });
+      } else {
+        marketToast('锻造台还没加载好 —— 到「工具 → 自检 → 自创扩展」里能找到这份草稿', 'warn');
+      }
+      return;
+    }
     const btn = e.target.closest?.('[data-mk-install]');
     if (btn) installFromMarket(kind, btn.dataset.mkInstall, btn);
   });
@@ -491,6 +538,14 @@ async function loadMarket(kind, { force = false } = {}) {
     // 只有"数据到位并已画上屏"才算 rendered。失败/骨架阶段保持 false，
     // 下次切回来会重新请求，而不是把一句错误停在屏幕上。
     st.rendered = st.loaded;
+    // 顺手刷一次暂存区草稿（2026-11-11，审查 P1-3）：让「待确认」在**每次进市场页**
+    // 都能显示，而不是只有刚点完安装的那一瞬间。晚到就晚画一次 —— 只重画列表，
+    // 不动外壳（外壳里有筛选/搜索的选中态，重建会闪）。
+    if (st.loaded) {
+      refreshForgeDrafts().then(() => {
+        try { if (marketState[kind].rendered) renderMarketList(kind); } catch { /* 重画失败不影响已显示内容 */ }
+      }).catch(() => {});
+    }
   }
 }
 
@@ -535,10 +590,19 @@ async function installFromMarket(kind, id, btn) {
         `「${name}」已下载（${head}）—— 正在打开锻造台并让模型适配本机环境…`,
         g.ok ? 'ok' : 'warn'
       );
-      // 置为不可再点：再点一次只会又下一份、又生成一个草稿（同一口令重复入暂存区）。
-      // 这不是"已安装"，所以不加 mk-btn-done（那个绿色态的含义是装好了）。
-      btn.disabled = true;
+      // 2026-11-11（审查 P1-3）：原来是 disabled 且没有任何恢复路径 —— 用户在
+      // 锻造台把草稿删了 / 已经装完了 / 直接关了页面，这颗按钮就永远点不动。
+      // 现在保持可点，点它回到那份草稿（不重新下载、不重复生成）。
+      btn.disabled = false;
       btn.textContent = '待确认';
+      btn.classList.add('mk-btn-draft');
+      if (r.draftId) {
+        btn.dataset.mkDraft = r.draftId;
+        delete btn.dataset.mkInstall;
+        // 记进缓存：这样重画列表（筛选/搜索）也不会把「待确认」态弄丢
+        forgeDrafts = [{ draftId: r.draftId, originCode: code, originName: name, source: 'market' },
+          ...forgeDrafts.filter((d) => d.draftId !== r.draftId)];
+      }
       // 直接跳到 harness → 自创扩展、打开这个草稿、开始适配（只写暂存区，落盘仍要人工确认）
       if (typeof forgeOpenAndAdapt === 'function') {
         forgeOpenAndAdapt(r.draftId).catch((err) => {

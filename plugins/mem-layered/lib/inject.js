@@ -19,6 +19,7 @@
 //    静默消失、不报错」。是 tools/bench-tokens.mjs 的「三件套全关」配置
 //    （recallRowWidth: 90）跑出来的。M9 断言钉住这条路径。
 import { formatWhen, num } from './util.js';
+import { withinWindow } from '../../../src/elapsed.js';
 
 const HEADER = '【可能相关的旧事】';
 const FOOTER = '（不确定就别提；要更细可以翻归档）';
@@ -63,7 +64,7 @@ export class Injector {
   #recentlyInjected(chatKey, chunkId, cooldownMs) {
     const m = this.recent.get(chatKey);
     const at = m?.get(chunkId) || 0;
-    return Date.now() - at < cooldownMs;
+    return withinWindow(at, cooldownMs);
   }
 
   #markInjected(chatKey, chunkId) {

@@ -2,6 +2,7 @@
 // 文件：data/sessions/<id>.json；索引在内存里维护（最近优先）。
 import fs from 'node:fs';
 import path from 'node:path';
+import { withinWindow } from './elapsed.js';
 import crypto from 'node:crypto';
 import { DATA_DIR } from './config.js';
 import { logger } from './logger.js';
@@ -367,6 +368,9 @@ export class SessionRegistry {
       feedbacks: [],
       finishReason: null,
       error: null,
+      // 本轮思考档分流结果（2026-11-12）。与 usage 同条存档才能按档位聚合
+      // reasoning token，对比全开/灰度的实际收益；老存档没有该字段即为改前基线。
+      thinkingRoute: null,
       usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, cachedTokens: 0, calls: 0 }
     };
     this.current.set(session.id, session);
@@ -741,7 +745,7 @@ export class SessionRegistry {
     const now = Date.now();
     this._lastPersistAt ||= new Map();
     const last = this._lastPersistAt.get(s.id) || 0;
-    if (now - last < 2000) return;
+    if (withinWindow(last, 2000, now)) return;
     this._lastPersistAt.set(s.id, now);
     this.#persist(s);
   }

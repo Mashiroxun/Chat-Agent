@@ -3,6 +3,7 @@
 // 插件契约不变：bili.js / douyin.js 继续以同名导出转发这些函数。
 import fs from 'node:fs';
 import path from 'node:path';
+import { withinWindow } from '../../src/elapsed.js';
 import { safeFetchBinaryToFile } from '../../src/safe-fetch.js';
 
 /**
@@ -55,7 +56,7 @@ export function createFailureNotifier(briefFailure) {
   return async function notifyFailure({ sender, chatKey }, e) {
     const key = String(e?.message ?? e ?? '?').slice(0, 80);
     const last = notifiedKey.get(key);
-    if (last && Date.now() - last < 10 * 60 * 1000) return;
+    if (last && withinWindow(last, 10 * 60 * 1000)) return;
     // 先淘汰最旧再写入：之前先 set 后 clear，把刚记录的键也一起清掉，
     // 同一错误在 10 分钟窗口内可能再次通知（防刷屏失效）
     if (notifiedKey.size >= 50) {

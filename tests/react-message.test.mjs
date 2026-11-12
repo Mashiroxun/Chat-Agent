@@ -27,6 +27,14 @@ function makeCtx({ known = ['12345'], members = [] } = {}) {
     sender: {
       react: async (chatKey, messageId, emojiId) => { reacts.push({ chatKey, messageId, emojiId }); }
     },
+    // 表情目录（2026-11-11 补）：不给的话 fetchSysFaces 会因 ctx.onebot 为空而抛错，
+    // 走的是「目录不可用」分支，测不到「目录正常、只是没这个名字」这条路径。
+    // 目录是模块级缓存，这里固定一份，避免用例之间互相影响。
+    onebot: {
+      fetchSysFaces: async () => ({
+        packs: [{ emojis: [{ q_sid: '76', q_des: '/赞' }, { q_sid: '14', q_des: '/微笑' }] }]
+      })
+    },
     store: {
       findByMid: (_ck, mid) => (known.includes(String(mid)) ? { mid: String(mid), text: '[图片]' } : null),
       activeMembers: () => members,
@@ -79,12 +87,21 @@ test('直接给数字编号时原样透传', async () => {
   assert.equal(body.emojiId, '178');
 });
 
-test('不认识的表情名：拒绝，且不发请求', async () => {
+test('目录里有名字就按名字解析（不要求模型背编号）', async () => {
   const { ctx, reacts } = makeCtx();
-  const { isError, body } = await callReact(ctx, { messageId: 12345, emoji: '笑哭' });
+  const { isError } = await callReact(ctx, { messageId: 12345, emoji: '微笑' });
+  assert.equal(isError, false);
+  assert.equal(reacts[0].emojiId, '14');
+});
+
+test('目录正常但没这个名字：拒绝、不发请求，且提示可以换编号', async () => {
+  const { ctx, reacts } = makeCtx();
+  const { isError, body } = await callReact(ctx, { messageId: 12345, emoji: '这只猫' });
   assert.equal(isError, true);
   assert.equal(reacts.length, 0);
+  // 目录可用时才是"不认识"，文案要能引导它换一个说法/编号
   assert.match(String(body), /不认识这个表情/);
+  assert.match(String(body), /表情编号/);
 });
 
 test('消息不存在：拒绝并给出可见 id', async () => {

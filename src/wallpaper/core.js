@@ -18,6 +18,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { withinWindow } from '../elapsed.js';
 import { spawn } from 'node:child_process';
 import { DATA_DIR } from '../config.js';
 
@@ -317,7 +318,7 @@ async function scan() {
 
 async function ensureScan() {
   const now = Date.now();
-  if (cache.result && now - cache.at < 60000) return cache.result;
+  if (cache.result && withinWindow(cache.at, 60000, now)) return cache.result;
   const result = await scan();
   cache = { at: now, result };
   return result;

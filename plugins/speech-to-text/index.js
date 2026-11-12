@@ -17,6 +17,7 @@
 
 import fs from 'node:fs';
 import os from 'node:os';
+import { withinWindow } from '../../src/elapsed.js';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -210,7 +211,7 @@ function probeInBackground() {
   if (probing) return;
   // 已有成功结果且配置没变 → 不重探；失败结果过期重探
   if (probeState && probedWith === JSON.stringify(cfg())) return;
-  if (probeState !== null && Date.now() - probeAt < PROBE_RETRY_MS && probedWith === JSON.stringify(cfg())) return;
+  if (probeState !== null && withinWindow(probeAt, PROBE_RETRY_MS) && probedWith === JSON.stringify(cfg())) return;
   probing = true;
   probedWith = JSON.stringify(cfg());
   (async () => {

@@ -26,6 +26,7 @@
 // 安全：公共库供管理员放入 data/plugins/ 的可信插件调用，与内置工具同信任级。
 import fs from 'node:fs';
 import path from 'node:path';
+import { withinWindow } from '../../src/elapsed.js';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -246,7 +247,7 @@ const MIXIN_TTL = 10 * 60 * 1000;
 /** 取 WBI mixin_key（从 nav 接口拿 img_key/sub_key 后按混淆表重排取前 32 位）。 */
 export async function getWbiMixinKey(sessdata) {
   const cached = mixinCache.get(sessdata);
-  if (cached && Date.now() - cached.at < MIXIN_TTL) return cached.mixin;
+  if (cached && withinWindow(cached.at, MIXIN_TTL)) return cached.mixin;
 
   const j = await biliJson('https://api.bilibili.com/x/web-interface/nav', { maxBytes: 200000, sessdata });
   const imgKey = String(j.data?.wbi_img?.img_url || '').split('/').pop() || '';

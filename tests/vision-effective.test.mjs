@@ -65,3 +65,15 @@ test('配置缺字段时不崩（api 为空 / 全空）', () => {
 test('visionModel 带首尾空格也能识别', () => {
   assert.equal(effectiveVisionEnabled(cfgOf({ visionModel: `  ${WITH_VISION}  ` })), true);
 });
+
+// 2026-11-11 结论更正：真机日志里出现过 "model only supports text input" 的 400，
+// 但不能据此把主模型判成纯文本。官方定义为原生多模态智能体模型，且用同一份
+// 真实配置实测：合法 PNG(base64) 走 image_url 返回 HTTP 200，tool 消息带图也 200。
+// 锁住这条，免得以后有人照着那句错误文案把看图能力整批关掉。
+test('sensenova-6.8-flash-lite 明确判为能看图（不是纯文本模型）', () => {
+  const model = 'sensenova-6.8-flash-lite';
+  assert.equal(modelImageVerdict('sensenova', model), 'vision');
+  assert.equal(effectiveVisionEnabled({
+    api: { provider: 'sensenova', model, visionModel: '' }
+  }), true);
+});

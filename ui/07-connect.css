@@ -328,6 +328,14 @@ html.qa-bg[data-theme='?'] .sk-row::after {
   color: var(--green);
   border-color: color-mix(in srgb, var(--green) 42%, transparent);
 }
+/* ── ①b 已下载到暂存区、待确认安装（2026-11-11，操作逻辑审查 P1-3）──────────
+   它既不是"已安装"（不能给绿色 —— 会让人以为装好了），也不是"可安装"
+   （再点一次只会又下一份、又生成一个草稿）。用橙色单独一档，而且**可点**：
+   点它回到那份草稿去确认，不重新下载。 */
+.mk-btn-draft {
+  color: var(--orange);
+  border-color: color-mix(in srgb, var(--orange) 42%, transparent);
+}
 /* 已安装卡片整体压暗（.mk-card.mk-installed 的 opacity:.82，r87）会把这颗**可点**的钮
    一起压灰，看着又像被禁用了 —— 正是这次要修的毛病。改成只压"内容"（图标块 + 信息区），
    动作区保持全强度：状态感还在，按钮不再是灰的。 */

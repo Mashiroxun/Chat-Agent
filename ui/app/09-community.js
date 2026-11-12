@@ -74,6 +74,17 @@ function openSendConfigModal() {
           </select>
         </div>
         <div class="hint">由「思考模式适配」插件落成各厂商参数；档位仅对应渠道生效。</div></div>
+      <div class="checkbox-row"><input type="checkbox" class="sw" id="sc-thinking-route" ${c.api?.thinkingRoute !== false ? 'checked' : ''} />
+        <label for="sc-thinking-route">按消息类型分流思考档</label></div>
+      <div class="hint" style="margin:-2px 0 12px">
+        拍一拍 / 纯表情 / 极短附和 → 不思考；常规对话 → 低强度；长文本与明确任务 → 保持默认。
+        只在上面选<b>「默认」</b>时生效 —— 选了关/低/中/高就是全局强制，不再分流。
+      </div>
+      <div class="checkbox-row"><input type="checkbox" class="sw" id="sc-thinking-route-allowoff" ${c.api?.thinkingRouteAllowOff !== false ? 'checked' : ''} />
+        <label for="sc-thinking-route-allowoff">允许「不思考」档（关掉则只降档、不关思考）</label></div>
+      <div class="hint" style="margin:-2px 0 12px">
+        关掉它可做灰度：拍一拍、短附和这类也不再彻底关思考，只降到最低档，回复更稳一些，省得少一点。
+      </div>
       <div class="field-row">
         <div class="field"><label>防抖聚批窗口（毫秒）</label><input type="number" id="sc-wakedelay" min="0" value="${esc(c.wakeDelayMs)}" /></div>
         <div class="field"><label>批次间隔（毫秒）</label><input type="number" id="sc-draindelay" min="0" value="${esc(c.drainDelayMs)}" /></div>
@@ -119,7 +130,11 @@ function openSendConfigModal() {
         temperature: Math.min(2, Math.max(0, num('sc-temperature', 0.8))),
         maxRounds: Math.min(40, Math.max(1, Number(g('sc-maxrounds')) || 12)),
         thinkingMode: effort === 'off' ? 'off' : (['low', 'medium', 'high'].includes(effort) ? 'on' : 'auto'),
-        thinkingEffort: ['low', 'medium', 'high'].includes(effort) ? effort : ''
+        thinkingEffort: ['low', 'medium', 'high'].includes(effort) ? effort : '',
+        // 分流开关（2026-11-12）。两者都只在 thinkingMode==='auto' 时起作用：
+        // 上面选了关/低/中/高，编排器会直接把分流标记成 passthrough。
+        thinkingRoute: !!overlay.querySelector('#sc-thinking-route')?.checked,
+        thinkingRouteAllowOff: !!overlay.querySelector('#sc-thinking-route-allowoff')?.checked
       },
       // 2026-10-23 修复：这一组此前全用 `Number(x) || 默认值`，把合法的 0 当成空值
       // （0 = 关闭限流 / 立即发送），界面显示 0、后端存默认值。改用本函数内已有的
@@ -1077,8 +1092,12 @@ function openInstallCodeModal() {
   renderRows();
 
   overlay.querySelector('#ic-cancel')?.addEventListener('click', () => closeModelModal(overlay));
+  // 2026-11-11（操作逻辑审查 P1-4）：装完不再 1.2 秒自动关窗 —— 见下方收尾处。
+  let icFinished = false;
   overlay.querySelector('#ic-confirm')?.addEventListener('click', async () => {
     const btn = overlay.querySelector('#ic-confirm');
+    // 装完后再点这颗钮 = 关闭。否则会拿着同一批口令再跑一遍安装（又下一份、又建草稿）。
+    if (icFinished) { closeModelModal(overlay); return; }
     const ready = codeRows.filter((r) => r.status === 'ok' && r.entry);
     if (!ready.length) {
       statusBox.textContent = '还没有成功对接的口令（先把口令填对，等它变绿带 ✅）。';
@@ -1122,7 +1141,7 @@ function openInstallCodeModal() {
     }
     statusBox.textContent = (installed || staged)
       ? `处理完成：已安装 ${installed} 个，待你确认 ${staged} 个。${notes.join('；')}`
-        + (staged ? '　→ 正在打开锻造台并开始适配第一个，其余的留在暂存区列表里。' : '')
+        + (staged ? '　→ 待确认的包都在暂存区，点下面的「去锻造台确认安装」继续。' : '')
       : `全部失败。${notes.join('；')}`;
     btn.disabled = false;
     if (installed) {
@@ -1131,13 +1150,29 @@ function openInstallCodeModal() {
       await loadModulePage('plugin', { rescan: true }).catch(() => {});
     }
     if (installed || staged) {
-      setTimeout(() => {
-        closeModelModal(overlay);
-        // 有进了暂存区的，就把人直接送到锻造台、打开它、开始适配（只写暂存区，落盘仍要确认）
-        if (firstStaged && typeof forgeOpenAndAdapt === 'function') {
-          forgeOpenAndAdapt(firstStaged).catch(() => {});
-        }
-      }, 1200);
+      // 不自动关窗（2026-11-11，审查 P1-4）：结果清单里带着每个包的成功/失败原因，
+      // 原来 1.2 秒后连弹窗一起关掉，用户想确认"到底哪个失败了、为什么"已无处可查。
+      icFinished = true;
+      btn.disabled = false;
+      btn.textContent = '关闭';
+      btn.classList.remove('btn-primary');
+      if (firstStaged) {
+        const go = document.createElement('button');
+        go.className = 'btn btn-primary';
+        go.textContent = staged > 1 ? `去锻造台确认（还有 ${staged} 个在暂存区）` : '去锻造台确认安装';
+        go.addEventListener('click', () => {
+          closeModelModal(overlay);
+          if (typeof forgeOpenAndAdapt === 'function') {
+            forgeOpenAndAdapt(firstStaged).catch((err) => {
+              // 弹窗已关，用市场页的轻提示兜底 —— 不能像原来那样空 catch 什么都不发生
+              if (typeof marketToast === 'function') {
+                marketToast(`没能自动打开锻造台（${err?.message || err}）。包已下载，可到「工具 → 自检 → 自创扩展」查看`, 'warn');
+              }
+            });
+          }
+        });
+        btn.parentNode?.insertBefore(go, btn);
+      }
     }
   });
   return overlay;

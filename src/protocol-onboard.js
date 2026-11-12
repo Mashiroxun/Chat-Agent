@@ -17,6 +17,7 @@
 //   · 密码只存在用户本地配置里，不进日志、不进 /api 响应（只回 hasPassword 布尔）。
 
 import { LOGIN_KIND, extractInitialCredentials } from './protocol-webui.js';
+import { withinWindow } from './elapsed.js';
 
 /** 向导阶段。UI 只认这些字符串，加新阶段要同步 03-connection.js。 */
 export const STAGE = {
@@ -99,7 +100,7 @@ export function createProtocolOnboard({
 
   /** 登录：优先用刚输入的密码 → 配置里存的 → 启动日志里的初始凭据。 */
   async function ensureToken(inputPassword = '') {
-    if (token && Date.now() - tokenAt < 10 * 60_000) return { ok: true, token };
+    if (token && withinWindow(tokenAt, 10 * 60_000)) return { ok: true, token };
 
     // 退避窗口内不再真的发登录请求（见 loginBlockedUntil 的注释）
     if (Date.now() < loginBlockedUntil) {

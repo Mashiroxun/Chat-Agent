@@ -33,6 +33,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getConfig, personaForChat, DATA_DIR } from './config.js';
+import { elapsedSince, withinWindow } from './elapsed.js';
 import { buildSystemPrompt } from './prompt.js';
 import { buildToolDefs, toOpenAiTools } from './tools.js';
 import { getToolAvailability } from './tool-registry.js';
@@ -565,12 +566,14 @@ const preCallBuckets = new Map();    // key -> { warmedAt:number, inFlight:Promi
 //      只留真实调用 —— 真实调用有 WithRetry 兜底，预热没有。
 const WARM_TIMEOUT_MS = 30000;
 const WARM_429_COOLDOWN_MS = 120000;
-let warmCooldownUntil = 0;
-function warmCooldownActive(now = Date.now()) { return now < warmCooldownUntil; }
+// 记「何时开始冷却」而不是「冷却到几点」：时钟回拨时后者会被当成遥远的未来，
+// 预热会被永久跳过（且日志里看不出异常）。窗口判定统一走 elapsed.js。
+let warmCooldownAt = 0;
+function warmCooldownActive(now = Date.now()) { return withinWindow(warmCooldownAt, WARM_429_COOLDOWN_MS, now); }
 function noteWarmFailure(error) {
   const msg = String(error?.message ?? error ?? '');
   if (/429|rate.?limit|too many|太频繁|concurrency/i.test(msg)) {
-    warmCooldownUntil = Date.now() + WARM_429_COOLDOWN_MS;
+    warmCooldownAt = Date.now();
     logger.info('cache-warm', `预热触发限流冷却（${WARM_429_COOLDOWN_MS / 1000}s 内暂停一切预热，只保真实调用）：${msg.slice(0, 120)}`);
   }
 }
@@ -656,8 +659,8 @@ export async function warmBeforeRealCall({ log = () => {}, label = '', sample = 
   prunePreCallBuckets(now);
   const bucket = preCallBuckets.get(bucketKey) || { warmedAt: 0, inFlight: null };
   if (bucket.inFlight) return bucket.inFlight;   // 同一形状并发只发一次
-  if (now - bucket.warmedAt < preCallGapMs()) {
-    return { ok: false, reason: `该前缀 ${Math.round((now - bucket.warmedAt) / 1000)} 秒前刚预热过` };
+  if (withinWindow(bucket.warmedAt, preCallGapMs(), now)) {
+    return { ok: false, reason: `该前缀 ${Math.round(elapsedSince(bucket.warmedAt, now) / 1000)} 秒前刚预热过` };
   }
   // 并发上限：不同形状同时预热最多 PRE_CALL_MAX_CONCURRENT 个。超了就跳过 ——
   // 预热只是"提前写缓存"，跳过不会更差，真实调用自己会把缓存写热。
@@ -831,7 +834,7 @@ export async function warmOnce({ log = () => {}, systemPrompt = '', tools = null
     return (Number.isFinite(sec) ? Math.max(0, sec) : 20) * 1000;
   })();
   if (!force && dedupMs > 0) {
-    const gap = Date.now() - (lastWarmOkByShape.get(dedupKey) || 0);
+    const gap = elapsedSince(lastWarmOkByShape.get(dedupKey) || 0);
     if (gap < dedupMs) {
       return { ok: true, dedup: true, prompt: 0, cached: 0, ms: 0,
         reason: `同形状 ${(gap / 1000).toFixed(0)}s 前刚暖过（<${dedupMs / 1000}s 去重窗口）` };

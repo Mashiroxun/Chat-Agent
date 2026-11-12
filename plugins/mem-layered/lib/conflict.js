@@ -26,6 +26,7 @@
 //
 // ⚠️ 本文件不改宿主任何一个字节：只用上面两个公开接口 + 宿主给插件自己的存储。
 import { num } from './util.js';
+import { withinWindow } from '../../../src/elapsed.js';
 
 /** 内置记忆插件的目录名 / 清单 id（两者一致）。 */
 export const BUILTIN_ID = 'conversation-memory';
@@ -77,7 +78,7 @@ export class ConflictGuard {
 
   /** 当前冲突状态。带 TTL 缓存；force=true 立刻复查（activate 时用）。 */
   check({ force = false, now = Date.now() } = {}) {
-    if (!force && this.state && now - this.checkedAt < RECHECK_MS) return this.state;
+    if (!force && this.state && withinWindow(this.checkedAt, RECHECK_MS, now)) return this.state;
     this.checkedAt = now;
     this.state = this.#detect();
     return this.state;

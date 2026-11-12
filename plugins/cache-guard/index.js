@@ -31,10 +31,20 @@ const DEFAULTS = { saveIntervalSec: 30, driftKeep: 80, daysKeep: 14 };
 let cfg = () => DEFAULTS;
 let log = (..._a) => {};
 
+/** 分桶上限：正常几十个群，留 128 足够；超出按"最久没更新"淘汰，防无界增长。 */
+const MAX_SYSTEM_BUCKETS = 128;
+
 const state = {
   days: {},        // 'YYYY-MM-DD' -> { calls, prompt, cached, minRate, maxRate, chats:{[chatKey]:{calls,prompt,cached}} }
   drift: [],       // 系统提示漂移事件（新的在前）
-  lastSystem: null, // { hash, sections:{标题:指纹}, at }
+  lastSystem: null, // 最近一次全局采到的 { hash, sections:{标题:指纹}, at }（报表用）
+  // ⚠️ 漂移判定必须**按群分桶**（2026-11-12 修）。
+  //   原来只有一个全局 lastSystem：A 群跑完、B 群再跑，B 拿自己的系统提示去比
+  //   A 的指纹 —— 每个群的第一条都被判成"漂移"。实测 14 天内 80 条漂移记录，
+  //   而会话存档里真实相邻 systemPrompt 差异只有 3 次，假阳性率 96%。
+  //   假漂移的代价不是记错数：doctor 每次体检都报"系统提示漂移 80 次"，
+  //   真正的击穿反而被淹没，归因彻底失效。
+  lastSystemByChat: {}, // chatKey -> { hash, sections:{标题:指纹}, at }
   lastUser: null    // { len, blocks:{引导,历史,唤醒,状态,时间}, at } —— 仅结构参考
 };
 
@@ -63,6 +73,13 @@ function loadState() {
       state.days = d.days || {};
       state.drift = Array.isArray(d.drift) ? d.drift : [];
       state.lastSystem = d.lastSystem || null;
+      const buckets = d.lastSystemByChat;
+      state.lastSystemByChat = (buckets && typeof buckets === 'object' && !Array.isArray(buckets)) ? buckets : {};
+      // 旧存档只有全局单槽：迁进一个特殊桶，**绝不能**当成某个真实群的上一版
+      // —— 那会让该群的首轮直接误报一次漂移，正是本次要消灭的现象。
+      if (!Object.keys(state.lastSystemByChat).length && state.lastSystem) {
+        state.lastSystemByChat['(旧版单槽)'] = state.lastSystem;
+      }
     }
   } catch { /* 首次运行无文件，正常 */ }
 }
@@ -85,6 +102,14 @@ function scheduleSave() {
   saveTimer = setTimeout(() => { saveTimer = null; flushNow(); }, sec * 1000);
   // 不让定时器挡住进程退出
   try { saveTimer.unref?.(); } catch { /* 老 Node 无 unref */ }
+}
+
+/** 系统提示指纹桶按"最久没更新"淘汰，防止群多/临时 chatKey 把 stats.json 撑大。 */
+function pruneSystemBuckets() {
+  const keys = Object.keys(state.lastSystemByChat);
+  if (keys.length <= MAX_SYSTEM_BUCKETS) return;
+  keys.sort((a, b) => (state.lastSystemByChat[a]?.at || 0) - (state.lastSystemByChat[b]?.at || 0));
+  for (const k of keys.slice(0, keys.length - MAX_SYSTEM_BUCKETS)) delete state.lastSystemByChat[k];
 }
 
 function prune() {
@@ -170,7 +195,9 @@ function buildReport() {
   if (state.lastSystem) {
     const t = new Date(state.lastSystem.at).toLocaleString('zh-CN', { hour12: false });
     const n = Object.keys(state.lastSystem.sections || {}).length;
-    lines.push('', `当前系统提示指纹 ${state.lastSystem.hash}（${n} 段，${t} 采得）`);
+    const buckets = Object.keys(state.lastSystemByChat).length;
+    lines.push('', `当前系统提示指纹 ${state.lastSystem.hash}（${n} 段，${t} 采得）`
+      + (buckets ? `；按群分桶 ${buckets} 个（漂移只在同群内比较）` : ''));
   }
   if (state.lastUser) {
     const b = state.lastUser.blocks || {};
@@ -212,7 +239,9 @@ export const hooks = {
 
       if (sys && typeof sys.content === 'string' && sys.content.length > 40) {
         const fp = fingerprintSystem(sys.content);
-        const prev = state.lastSystem;
+        // 按群取上一版：换群不是漂移。老存档 / 首次见到的群没有基线 → 只登记不判。
+        const ck = String(ctx.chatKey || '?');
+        const prev = state.lastSystemByChat[ck] || null;
         if (prev && prev.hash !== fp.whole) {
           const changed = Object.keys(fp.sections).filter((k) => prev.sections[k] !== fp.sections[k]);
           const added = Object.keys(fp.sections).filter((k) => !(k in prev.sections));
@@ -227,7 +256,10 @@ export const hooks = {
               + ` 新增 [${added.join(', ')}] 移除 [${removed.join(', ')}]`);
           }
         }
-        state.lastSystem = { hash: fp.whole, sections: fp.sections, at: now };
+        const record = { hash: fp.whole, sections: fp.sections, at: now };
+        state.lastSystemByChat[ck] = record;
+        state.lastSystem = record;   // 报表「最近一次采得」仍显示全局最新
+        pruneSystemBuckets();
       }
 
       if (user && typeof user.content === 'string') {
@@ -265,5 +297,12 @@ export const hooks = {
 
 export const providers = {
   /** 供其它插件/工具取快照（软依赖，不装我就没有）。 */
-  'cache.snapshot': () => JSON.parse(JSON.stringify({ days: state.days, drift: state.drift, lastSystem: state.lastSystem }))
+  'cache.snapshot': () => JSON.parse(JSON.stringify({
+    days: state.days,
+    drift: state.drift,
+    lastSystem: state.lastSystem,
+    // lastSystemByChat 不是给 doctor 判问题的，而是排障时想确认"某个群到底有没有
+    // 稳定前缀"时能直接看，不必再翻 stats.json。
+    lastSystemByChat: state.lastSystemByChat
+  }))
 };
