@@ -31,6 +31,15 @@ test('覆盖 anchor 后 anchorChunkFor 走注入实现', () => {
   }
 });
 
+test('anchorChunkFor 默认值：allCount 80→192（不变），40→160（2026-11-12 重定标）', () => {
+  // 系数 4.0（2026-11-12，三群真实消息回放）：maxLimit=40 → chunk=160，
+  // 跨块频率减半，全价字节 −10~12%；maxLimit=80 时 min(192, 320) 仍为 192。
+  assert.equal(anchorChunkFor(40), 160);
+  assert.equal(anchorChunkFor(80), 192);
+  assert.equal(anchorChunkFor(200), 192);   // 上限封顶
+  assert.equal(anchorChunkFor(8), 32);      // 小窗口按比例缩放
+});
+
 test('anchor 返回值非法时回落默认', () => {
   const normal = anchorChunkFor(80);
   setPromptProviders({ anchor: () => 'not-a-number' });
