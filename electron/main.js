@@ -231,6 +231,52 @@ function relaunchAsSelfHealing() {
   app.relaunch();
 }
 
+/**
+ * 「切兼容模式并重启」的统一收尾（2026-11-13 第四轮：合并三份重复动作）。
+ *
+ * 为什么必须收成一个函数：这个序列此前在 main.js 里逐字写了三遍 ——
+ * GPU 反复崩溃、渲染进程被拦杀、用户在桌宠页手点「开启兼容模式」。五步的顺序
+ * 是**功能性**的，不是风格问题：
+ *   ① 提示（notifyBody）—— 用户得知道"不是没打开，是在切兼容模式"；
+ *   ② 写交接标记 —— 让重启后的新进程认得出"我是重启拉起来的"；
+ *   ③ 交还实例锁 —— 必须在 relaunch 之前，否则新进程会撞上自己的锁，
+ *      表现为「已经在运行了」+ 空屏幕（2026-11-05 实测踩过）；
+ *   ④ relaunch；
+ *   ⑤ app.exit(0) —— 本进程到此为止。
+ * 三份拷贝里任何一份把 ②③ 的顺序写反、或者漏掉 ③，用户看到的就是"双击打不开"。
+ * 那是个不会报错、只会复现给别人的 bug —— 所以顺序只能有**一处**定义。
+ *
+ * @param {object} options
+ * @param {string} options.handoverLabel 交接标记里的原因标签，同时也是交还锁的日志文案。
+ * @param {string|null} [options.notifyBody] 系统通知正文；null = 不发通知（手动那条）。
+ * @param {number} [options.delayMs] >0 时整段包进 setTimeout（给 IPC 返回值留时间）。
+ * @param {boolean} [options.swallowErrors] 逐步 try/catch。三个调用点里只有
+ *   手动兼容模式那条原本是这么写的（它要保证一定走到 app.exit，不给用户留
+ *   "按钮点了没反应"的中间态）；另两条原本不捕获，此处保持原样，别顺手统一。
+ * @returns {void}
+ */
+function relaunchForCompatMode({ handoverLabel, notifyBody = null, delayMs = 0, swallowErrors = false } = {}) {
+  const run = () => {
+    // 数据目录在原三处也都是**调用时**才取（第 3 处取于 setTimeout 回调内），
+    // 这里同样放在 run 里，时序不变。
+    const dataDir = process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR;
+    if (notifyBody) notifyRelaunching(notifyBody);
+    if (swallowErrors) {
+      try { writeHandover(dataDir, handoverLabel); } catch { /* 忽略 */ }
+      try { releaseOwnLock(dataDir, process.pid, handoverLabel); } catch { /* 忽略 */ }
+      try { relaunchAsSelfHealing(); } catch { /* 忽略 */ }
+    } else {
+      writeHandover(dataDir, handoverLabel);
+      releaseOwnLock(dataDir, process.pid, handoverLabel);
+      relaunchAsSelfHealing();
+    }
+    // 与三处原实现一致：exit 是最后一句，后面没有代码再执行。
+    app.exit(0);
+  };
+  if (delayMs > 0) setTimeout(run, delayMs);
+  else run();
+}
+
 // ── 健康启动哨兵（2026-11-13）：为「撤销崩溃降级」攒证据 ────────────────────
 //
 // 上面两个 note* 函数都有同一个毛病：它们能把 sandbox:false 写进配置，但那条
@@ -298,6 +344,10 @@ function armHealthyBootTimer() {
 let gpuCrashCount = 0;
 let gpuCrashWindowStart = Date.now();
 // 防重入：已排定重启后，后续的崩溃回调不得再次触发 relaunch。
+// GPU 那条（noteRenderCrash）和渲染那条（noteRendererCrash）共用这一个标志 ——
+// 语义完全相同：「重启已经排定，别再排第二次」。2026-11-13 之前两条各有一个
+// 同义变量，现已合并；两个函数早退条件里的其他判断（renderGpuOff /
+// NO_SANDBOX_ESCAPE）语义不同，保持不变。
 let relaunchScheduled = false;
 function noteRenderCrash(kind) {
   // 健康哨兵的证据源之一：**任何**一次 GPU 崩溃都让本次启动失去"健康"资格。
@@ -328,15 +378,11 @@ function noteRenderCrash(kind) {
       lastDowngradeAt: new Date().toISOString()
     });
     console.error('[render] GPU 反复崩溃，已写 render-gpu-off.flag，重启进软件模式');
-    // 顺序有讲究：
-    //   ① 先发提示 —— 用户得知道"不是没打开，是在切兼容模式"；
-    //   ② 再交还实例锁 —— 必须在 relaunch 之前，否则新进程会撞上自己的锁；
-    //   ③ 最后才 relaunch + exit —— 顺序反了就是上面那段注释里的"打不开"。
-    notifyRelaunching('检测到显卡加速不可用（GPU 子进程反复崩溃），正在自动切换到兼容模式，请稍候几秒。');
-    writeHandover(process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR, 'GPU 崩溃自愈');
-    releaseOwnLock(process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR, process.pid, 'GPU 崩溃自愈');
-    relaunchAsSelfHealing();
-    app.exit(0);
+    // 收尾五步的顺序说明见 relaunchForCompatMode 的注释（提示 → 交锁 → 重启）。
+    relaunchForCompatMode({
+      handoverLabel: 'GPU 崩溃自愈',
+      notifyBody: '检测到显卡加速不可用（GPU 子进程反复崩溃），正在自动切换到兼容模式，请稍候几秒。'
+    });
   }
 }
 app.on('child-process-gone', (_e, details) => {
@@ -364,13 +410,15 @@ app.on('child-process-gone', (_e, details) => {
 // 只在尚未降级时触发（NO_SANDBOX_ESCAPE 为 true 就直接返回），保证不会循环重启。
 let sandboxCrashCount = 0;
 let sandboxCrashStart = Date.now();
-let sandboxFallbackDone = false;
 function noteRendererCrash(where) {
   // 同 noteRenderCrash：任何一次渲染进程崩溃都让本次启动失去"健康"资格。
   // 同样在早退分支之前置位 —— 已经降级（NO_SANDBOX_ESCAPE）时虽然不再计数，
   // 但"这次启动崩过"是事实。
   bootHadCrash = true;
-  if (NO_SANDBOX_ESCAPE || sandboxFallbackDone) return;   // 已是兼容模式 / 正在降级：不再计数
+  // 两个早退条件语义不同，别把它们并成一个：
+  //   · NO_SANDBOX_ESCAPE —— 沙箱本来就没开，没有"降级"可做；
+  //   · relaunchScheduled  —— 已经排定过一次重启，不许再排（与 noteRenderCrash 共用）。
+  if (NO_SANDBOX_ESCAPE || relaunchScheduled) return;
   const now = Date.now();
   if (now - sandboxCrashStart > 60_000) { sandboxCrashCount = 0; sandboxCrashStart = now; }
   sandboxCrashCount += 1;
@@ -381,7 +429,13 @@ function noteRendererCrash(where) {
     }
   } catch { /* 诊断日志写不进去不影响降级 */ }
   if (sandboxCrashCount < 3) return;
-  sandboxFallbackDone = true;
+  // ⚠️ 这个标志在写盘**之前**置位（沿用合并前 sandboxFallbackDone 的位置）。
+  //    于是下面写盘失败时标志仍是 true —— 同进程后续的 GPU 反复崩溃会被
+  //    noteRenderCrash 的 `!relaunchScheduled` 连带封口。这是刻意的，不是漏改：
+  //    data 目录不可写时 render-gpu-off.flag 同样写不进去，放开 GPU 那条只会让
+  //    应用反复 relaunch 却永远升不上软件模式（重启风暴），封口后停在「界面能开
+  //    但关沙箱」反而可控。别为了"严格等价"把它挪到 `if (!ok) return;` 之后。
+  relaunchScheduled = true;
   const ok = patchRenderConfig(RENDER_DATA_DIR, {
     sandbox: false,
     // ⚠️ sandboxOffBy 必须写明来源（D2，2026-11-12 审查）：这一位以前是空串，
@@ -403,12 +457,11 @@ function noteRendererCrash(where) {
     lastDowngradeAt: new Date().toISOString()
   });
   console.error('[render] 渲染进程连续崩溃 → 已切兼容模式（关闭渲染沙箱），重启应用');
-  // 同 noteRenderCrash：提示 → 交还锁 → 重启，顺序不能换。
-  notifyRelaunching('检测到界面进程被本机安全软件拦截，正在自动切换到兼容模式，请稍候几秒。');
-  writeHandover(process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR, '渲染崩溃自愈');
-  releaseOwnLock(process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR, process.pid, '渲染崩溃自愈');
-  relaunchAsSelfHealing();
-  app.exit(0);
+  // 收尾五步的顺序说明见 relaunchForCompatMode 的注释（提示 → 交锁 → 重启）。
+  relaunchForCompatMode({
+    handoverLabel: '渲染崩溃自愈',
+    notifyBody: '检测到界面进程被本机安全软件拦截，正在自动切换到兼容模式，请稍候几秒。'
+  });
 }
 
 // ── 渲染进程沙箱：默认开启，按需降级 ──────────────────────────────────────
@@ -3068,14 +3121,11 @@ app.whenReady().then(async () => {
         sandboxOffAt: new Date().toISOString()
       });
       if (!ok) return { ok: false, error: '写入 data/render-config.json 失败，请检查安装目录权限' };
-      setTimeout(() => {
-        // 这条路径同样要交还锁：用户点「开启兼容模式」重启时若撞上旧锁，
-        // 会看到一个"已经在运行"的框而窗口不出现（与崩溃自愈那条同源）。
-        try { writeHandover(process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR, '用户开启兼容模式'); } catch { /* 忽略 */ }
-        try { releaseOwnLock(process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR, process.pid, '用户开启兼容模式'); } catch { /* 忽略 */ }
-        try { relaunchAsSelfHealing(); } catch { /* 忽略 */ }
-        app.exit(0);
-      }, 400);
+      // 400ms 是给 IPC 返回值留的时间：前端要先拿到 { restarting: true } 才被重启打断。
+      // 这条路径同样要交还锁（用户点「开启兼容模式」重启时若撞上旧锁，会看到一个
+      // "已经在运行"的框而窗口不出现，与崩溃自愈那条同源）；也正因为要保证一定走到
+      // app.exit、不给用户留"按钮点了没反应"的中间态，这条是逐步 try/catch。
+      relaunchForCompatMode({ handoverLabel: '用户开启兼容模式', delayMs: 400, swallowErrors: true });
       return { ok: true, restarting: true };
     };
     // 先启动服务拿到真实端口，再开窗口。
