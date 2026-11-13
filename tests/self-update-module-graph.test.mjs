@@ -146,3 +146,29 @@ test('src/process-image.js 不得引入任何项目内相对依赖', () => {
     'process-image.js 一旦有项目内静态依赖，就可能把 config.js 带回求值图'
   );
 });
+
+test('electron/boot-state.js 不含任何项目内相对 import，也不读 process.env', () => {
+  const src = stripComments(readSrc('electron/boot-state.js'));
+  assert.deepEqual(
+    relativeStaticSpecifiers(src),
+    [],
+    '启动状态模块一旦有项目内静态依赖，就可能把 config.js 带回 main.js 的求值期'
+  );
+  assert.doesNotMatch(
+    src,
+    /process\.env/,
+    '数据目录必须由调用方显式传入，boot-state.js 自己读 env 会改变时序语义'
+  );
+});
+
+test('收编后 electron/main.js 通往三个禁入模块的静态路径数均为 0', () => {
+  const { visited, edges } = collectGraph('electron/main.js');
+  const targets = ['src/config.js', 'src/instance-lock.js', 'src/logger.js'];
+  const counts = targets.map((target) => countPaths(edges, 'electron/main.js', target));
+  for (let i = 0; i < targets.length; i += 1) {
+    assert.equal(counts[i], 0, `仍有 ${counts[i]} 条静态路径通往 ${targets[i]}`);
+    assert.ok(!visited.has(targets[i]), `求值图里出现了 ${targets[i]}`);
+  }
+  assert.ok(visited.has('electron/boot-state.js'), 'main.js 应静态 import 新收编的 boot-state.js');
+  console.log(`[module-graph] 收编后通往 ${targets.join(' / ')} 的路径数 = ${counts.join(' / ')}；可达文件数 = ${visited.size}`);
+});
