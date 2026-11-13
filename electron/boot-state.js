@@ -1,7 +1,8 @@
 // 启动状态读写（启动链重写第一步「收编」，2026-11-13）。
 //
 // 这里只放**零项目内依赖**的函数：路径计算、交接标记、render-config、
-// boot-diag 追加、GPU 关闭标记、实例锁交还。所有外部状态（数据目录、当前时间、
+// render-health（连续健康启动计数）、boot-diag 追加、GPU 关闭标记、实例锁交还。
+// 所有外部状态（数据目录、当前时间、
 // 是否为重启子进程、PID）一律由调用方显式传入 —— 本模块不读任何环境变量、
 // 不 import src/config.js / src/instance-lock.js / src/logger.js 等任何项目内模块，
 // 保证 electron/main.js 的静态求值期不新增任何副作用、不固化 DATA_DIR。
@@ -126,6 +127,100 @@ export function patchRenderConfig(dataDir, patch) {
     if (!file) return false;
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify({ ...readRenderConfig(dataDir), ...patch }, null, 2));
+    return true;
+  } catch { return false; }
+}
+
+// ── render-health.json（连续健康启动计数，2026-11-13 第二轮「改判据」）──────
+//
+// 它存在的唯一目的：让**误降级**的机器自己爬回来。渲染沙箱一旦因为连续崩溃被
+// 写成 sandbox:false，那条降级是持久的，而且此前没有任何反悔通道（本机 data
+// 里就躺着一条 2026-11-05 写下的、之后稳定跑了 8 天的降级）。要不要撤销属于
+// 「跨多次启动」的判断，必须有个地方记账，跨进程只能落文件。
+//
+// 与 render-config.json 同一口径：读失败返回默认值、写失败返回 false、绝不抛。
+
+/** render-health.json 的默认内容（文件缺失 / 坏 JSON 时的兜底）。返回新对象，避免调用方改到共享引用。 */
+function defaultRenderHealth() {
+  return {
+    version: 1,
+    consecutiveHealthyBoots: 0,
+    gpuCrashEver: false,
+    lastHealthyAt: '',
+    lastDowngradeAt: ''
+  };
+}
+
+/**
+ * render-health.json 路径。dataDir 为空时返回空串。
+ * @param {string} dataDir 数据目录。
+ * @returns {string} 绝对路径；无目录时为 ''。
+ */
+export function renderHealthPath(dataDir) {
+  return dataDir ? path.join(dataDir, 'render-health.json') : '';
+}
+
+/**
+ * 读 render-health.json：缺失 / 坏 JSON / 非对象 / 字段类型不对，一律回落默认值。
+ *
+ * 为什么每个字段都单独校验：这份文件是「自动撤销降级」的唯一证据源，一个
+ * `consecutiveHealthyBoots: "5"`（字符串）或 NaN 就足以把判定骗过去。这里先把
+ * 脏值归一成安全默认；判定侧（render-policy.js 的 shouldRevokeCrashCompat）
+ * 还会再用 Number.isFinite 兜一层 —— 两道防线是刻意的，判定函数不能假设
+ * 调用方一定传进来干净数据。
+ * @param {string} dataDir 数据目录。
+ * @returns {{version: number, consecutiveHealthyBoots: number, gpuCrashEver: boolean, lastHealthyAt: string, lastDowngradeAt: string}}
+ */
+export function readRenderHealth(dataDir) {
+  const fallback = defaultRenderHealth();
+  const file = renderHealthPath(dataDir);
+  try {
+    if (!file) return fallback;
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!parsed || typeof parsed !== 'object') return fallback;
+    return {
+      version: Number.isFinite(parsed.version) ? parsed.version : fallback.version,
+      consecutiveHealthyBoots: Number.isFinite(parsed.consecutiveHealthyBoots)
+        ? Math.max(0, Math.floor(parsed.consecutiveHealthyBoots))
+        : fallback.consecutiveHealthyBoots,
+      gpuCrashEver: parsed.gpuCrashEver === true,
+      lastHealthyAt: typeof parsed.lastHealthyAt === 'string' ? parsed.lastHealthyAt : fallback.lastHealthyAt,
+      lastDowngradeAt: typeof parsed.lastDowngradeAt === 'string' ? parsed.lastDowngradeAt : fallback.lastDowngradeAt
+    };
+  } catch { return fallback; }
+}
+
+/**
+ * 浅合并写 render-health.json：读旧值 → 归一 → 合并 → mkdir(dirname) → writeFileSync。
+ *
+ * 两条硬约定（都不是可选的细节）：
+ *   · `gpuCrashEver` **只增不减**：一旦为 true，patch 里传 false 也写不回去。
+ *     它记录的是「这台机器见过 GPU 崩溃」这个历史事实，不是可以翻转的开关。
+ *   · `consecutiveHealthyBoots` 永远落成非负整数（脏值归零），避免写出
+ *     NaN / "5" / -1 把后续判定带偏。
+ * 任何异常（含目录不可写）返回 false，**不抛**。
+ * @param {string} dataDir 数据目录。
+ * @param {object} patch 要合并的字段。
+ * @returns {boolean} 写入成功为 true，失败为 false。
+ */
+export function patchRenderHealth(dataDir, patch) {
+  const file = renderHealthPath(dataDir);
+  try {
+    if (!file) return false;
+    const current = readRenderHealth(dataDir);
+    const merged = { ...current, ...(patch && typeof patch === 'object' ? patch : {}) };
+    // 显式重建五个规范字段：未知键不落盘（v1 schema 之外的东西不该被这个版本写出去）。
+    const next = {
+      version: Number.isFinite(merged.version) ? merged.version : current.version,
+      consecutiveHealthyBoots: Number.isFinite(merged.consecutiveHealthyBoots)
+        ? Math.max(0, Math.floor(merged.consecutiveHealthyBoots))
+        : 0,
+      gpuCrashEver: current.gpuCrashEver === true || merged.gpuCrashEver === true,
+      lastHealthyAt: typeof merged.lastHealthyAt === 'string' ? merged.lastHealthyAt : current.lastHealthyAt,
+      lastDowngradeAt: typeof merged.lastDowngradeAt === 'string' ? merged.lastDowngradeAt : current.lastDowngradeAt
+    };
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(next, null, 2));
     return true;
   } catch { return false; }
 }

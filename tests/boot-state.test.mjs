@@ -21,6 +21,9 @@ import {
   renderConfigPath,
   readRenderConfig,
   patchRenderConfig,
+  renderHealthPath,
+  readRenderHealth,
+  patchRenderHealth,
   bootDiagPath,
   appendBootDiag,
   gpuOffFlagPath,
@@ -365,4 +368,138 @@ test('readHandover：不传 now 时判定使用 readFileSync 之后的 Date.now(
     fs.readFileSync = realReadFileSync;
     Date.now = realDateNow;
   }
+});
+
+// ── render-health.json：连续健康启动计数的读写（2026-11-13 第二轮）──────────
+//
+// 这份文件是「自动撤销崩溃降级」的唯一证据源（判定见 render-policy.js 的
+// shouldRevokeCrashCompat）。它坏掉的表现非常隐蔽：不报错、不崩，
+// 只是那台机器的渲染沙箱**再也不会回来**。所以下面把「读脏值」和
+// 「写脏值」两头的兜底都钉死。
+
+/** render-health.json 的规范默认内容。 */
+const HEALTH_DEFAULT = {
+  version: 1,
+  consecutiveHealthyBoots: 0,
+  gpuCrashEver: false,
+  lastHealthyAt: '',
+  lastDowngradeAt: ''
+};
+
+/** 把字符串原样写进 dataDir 的 render-health.json。 */
+function writeHealth(t, dir, raw) {
+  fs.writeFileSync(renderHealthPath(dir), raw);
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+test('renderHealthPath：文件名逐字一致，空 dataDir 返回空串', (t) => {
+  const dir = tmpDir(t);
+  assert.equal(renderHealthPath(dir), path.join(dir, 'render-health.json'));
+  assert.equal(renderHealthPath(''), '');
+  assert.equal(renderHealthPath(undefined), '');
+});
+
+test('readRenderHealth：文件不存在 → 默认对象（计数 0 ⇒ 一切撤销都 false，行为与今天一致）', (t) => {
+  const dir = tmpDir(t);
+  assert.deepEqual(readRenderHealth(dir), HEALTH_DEFAULT);
+  assert.deepEqual(readRenderHealth(''), HEALTH_DEFAULT);
+  assert.deepEqual(readRenderHealth(undefined), HEALTH_DEFAULT);
+});
+
+test('readRenderHealth：坏 JSON / 非对象 → 默认对象，不抛', (t) => {
+  for (const raw of ['{ 这不是 JSON', '', 'null', '"字符串"', '123', '[]', 'true']) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-health-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    writeHealth(t, dir, raw);
+    assert.deepEqual(readRenderHealth(dir), HEALTH_DEFAULT, `raw=${JSON.stringify(raw)} 应回落默认值`);
+  }
+});
+
+test('readRenderHealth：脏字段逐个归一（字符串计数 / null / 非布尔 gpuCrashEver 都不许漏过）', (t) => {
+  const dir = tmpDir(t);
+  writeHealth(t, dir, JSON.stringify({
+    version: '2',
+    consecutiveHealthyBoots: '5',
+    gpuCrashEver: 'true',
+    lastHealthyAt: 12345,
+    lastDowngradeAt: null
+  }));
+  assert.deepEqual(readRenderHealth(dir), HEALTH_DEFAULT, '全部字段非法 ⇒ 全部回落默认值');
+
+  // 单个脏字段只影响自己
+  writeHealth(t, dir, JSON.stringify({ consecutiveHealthyBoots: 7, gpuCrashEver: true, version: 1, lastHealthyAt: 'A', lastDowngradeAt: 'B' }));
+  assert.deepEqual(readRenderHealth(dir), {
+    version: 1, consecutiveHealthyBoots: 7, gpuCrashEver: true, lastHealthyAt: 'A', lastDowngradeAt: 'B'
+  });
+});
+
+test('readRenderHealth：负数 / 小数计数被归一成非负整数（判定侧才不会看到 2.5 或 -1）', (t) => {
+  const dir = tmpDir(t);
+  writeHealth(t, dir, JSON.stringify({ consecutiveHealthyBoots: -3 }));
+  assert.equal(readRenderHealth(dir).consecutiveHealthyBoots, 0);
+  writeHealth(t, dir, JSON.stringify({ consecutiveHealthyBoots: 2.9 }));
+  assert.equal(readRenderHealth(dir).consecutiveHealthyBoots, 2);
+});
+
+test('patchRenderHealth：文件不存在时创建，落盘的字节格式与字段顺序固定', (t) => {
+  const dir = tmpDir(t);
+  assert.equal(patchRenderHealth(dir, { consecutiveHealthyBoots: 1, lastHealthyAt: 'T1' }), true);
+  const raw = fs.readFileSync(renderHealthPath(dir), 'utf8');
+  assert.equal(raw, JSON.stringify({
+    version: 1,
+    consecutiveHealthyBoots: 1,
+    gpuCrashEver: false,
+    lastHealthyAt: 'T1',
+    lastDowngradeAt: ''
+  }, null, 2), '字段顺序/缩进必须稳定，否则每次读写都在抖动');
+  assert.deepEqual(readRenderHealth(dir), {
+    version: 1, consecutiveHealthyBoots: 1, gpuCrashEver: false, lastHealthyAt: 'T1', lastDowngradeAt: ''
+  });
+});
+
+test('patchRenderHealth：浅合并不丢旧字段（先记 gpuCrashEver，再记健康计数）', (t) => {
+  const dir = tmpDir(t);
+  patchRenderHealth(dir, { gpuCrashEver: true, lastDowngradeAt: 'DOWN' });
+  patchRenderHealth(dir, { consecutiveHealthyBoots: 2, lastHealthyAt: 'UP' });
+  assert.deepEqual(readRenderHealth(dir), {
+    version: 1, consecutiveHealthyBoots: 2, gpuCrashEver: true, lastHealthyAt: 'UP', lastDowngradeAt: 'DOWN'
+  });
+});
+
+test('patchRenderHealth：gpuCrashEver 只增不减（patch 传 false 也改不回去）', (t) => {
+  const dir = tmpDir(t);
+  patchRenderHealth(dir, { gpuCrashEver: true });
+  assert.equal(readRenderHealth(dir).gpuCrashEver, true);
+  patchRenderHealth(dir, { gpuCrashEver: false });
+  assert.equal(readRenderHealth(dir).gpuCrashEver, true, '历史事实不能被翻转');
+
+  // 从 false 起手不能被伪造：只有明确的 true 才算
+  const dir2 = tmpDir(t);
+  patchRenderHealth(dir2, { gpuCrashEver: 'true' });
+  assert.equal(readRenderHealth(dir2).gpuCrashEver, false);
+});
+
+test('patchRenderHealth：脏 patch 值归一（NaN / 字符串 / 负数都不会写进文件）', (t) => {
+  const dir = tmpDir(t);
+  patchRenderHealth(dir, { consecutiveHealthyBoots: 5 });
+  patchRenderHealth(dir, { consecutiveHealthyBoots: '9' });
+  assert.equal(readRenderHealth(dir).consecutiveHealthyBoots, 0, '字符串计数按非法处理 ⇒ 归零');
+
+  patchRenderHealth(dir, { consecutiveHealthyBoots: 4 });
+  patchRenderHealth(dir, { consecutiveHealthyBoots: -1 });
+  assert.equal(readRenderHealth(dir).consecutiveHealthyBoots, 0, '负数归零');
+});
+
+test('patchRenderHealth：目录不可写 → 返回 false，不抛，也不改动已有文件', (t) => {
+  const dir = tmpDir(t);
+  patchRenderHealth(dir, { consecutiveHealthyBoots: 3 });
+  const before = fs.readFileSync(renderHealthPath(dir), 'utf8');
+  const ok = withFailingFs('writeFileSync', () => patchRenderHealth(dir, { consecutiveHealthyBoots: 0 }));
+  assert.equal(ok, false);
+  assert.equal(fs.readFileSync(renderHealthPath(dir), 'utf8'), before, '写失败不能把旧文件截断');
+
+  // 父路径是普通文件（ENOTDIR）同样只返回 false
+  assert.equal(patchRenderHealth(unwritableDataDir(t), { consecutiveHealthyBoots: 1 }), false);
+  assert.equal(patchRenderHealth('', { consecutiveHealthyBoots: 1 }), false);
 });
