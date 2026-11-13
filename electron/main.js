@@ -41,6 +41,26 @@ import {
 // 布局探测复用 src/self-update.js 的 resolveRootDir（两者不 import electron，纯 node 可跑）。
 import { runJanitor } from './self-update-apply.js';
 import { resolveRootDir } from '../src/self-update.js';
+// 启动状态读写（2026-11-13 收编）：零项目内依赖，只用 node:fs / node:path。
+// 绝不能让它 import config.js / instance-lock.js / logger.js —— 静态求值期一旦
+// 固化 DATA_DIR，数据目录就会分裂（护栏见 tests/self-update-module-graph.test.mjs）。
+// 注意：交接/锁的 dataDir 调用点仍按原样取 `process.env.QQ_AGENT_DATA_DIR ||
+// RENDER_DATA_DIR`（本文件下方 resolveDataDir() 运行时才写入 env；开发版/第二实例
+// 与顶层 RENDER_DATA_DIR 并不相等），新模块本身不读 env。
+import {
+  RELAUNCH_HANDOVER_MS,
+  handoverPath,
+  writeHandover,
+  readHandover,
+  clearHandover,
+  renderConfigPath,
+  readRenderConfig,
+  patchRenderConfig,
+  gpuOffFlagPath,
+  appendBootDiag,
+  writeGpuOffFlag,
+  releaseOwnLock
+} from './boot-state.js';
 
 
 // ── GPU 硬件加速：默认启用（壁纸套件）────────────────────────────────────
@@ -62,7 +82,7 @@ const RENDER_DATA_DIR = (() => {
   if (env) return env;
   try { return path.join(path.dirname(app.getPath('exe')), 'data'); } catch { return ''; }
 })();
-const RENDER_GPU_OFF_FLAG = RENDER_DATA_DIR ? path.join(RENDER_DATA_DIR, 'render-gpu-off.flag') : '';
+const RENDER_GPU_OFF_FLAG = gpuOffFlagPath(RENDER_DATA_DIR);
 
 const gpuForce = String(process.env.QQ_AGENT_ENABLE_GPU ?? '').trim();
 const gpuDisable = String(process.env.QQ_AGENT_DISABLE_GPU ?? '').trim();
@@ -86,7 +106,7 @@ if (!renderGpuOff) {
   // （写 data\render-config.json 的 hwVideoDecode=false），修好驱动再切回来。
   let hwVideoDecode = true;
   try {
-    const rcPath = RENDER_DATA_DIR ? path.join(RENDER_DATA_DIR, 'render-config.json') : '';
+    const rcPath = renderConfigPath(RENDER_DATA_DIR);
     if (rcPath) {
       const rc = JSON.parse(fs.readFileSync(rcPath, 'utf8'));
       if (rc && typeof rc.hwVideoDecode === 'boolean') hwVideoDecode = rc.hwVideoDecode;
@@ -116,28 +136,6 @@ if (!renderGpuOff) {
 //
 // 15 秒是上限：覆盖实测 6.6 秒的完整重启耗时并留足余量。超时的标记按不存在
 // 处理，绝不让一个残留文件把用户锁在门外。
-const RELAUNCH_HANDOVER_MS = 15_000;
-
-function relaunchHandoverPath() {
-  const dir = process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR;
-  return dir ? path.join(dir, '.relaunch-handover') : '';
-}
-
-/** 写交接标记（relaunch 前调用）。写不进去不影响重启，只是少一层保护。 */
-function writeRelaunchHandover(reason) {
-  const file = relaunchHandoverPath();
-  if (!file) {
-    console.log(`[relaunch] 交接标记跳过（${reason}）：数据目录未就绪`);
-    return;
-  }
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify({ pid: process.pid, at: Date.now(), reason }));
-    console.log(`[relaunch] 已写交接标记（${reason}）→ ${file}`);
-  } catch (error) {
-    console.log(`[relaunch] 交接标记写入失败（${reason}）：${error?.message ?? error}`);
-  }
-}
 
 /**
  * 交接标记的环境变量标识：relaunch 的子进程会继承父进程环境，
@@ -156,31 +154,6 @@ if (isRelaunchChild) {
   try { delete process.env[RELAUNCH_CHILD_ENV]; } catch { /* 忽略 */ }
 }
 
-/**
- * 读交接标记：新鲜 + 本进程不是重启接收方，才算"要拦的双击"。
- *   ① 新鲜（≤15s）：残留标记不能把用户永久锁在门外。
- *   ② 本进程带 RELAUNCH_CHILD_ENV → 它就是交接的接收方，标记是通行证不是路障。
- * 剩下的情况才是真正要拦的：**用户的双击打岔了一个正在进行的自愈重启**。
- */
-function readRelaunchHandover() {
-  if (isRelaunchChild) return null;
-  const file = relaunchHandoverPath();
-  if (!file) return null;
-  try {
-    const obj = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const at = Number(obj?.at) || 0;
-    if (!at || Date.now() - at > RELAUNCH_HANDOVER_MS) return null;
-    console.log(`[relaunch] 读到交接标记（${obj?.reason || '未知'}，${Date.now() - at}ms 前）：本进程让路`);
-    return obj;
-  } catch { return null; }
-}
-
-/** 清交接标记（新进程窗口真正起来后调用）。 */
-function clearRelaunchHandover() {
-  const file = relaunchHandoverPath();
-  if (!file) return;
-  try { fs.unlinkSync(file); } catch { /* 不存在就算了 */ }
-}
 
 /**
  * 重启前主动交还实例锁（2026-11-05）。
@@ -199,24 +172,13 @@ function clearRelaunchHandover() {
  * 只删**自己**的锁（PID 比对）：不是自己的绝不碰，宁可让新进程走一遍
  * 残留锁清理，也不能误删另一个真正在运行的实例的锁。
  */
-function releaseOwnLockBeforeRelaunch(reason) {
-  const dir = process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR;
-  if (!dir) return;
-  const lockPath = path.join(dir, 'qq-agent.lock');
-  try {
-    const parsed = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
-    if (Number(parsed?.pid) !== process.pid) return;      // 不是自己的锁：不碰
-    fs.unlinkSync(lockPath);
-    console.log(`[relaunch] 已交还实例锁（${reason}），重启进程不会撞锁`);
-  } catch { /* 锁不存在 / 读不出 / 删不掉：都不该阻断重启 */ }
-}
 
 /**
  * 重启前给一句可见反馈（2026-11-05）。
  *
  * `app.relaunch()` 到新窗口出现实测约 3.4 秒，叠加崩溃计数的 2~3 秒，
  * 屏幕上最长有 6 秒什么都没有 —— 用户只会理解为"没打开"，然后重复双击，
- * 进而撞上 releaseOwnLockBeforeRelaunch 注释里那条竞态。
+ * 进而撞上 releaseOwnLock 注释里那条竞态。
  *
  * ⚠️ 必须节流（24 小时一次）：显卡/驱动有问题的机器每次启动都会崩一次，
  *    不节流这条通知就变成"每次开机弹一下"的骚扰，比"没反应"更招人烦。
@@ -231,7 +193,7 @@ function notifyRelaunching(body) {
   try {
     const Notification = electronApi.Notification ?? electronApi.default?.Notification;
     if (!Notification?.isSupported?.()) return;
-    const handoverFile = relaunchHandoverPath();
+    const handoverFile = handoverPath(process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR);
     const stamp = handoverFile ? path.join(path.dirname(handoverFile), '.relaunch-notified') : '';
     if (stamp) {
       try {
@@ -272,14 +234,14 @@ function noteRenderCrash(kind) {
   gpuCrashCount += 1;
   try {
     if (RENDER_DATA_DIR) {
-      fs.appendFileSync(path.join(RENDER_DATA_DIR, 'boot-diag.log'),
+      appendBootDiag(RENDER_DATA_DIR,
         `${new Date().toISOString()} 渲染相关进程崩溃 kind=${kind} count=${gpuCrashCount}\n`);
     }
   } catch { /* 日志失败不影响回退 */ }
   if (gpuCrashCount >= 3 && !relaunchScheduled) {
     relaunchScheduled = true;
     try {
-      if (RENDER_GPU_OFF_FLAG) fs.writeFileSync(RENDER_GPU_OFF_FLAG, `${new Date().toISOString()} kind=${kind}\n`);
+      if (RENDER_GPU_OFF_FLAG) writeGpuOffFlag(RENDER_DATA_DIR, `${new Date().toISOString()} kind=${kind}\n`);
     } catch { /* 写不进就只能下次再试 */ }
     console.error('[render] GPU 反复崩溃，已写 render-gpu-off.flag，重启进软件模式');
     // 顺序有讲究：
@@ -287,8 +249,8 @@ function noteRenderCrash(kind) {
     //   ② 再交还实例锁 —— 必须在 relaunch 之前，否则新进程会撞上自己的锁；
     //   ③ 最后才 relaunch + exit —— 顺序反了就是上面那段注释里的"打不开"。
     notifyRelaunching('检测到显卡加速不可用（GPU 子进程反复崩溃），正在自动切换到兼容模式，请稍候几秒。');
-    writeRelaunchHandover('GPU 崩溃自愈');
-    releaseOwnLockBeforeRelaunch('GPU 崩溃自愈');
+    writeHandover(process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR, 'GPU 崩溃自愈');
+    releaseOwnLock(process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR, process.pid, 'GPU 崩溃自愈');
     relaunchAsSelfHealing();
     app.exit(0);
   }
@@ -326,13 +288,13 @@ function noteRendererCrash(where) {
   sandboxCrashCount += 1;
   try {
     if (RENDER_DATA_DIR) {
-      fs.appendFileSync(path.join(RENDER_DATA_DIR, 'boot-diag.log'),
+      appendBootDiag(RENDER_DATA_DIR,
         `${new Date().toISOString()} 渲染进程崩溃 where=${where} count=${sandboxCrashCount}\n`);
     }
   } catch { /* 诊断日志写不进去不影响降级 */ }
   if (sandboxCrashCount < 3) return;
   sandboxFallbackDone = true;
-  const ok = patchRenderConfig({
+  const ok = patchRenderConfig(RENDER_DATA_DIR, {
     sandbox: false,
     // ⚠️ sandboxOffBy 必须写明来源（D2，2026-11-12 审查）：这一位以前是空串，
     //    而 render-policy.js 的自动撤销（shouldRevokeAutoCompat）只认 AUTO_COMPAT_MARK
@@ -348,8 +310,8 @@ function noteRendererCrash(where) {
   console.error('[render] 渲染进程连续崩溃 → 已切兼容模式（关闭渲染沙箱），重启应用');
   // 同 noteRenderCrash：提示 → 交还锁 → 重启，顺序不能换。
   notifyRelaunching('检测到界面进程被本机安全软件拦截，正在自动切换到兼容模式，请稍候几秒。');
-  writeRelaunchHandover('渲染崩溃自愈');
-  releaseOwnLockBeforeRelaunch('渲染崩溃自愈');
+  writeHandover(process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR, '渲染崩溃自愈');
+  releaseOwnLock(process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR, process.pid, '渲染崩溃自愈');
   relaunchAsSelfHealing();
   app.exit(0);
 }
@@ -374,23 +336,7 @@ function noteRendererCrash(where) {
 //     2026-10-28 之前只有 QQ_AGENT_NO_SANDBOX=1 环境变量这一条路 —— 对收包人
 //     等于不存在（没人会去设），于是被安全软件拦杀的机器只能永远卡在启动崩溃里。
 //   - webPreferences 里仍写 sandbox:false 吗？不写 —— 见下方 sandbox 字段的说明。
-const RENDER_CONFIG_PATH = RENDER_DATA_DIR ? path.join(RENDER_DATA_DIR, 'render-config.json') : '';
-function readRenderConfig() {
-  try {
-    if (!RENDER_CONFIG_PATH) return {};
-    const parsed = JSON.parse(fs.readFileSync(RENDER_CONFIG_PATH, 'utf8'));
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch { return {}; }
-}
-function patchRenderConfig(patch) {
-  try {
-    if (!RENDER_CONFIG_PATH) return false;
-    fs.mkdirSync(path.dirname(RENDER_CONFIG_PATH), { recursive: true });
-    fs.writeFileSync(RENDER_CONFIG_PATH, JSON.stringify({ ...readRenderConfig(), ...patch }, null, 2));
-    return true;
-  } catch { return false; }
-}
-const STARTUP_RENDER_CONFIG = readRenderConfig();
+const STARTUP_RENDER_CONFIG = readRenderConfig(RENDER_DATA_DIR);
 let SANDBOX_OFF_BY_CONFIG = STARTUP_RENDER_CONFIG.sandbox === false;
 
 // ── 自动兼容：软件渲染 + 桌宠启用 ⇒ 主动关渲染沙箱（不靠用户点、不靠环境变量）──
@@ -428,7 +374,7 @@ if (shouldRevokeAutoCompat({
   keepSandbox: KEEP_SANDBOX,
   petVisible: PET_VISIBLE
 })) {
-  const ok = patchRenderConfig({
+  const ok = patchRenderConfig(RENDER_DATA_DIR, {
     sandbox: true,
     sandboxOffBy: '',
     sandboxOffReason: '',
@@ -449,7 +395,7 @@ const AUTO_COMPAT_FOR_PET = shouldAutoCompatibleForPet({
   petVisible: PET_VISIBLE
 });
 if (AUTO_COMPAT_FOR_PET) {
-  const ok = patchRenderConfig({
+  const ok = patchRenderConfig(RENDER_DATA_DIR, {
     sandbox: false,
     sandboxOffBy: 'auto-pet',
     sandboxOffReason:
@@ -933,7 +879,7 @@ function appVersionText() {
 // 和 loadURL 交错出现）。让路必须是一次明确的决策，不能只靠另一条链自己收场。
 let bootAborted = false;
 
-const handover = readRelaunchHandover();
+const handover = readHandover(process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR, { isRelaunchChild, maxAgeMs: RELAUNCH_HANDOVER_MS });
 const gotLock = handover ? false : app.requestSingleInstanceLock();
 if (!gotLock) {
   bootAborted = true;
@@ -2971,7 +2917,7 @@ app.whenReady().then(async () => {
     // 写进 render-config.json 是**持久化**的，下次启动直接生效，不用再点。
     desktopPetHost.enableCompatMode = () => {
       if (NO_SANDBOX_ESCAPE) return { ok: true, alreadyOn: true };
-      const ok = patchRenderConfig({
+      const ok = patchRenderConfig(RENDER_DATA_DIR, {
         sandbox: false,
         sandboxOffReason: '用户在「桌宠」页手动开启兼容模式（软件渲染下启用 Live2D 需要软件 GL）',
         sandboxOffAt: new Date().toISOString()
@@ -2980,8 +2926,8 @@ app.whenReady().then(async () => {
       setTimeout(() => {
         // 这条路径同样要交还锁：用户点「开启兼容模式」重启时若撞上旧锁，
         // 会看到一个"已经在运行"的框而窗口不出现（与崩溃自愈那条同源）。
-        try { writeRelaunchHandover('用户开启兼容模式'); } catch { /* 忽略 */ }
-        try { releaseOwnLockBeforeRelaunch('用户开启兼容模式'); } catch { /* 忽略 */ }
+        try { writeHandover(process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR, '用户开启兼容模式'); } catch { /* 忽略 */ }
+        try { releaseOwnLock(process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR, process.pid, '用户开启兼容模式'); } catch { /* 忽略 */ }
         try { relaunchAsSelfHealing(); } catch { /* 忽略 */ }
         app.exit(0);
       }, 400);
@@ -3009,7 +2955,7 @@ app.whenReady().then(async () => {
     }
     // 自愈重启交接完成：窗口已经真正建出来，撤掉让路标记。
     // 此后用户再双击恢复原语义（唤出窗口 / 提示已在运行），不会被误判成"正在重启"。
-    clearRelaunchHandover();
+    clearHandover(process.env.QQ_AGENT_DATA_DIR || RENDER_DATA_DIR);
     // 桌宠窗口：必须等 core.start() 拿到**真实端口**后再起（pet.html 走同源 HTTP，
     // 端口错了就是白屏/404）。放在 if/else 之后而不是 createWindow 内部 ——
     // 第二实例复用已有窗口那条分支同样要拉起桌宠。
