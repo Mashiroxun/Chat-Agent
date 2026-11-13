@@ -77,3 +77,53 @@ export function shouldRevokeAutoCompat({ sandboxOffBy, keepSandbox, petVisible }
   if (sandboxOffBy !== AUTO_COMPAT_MARK) return false;
   return petVisible === false;
 }
+
+// ── 崩溃降级（sandbox:false by auto-crash）的自动撤销（2026-11-13）──────────
+//
+// 为什么还需要这一条：上面 shouldRevokeAutoCompat 只认 'auto-pet'，而
+// noteRendererCrash 写的是 'auto-crash'、更早的版本写的是**空串** —— 于是
+// 「渲染进程连崩 3 次 → 关沙箱 → 重启」这条降级一旦落盘就**永远出不来**。
+// 本机 data 就是活证据：2026-11-05 留下 sandbox:false + sandboxOffBy:""，
+// 之后稳定跑了 8 天，配置里那层安全纵深再也没有回来过。
+//
+// 反向通道需要一个跨启动的证据：连续 N 次「健康启动」（见 main.js 的 60 秒
+// 健康哨兵）。误降级（安全软件临时抽风、驱动更新后恢复）的机器会自动爬回来；
+// 真的不能开沙箱的机器每次启动都会在 60 秒内崩掉，计数回到 0，永远撤不了。
+
+/** 应用自己写进配置的崩溃降级标记（noteRendererCrash）。 */
+export const AUTO_CRASH_MARK = 'auto-crash';
+
+/** 撤销崩溃降级所需的「连续健康启动」次数。 */
+export const SANDBOX_REVOKE_MIN_HEALTHY_BOOTS = 3;
+
+/**
+ * 是否应该撤销「渲染进程连续崩溃」造成的关沙箱降级。
+ *
+ * 四条边界，缺一不可（每一条都对应一次真实误伤，别删）：
+ *
+ *  ① keepSandbox：用户/排障用 QQ_AGENT_KEEP_SANDBOX=1 明确要求保沙箱，
+ *     那是人的决定，自动逻辑不许覆盖（与 shouldRevokeAutoCompat 同一口径：
+ *     truthy 即视为"人要求保沙箱"）。
+ *  ② sandboxOffBy 必须是 'auto-crash' 或 **严格等于空串 ''**。
+ *     ⚠️ 这是整个改动最容易改错的一处：空串是 2026-11-05 那版写下的形态，
+ *     要认；而 `undefined` / `null` 表示**用户在「桌宠」页手动开启兼容模式** ——
+ *     main.js 的 enableCompatMode 压根不写 sandboxOffBy 这个字段。那是用户意图，
+ *     一旦被自动改回，用户下次启动会掉回「被安全软件拦杀」的状态且毫无提示。
+ *     所以绝不能用 `!sandboxOffBy` 之类的"空值统一处理"：undefined 不是 ''。
+ *  ③ consecutiveHealthyBoots 必须是**有限数字**。NaN / undefined / '3'（字符串）
+ *     一律 false —— 不靠 `>=` 的隐式转换兜底，那种兜底会让 '3' >= 3 意外成立。
+ *  ④ 计数达到阈值才算数。
+ *
+ * 未知来源串（比如将来新增的降级原因）也返回 false：保守优先。
+ * 误撤销的代价是用户重新陷入「开箱即坏」，多跑几天关沙箱只是少一层纵深。
+ *
+ * @param {{sandboxOffBy?: string, keepSandbox?: boolean, consecutiveHealthyBoots?: number, threshold?: number}} [input]
+ * @returns {boolean}
+ */
+export function shouldRevokeCrashCompat({ sandboxOffBy, keepSandbox, consecutiveHealthyBoots, threshold } = {}) {
+  if (keepSandbox) return false;
+  if (sandboxOffBy !== AUTO_CRASH_MARK && sandboxOffBy !== '') return false;
+  if (!Number.isFinite(consecutiveHealthyBoots)) return false;
+  const need = Number.isFinite(threshold) && threshold > 0 ? threshold : SANDBOX_REVOKE_MIN_HEALTHY_BOOTS;
+  return consecutiveHealthyBoots >= need;
+}

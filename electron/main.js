@@ -26,7 +26,14 @@ import { createDesktopPetHost } from './desktop-pet.js';
 import { checkExternalUrl, DEFAULT_ALLOW_HOSTS } from './external-link.js';
 import { showDialog, DIALOG_TIMEOUT } from './dialog-safe.js';
 // 渲染策略判定（纯函数、不 import electron，便于单测；见 tests/auto-compat.test.mjs）
-import { readPetVisible, shouldAutoCompatibleForPet, shouldRevokeAutoCompat } from './render-policy.js';
+// SANDBOX_REVOKE_MIN_HEALTHY_BOOTS / shouldRevokeCrashCompat：崩溃降级的自动撤销（2026-11-13）
+import {
+  readPetVisible,
+  shouldAutoCompatibleForPet,
+  shouldRevokeAutoCompat,
+  shouldRevokeCrashCompat,
+  SANDBOX_REVOKE_MIN_HEALTHY_BOOTS
+} from './render-policy.js';
 // ⚠️ 导出名必须与 crash-dumps.js 里**完全一致**（`pruneCrashDumps`）。2026-10-16 踩过：
 //    这里曾写成 `pruneDumps as ...`，而 `node --check` 只查语法、查不出"具名导出不存在"
 //    这种链接期错误 —— 结果是应用启动即崩（Uncaught Exception: does not provide an
@@ -56,6 +63,8 @@ import {
   renderConfigPath,
   readRenderConfig,
   patchRenderConfig,
+  readRenderHealth,
+  patchRenderHealth,
   gpuOffFlagPath,
   appendBootDiag,
   writeGpuOffFlag,
@@ -222,12 +231,79 @@ function relaunchAsSelfHealing() {
   app.relaunch();
 }
 
+// ── 健康启动哨兵（2026-11-13）：为「撤销崩溃降级」攒证据 ────────────────────
+//
+// 上面两个 note* 函数都有同一个毛病：它们能把 sandbox:false 写进配置，但那条
+// 降级是**持久**的 —— 一旦落盘，没有任何反向通道能把它撤回来。要撤就得先有
+// 证据：「这台机器最近连续 N 次启动都健康」。计数落在 data/render-health.json，
+// 判定收在 render-policy.js 的 shouldRevokeCrashCompat（纯函数、可单测）。
+//
+// 「健康」的定义必须严，不能拿「进程起来了」充数：
+//   · 页面 probePage 首次报 ready 之后才开始计时（loading 壳都没撤不算启动完成）；
+//   · 60 秒窗口内只要有过一次渲染/GPU 崩溃（含被安全软件拦杀、被看门狗判死）就不算；
+//   · 60 秒到点时用户正在退出（quitting）也不算 —— 那种"健康"没有意义；
+//   · 窗口已经没了也不算。
+// 60 秒是照 noteRendererCrash / noteRenderCrash 的「60 秒内连崩 3 次」窗口取的：
+// 真正被安全软件拦杀的机器，崩溃都发生在启动后几十秒内，跑满 60 秒是很强的信号。
+const HEALTHY_BOOT_WINDOW_MS = 60_000;
+/** 本次启动是否出现过渲染/GPU 崩溃。两个 note* 函数入口处置 true，只增不减。 */
+let bootHadCrash = false;
+/** 健康哨兵定时器句柄；null 表示没有在跑。 */
+let healthyBootTimer = null;
+/** 一轮启动只判一次健康（窗口重建/看门狗重启都不会再挂第二个哨兵）。 */
+let healthyBootArmed = false;
+
+/** 清掉健康哨兵（应用退出时调，避免留一个悬挂定时器）。 */
+function clearHealthyBootTimer() {
+  if (!healthyBootTimer) return;
+  try { clearTimeout(healthyBootTimer); } catch { /* 已触发/已清：忽略 */ }
+  healthyBootTimer = null;
+}
+
+/**
+ * 页面首次就绪后挂 60 秒健康哨兵。幂等：每轮启动只挂一次。
+ * 到点时按上面的四条规则决定是否给连续健康启动计数 +1。
+ * @returns {void}
+ */
+function armHealthyBootTimer() {
+  if (healthyBootArmed) return;
+  healthyBootArmed = true;
+  healthyBootTimer = setTimeout(() => {
+    healthyBootTimer = null;
+    if (bootHadCrash) {
+      logKey('render', '[render] 本次启动 60 秒内出现过渲染/GPU 崩溃 → 不计入连续健康启动');
+      return;
+    }
+    if (quitting) return;                                    // 用户在退出，这次"健康"不算数
+    if (!mainWindow || mainWindow.isDestroyed()) return;      // 窗口已经没了
+    const current = readRenderHealth(RENDER_DATA_DIR);
+    const before = Number.isFinite(current.consecutiveHealthyBoots) ? current.consecutiveHealthyBoots : 0;
+    const next = before + 1;
+    const ok = patchRenderHealth(RENDER_DATA_DIR, {
+      consecutiveHealthyBoots: next,
+      lastHealthyAt: new Date().toISOString()
+    });
+    if (ok) {
+      logKey('render', `[render] 本次启动健康满 60 秒 → 连续健康启动 ${before} → ${next}`
+        + `（满 ${SANDBOX_REVOKE_MIN_HEALTHY_BOOTS} 次将撤销崩溃降级、恢复渲染沙箱）`);
+    } else {
+      logKey('render', '[render] 健康启动计数写入失败（data 目录不可写），不影响本次运行');
+    }
+  }, HEALTHY_BOOT_WINDOW_MS);
+  // 别让这个 60 秒定时器把退出拖住（显式 clear 见 before-quit，unref 是第二道保险）。
+  if (typeof healthyBootTimer?.unref === 'function') healthyBootTimer.unref();
+}
+
 // GPU 崩溃自动回退（安全网 3）。只在真的启用了 GPU 时生效。
 let gpuCrashCount = 0;
 let gpuCrashWindowStart = Date.now();
 // 防重入：已排定重启后，后续的崩溃回调不得再次触发 relaunch。
 let relaunchScheduled = false;
 function noteRenderCrash(kind) {
+  // 健康哨兵的证据源之一：**任何**一次 GPU 崩溃都让本次启动失去"健康"资格。
+  // 必须在下面的早退分支之前置位 —— 已经在软件模式（renderGpuOff）时虽然不再
+  // 计入降级，但那依然是"这次启动崩过"，不能算健康。
+  bootHadCrash = true;
   if (renderGpuOff) return;   // 已在软件模式：正常崩溃，不归 GPU，不再回退
   const now = Date.now();
   if (now - gpuCrashWindowStart > 60_000) { gpuCrashCount = 0; gpuCrashWindowStart = now; }
@@ -243,6 +319,14 @@ function noteRenderCrash(kind) {
     try {
       if (RENDER_GPU_OFF_FLAG) writeGpuOffFlag(RENDER_DATA_DIR, `${new Date().toISOString()} kind=${kind}\n`);
     } catch { /* 写不进就只能下次再试 */ }
+    // 降级落盘 → 连续健康启动计数清零（2026-11-13）。不清零的话，一台真不能开
+    // 沙箱的机器会带着历史计数跨过阈值，撤销逻辑就成了赌博。gpuCrashEver 记下
+    // 「这台机器见过 GPU 崩溃」这个历史事实（只增不减，见 patchRenderHealth）。
+    patchRenderHealth(RENDER_DATA_DIR, {
+      consecutiveHealthyBoots: 0,
+      gpuCrashEver: true,
+      lastDowngradeAt: new Date().toISOString()
+    });
     console.error('[render] GPU 反复崩溃，已写 render-gpu-off.flag，重启进软件模式');
     // 顺序有讲究：
     //   ① 先发提示 —— 用户得知道"不是没打开，是在切兼容模式"；
@@ -282,6 +366,10 @@ let sandboxCrashCount = 0;
 let sandboxCrashStart = Date.now();
 let sandboxFallbackDone = false;
 function noteRendererCrash(where) {
+  // 同 noteRenderCrash：任何一次渲染进程崩溃都让本次启动失去"健康"资格。
+  // 同样在早退分支之前置位 —— 已经降级（NO_SANDBOX_ESCAPE）时虽然不再计数，
+  // 但"这次启动崩过"是事实。
+  bootHadCrash = true;
   if (NO_SANDBOX_ESCAPE || sandboxFallbackDone) return;   // 已是兼容模式 / 正在降级：不再计数
   const now = Date.now();
   if (now - sandboxCrashStart > 60_000) { sandboxCrashCount = 0; sandboxCrashStart = now; }
@@ -307,6 +395,13 @@ function noteRendererCrash(where) {
     sandboxOffAt: new Date().toISOString()
   });
   if (!ok) { console.error('[render] 渲染进程连续崩溃，但写不进 render-config.json，无法自动降级'); return; }
+  // 降级落盘 → 连续健康启动计数清零（2026-11-13）。语义见 noteRenderCrash 里同一处：
+  // 撤销崩溃降级靠"连续 N 次健康启动"，既然刚刚又崩到降级，这份证据必须作废，
+  // 否则"撤销 → 再崩 → 立刻又满足阈值"会变成无限震荡。
+  patchRenderHealth(RENDER_DATA_DIR, {
+    consecutiveHealthyBoots: 0,
+    lastDowngradeAt: new Date().toISOString()
+  });
   console.error('[render] 渲染进程连续崩溃 → 已切兼容模式（关闭渲染沙箱），重启应用');
   // 同 noteRenderCrash：提示 → 交还锁 → 重启，顺序不能换。
   notifyRelaunching('检测到界面进程被本机安全软件拦截，正在自动切换到兼容模式，请稍候几秒。');
@@ -385,6 +480,52 @@ if (shouldRevokeAutoCompat({
     console.warn('[render] 桌宠已关闭 → 撤销自动兼容模式，本次启动恢复渲染沙箱。');
   } else {
     console.error('[render] 撤销自动兼容失败（data 目录不可写），本轮仍以关沙箱方式启动。');
+  }
+}
+
+// ── 撤销崩溃降级：连续健康启动足够多次，把渲染沙箱还回来 ────────────────────
+// 上一条只认 'auto-pet'，而「渲染进程连崩 3 次」写下的是 'auto-crash'（更早的
+// 2026-11-05 版本写的是空串）—— 于是 noteRendererCrash 那条降级一旦落盘就
+// **永远出不来**：本机 data 里就是 sandbox:false + sandboxOffBy:"" 挂了 8 天。
+// 这里补上反向通道：连续 SANDBOX_REVOKE_MIN_HEALTHY_BOOTS 次「健康启动」
+// （定义见上面的健康启动哨兵）才认定当初那次是误判。
+//
+// 位置有讲究：必须在 shouldAutoCompatibleForPet（下一块）**之前** —— 否则刚撤销
+// 完又被 auto-pet 覆盖回去，等于白做。
+// 严格的边界全在 render-policy.js 的 pure function 里（只认 'auto-crash'/''，
+// 手动开启兼容模式写的是 undefined，绝不自动改回；KEEP_SANDBOX 时不动的）。
+const STARTUP_RENDER_HEALTH = readRenderHealth(RENDER_DATA_DIR);
+if (shouldRevokeCrashCompat({
+  sandboxOffBy: STARTUP_RENDER_CONFIG.sandboxOffBy,
+  keepSandbox: KEEP_SANDBOX,
+  consecutiveHealthyBoots: STARTUP_RENDER_HEALTH.consecutiveHealthyBoots,
+  threshold: SANDBOX_REVOKE_MIN_HEALTHY_BOOTS
+})) {
+  const ok = patchRenderConfig(RENDER_DATA_DIR, {
+    sandbox: true,
+    sandboxOffBy: '',
+    sandboxOffReason: '',
+    sandboxOffAt: ''
+  });
+  if (ok) {
+    SANDBOX_OFF_BY_CONFIG = false;
+    // 清零是防抖动的关键：撤销 → 又被降级 → 立刻又满足阈值 → 无限震荡。
+    // 清零后最快也要再跑满 SANDBOX_REVOKE_MIN_HEALTHY_BOOTS 次完整健康启动才可能再撤。
+    patchRenderHealth(RENDER_DATA_DIR, { consecutiveHealthyBoots: 0 });
+    // 用 console.warn 而不是 logKey：本块在 app ready 之前执行，logKey 的兜底通道
+    // 会往 data/logs 写文件 —— 那会在求值期多出一个写盘副作用，不值得。
+    console.warn(`[render] 连续 ${STARTUP_RENDER_HEALTH.consecutiveHealthyBoots} 次健康启动`
+      + `（阈值 ${SANDBOX_REVOKE_MIN_HEALTHY_BOOTS}），撤销崩溃降级，本次启动恢复渲染沙箱。`);
+    // 但"安全纵深被改回去了"这种事不能只留在 console 里：打包版没有终端，
+    // console.warn 等于没有。boot-diag.log 正是启动期诊断的既有通道
+    // （noteRenderCrash / noteRendererCrash 都往这里写）。
+    try {
+      appendBootDiag(RENDER_DATA_DIR,
+        `${new Date().toISOString()} 撤销崩溃降级：连续健康启动 ${STARTUP_RENDER_HEALTH.consecutiveHealthyBoots} 次`
+        + `（阈值 ${SANDBOX_REVOKE_MIN_HEALTHY_BOOTS}），render-config.json 恢复 sandbox:true\n`);
+    } catch { /* 诊断日志写不进去不影响本次启动 */ }
+  } else {
+    console.error('[render] 撤销崩溃降级失败（data 目录不可写），本轮仍以关沙箱方式启动。');
   }
 }
 
@@ -1186,6 +1327,10 @@ function startBootWatchdog() {
     if (probe.state === 'gone') { clearInterval(bootWatchdog); bootWatchdog = null; return; }
 
     if (probe.state === 'ready') {
+      // 页面首次就绪 → 挂 60 秒健康哨兵（2026-11-13）。只在这里挂：ready 是
+      // 「启动完成」的唯一权威信号；挂在这里也顺带覆盖了窗口重建后重新就绪的情形
+      // （armHealthyBootTimer 内部幂等，一轮启动只判一次）。
+      armHealthyBootTimer();
       // 心跳只在窗口**可见**时参与判定：窗口隐藏时 Chromium 会节流甚至暂停定时器，
       // 心跳停摆是正常的（缩到托盘就是这种状态），不能当僵死处理。
       // r93：可见性判据统一收进 windowJudgeable —— 除 isVisible/isMinimized 之外，
@@ -3133,6 +3278,7 @@ let shuttingDown = false;
 
 app.on('before-quit', (event) => {
   quitting = true;
+  clearHealthyBootTimer();               // 健康哨兵别在退出途中还挂着（2026-11-13）
   flushWindowState();                    // R66：真退出前把窗口几何落盘
   // R69：这里原本一行日志都没有，退出到底卡在哪一步全靠猜。现在进出都记，
   // 并给 core.stop() 计时 —— 万一真的挂住，日志里能直接看出是挂在 stop 上。

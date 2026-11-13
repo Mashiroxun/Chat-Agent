@@ -12,7 +12,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { readPetVisible, shouldAutoCompatibleForPet, shouldRevokeAutoCompat } from '../electron/render-policy.js';
+import { readPetVisible, shouldAutoCompatibleForPet, shouldRevokeAutoCompat,
+  shouldRevokeCrashCompat, AUTO_CRASH_MARK, SANDBOX_REVOKE_MIN_HEALTHY_BOOTS
+} from '../electron/render-policy.js';
 
 /** 造一个临时 data 目录，可选写入 desktop-pet/state.json 的原始内容。 */
 function makeDataDir(stateRaw) {
@@ -130,4 +132,86 @@ test('完整循环：软件渲染机器上「开桌宠 → 自动关沙箱 → �
   assert.equal(shouldRevokeAutoCompat({ sandboxOffBy: 'auto-pet', keepSandbox: false, petVisible: readPetVisible(off) }), true);
   // 撤销后同一轮里不能再反过来又自动关（顺序必须是先撤销、再判定）
   assert.equal(shouldAutoCompatibleForPet({ renderGpuOff: true, sandboxOffByConfig: false, keepSandbox: false, petVisible: readPetVisible(off) }), false);
+});
+
+// ── 崩溃降级（auto-crash）的自动撤销（2026-11-13）──────────────────────────
+//
+// 这组守的是「误降级的机器能自己爬回来」：sandbox:false 一旦被写进配置是持久的，
+// 而旧的撤销函数只认 'auto-pet' —— 崩溃降级（'auto-crash' 或更早的空串）永远出不来。
+// 判定靠「连续健康启动计数」，所以下面每一条边界都对应一次真实误伤。
+
+const REVOKE_BASE = { sandboxOffBy: AUTO_CRASH_MARK, keepSandbox: false, consecutiveHealthyBoots: SANDBOX_REVOKE_MIN_HEALTHY_BOOTS };
+
+test('常量：AUTO_CRASH_MARK 与阈值都别随手改（阈值改了等于改判据）', () => {
+  assert.equal(AUTO_CRASH_MARK, 'auto-crash');
+  assert.equal(SANDBOX_REVOKE_MIN_HEALTHY_BOOTS, 3);
+});
+
+test('撤销崩溃降级：auto-crash + 连续 3 次健康启动 → 撤销', () => {
+  assert.equal(shouldRevokeCrashCompat(REVOKE_BASE), true);
+  // 2026-11-05 那版写的是空串，同样要认（本机 data 里就是这一条）
+  assert.equal(shouldRevokeCrashCompat({ ...REVOKE_BASE, sandboxOffBy: '' }), true);
+  // 超过阈值当然也撤
+  assert.equal(shouldRevokeCrashCompat({ ...REVOKE_BASE, consecutiveHealthyBoots: 99 }), true);
+});
+
+test('撤销崩溃降级：计数不足 → 不撤（2 次不行）', () => {
+  assert.equal(shouldRevokeCrashCompat({ ...REVOKE_BASE, consecutiveHealthyBoots: 2 }), false);
+  assert.equal(shouldRevokeCrashCompat({ ...REVOKE_BASE, consecutiveHealthyBoots: 0 }), false);
+});
+
+test('⚠️ 关键分支：sandboxOffBy 的 undefined 与空串必须走不同结论（用户手动开启的兼容模式不能被改回）', () => {
+  // '' = 应用自己在 2026-11-05 那版崩溃降级写的 → 可以撤销
+  assert.equal(shouldRevokeCrashCompat({ sandboxOffBy: '', keepSandbox: false, consecutiveHealthyBoots: 3 }), true);
+  // undefined = 用户在「桌宠」页手动点「开启兼容模式」写的（enableCompatMode 压根不写这个字段）
+  // → 那是用户意图，绝不能自动改回，否则用户下次启动直接掉回"被安全软件拦杀"
+  assert.equal(shouldRevokeCrashCompat({ sandboxOffBy: undefined, keepSandbox: false, consecutiveHealthyBoots: 3 }), false);
+  // null 同理（坏 JSON / 老配置里显式 null）
+  assert.equal(shouldRevokeCrashCompat({ sandboxOffBy: null, keepSandbox: false, consecutiveHealthyBoots: 3 }), false);
+  // 三者结论必须不是同一个值 —— 这条断言本身就是防"把 undefined 和 '' 统一当空值处理"
+  assert.notEqual(
+    shouldRevokeCrashCompat({ sandboxOffBy: '', keepSandbox: false, consecutiveHealthyBoots: 3 }),
+    shouldRevokeCrashCompat({ sandboxOffBy: undefined, keepSandbox: false, consecutiveHealthyBoots: 3 })
+  );
+});
+
+test('撤销崩溃降级：只认 auto-crash 与空串，其他来源一律不撤', () => {
+  for (const sandboxOffBy of ['auto-pet', 'manual', 'user', 'AUTO-CRASH', ' ', 'auto-crash ']) {
+    assert.equal(
+      shouldRevokeCrashCompat({ sandboxOffBy, keepSandbox: false, consecutiveHealthyBoots: 9 }),
+      false,
+      `sandboxOffBy=${JSON.stringify(sandboxOffBy)} 不该被撤销（未知来源保守优先）`
+    );
+  }
+});
+
+test('撤销崩溃降级：KEEP_SANDBOX 时一条都不许动（排障态由人决定）', () => {
+  assert.equal(shouldRevokeCrashCompat({ ...REVOKE_BASE, keepSandbox: true }), false);
+  assert.equal(shouldRevokeCrashCompat({ ...REVOKE_BASE, sandboxOffBy: '', keepSandbox: true }), false);
+  // 与 shouldRevokeAutoCompat 同一口径：truthy 即视为"人要求保沙箱"
+  assert.equal(shouldRevokeCrashCompat({ ...REVOKE_BASE, keepSandbox: 1 }), false);
+});
+
+test('撤销崩溃降级：计数不是有限数字 → 不撤（不靠 >= 的隐式转换兜底）', () => {
+  for (const bad of [NaN, undefined, null, '3', '3.0', Infinity, -Infinity, {}, []]) {
+    assert.equal(
+      shouldRevokeCrashCompat({ ...REVOKE_BASE, consecutiveHealthyBoots: bad }),
+      false,
+      `consecutiveHealthyBoots=${String(bad)} 不该被当成有效计数`
+    );
+  }
+});
+
+test('撤销崩溃降级：参数整体缺省不抛，且默认 false', () => {
+  assert.equal(shouldRevokeCrashCompat(), false);
+  assert.equal(shouldRevokeCrashCompat({}), false);
+});
+
+test('撤销崩溃降级：threshold 参数可注入（默认回落到 3）', () => {
+  assert.equal(shouldRevokeCrashCompat({ ...REVOKE_BASE, consecutiveHealthyBoots: 2, threshold: 2 }), true);
+  assert.equal(shouldRevokeCrashCompat({ ...REVOKE_BASE, consecutiveHealthyBoots: 2, threshold: 5 }), false);
+  // 非法 threshold 一律回落默认值，不能让 NaN/0 把闸门放开
+  assert.equal(shouldRevokeCrashCompat({ ...REVOKE_BASE, consecutiveHealthyBoots: 2, threshold: NaN }), false);
+  assert.equal(shouldRevokeCrashCompat({ ...REVOKE_BASE, consecutiveHealthyBoots: 2, threshold: 0 }), false);
+  assert.equal(shouldRevokeCrashCompat({ ...REVOKE_BASE, consecutiveHealthyBoots: 2, threshold: -1 }), false);
 });
