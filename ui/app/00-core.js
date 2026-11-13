@@ -766,13 +766,17 @@ async function api(path, options = {}) {
   // timeoutMs：请求级超时（AbortSignal.timeout）。用量页统计接口在历史数据多、
   // 后端忙时可能长时间无响应 —— 没有超时兜底的话加载态会永远转下去，
   // 到点抛错让页面能显示失败原因 + 重试按钮（R49）。
-  const { keepalive, timeoutMs, ...rest } = options;
+  // ⚠️ headers 必须单独解构出来合并（E7，2026-11-12 审查）：原来 `...rest` 把
+  // 上面拼好的 headers 整体覆盖掉 —— 调用方只要传了 headers（哪怕只是
+  // {'x-foo':'1'}），console-token 就丢了，请求会被服务端按"无凭据"拒绝，
+  // 而现象只是"这个接口一直 401"，很难联想到这里。
+  const { keepalive, timeoutMs, headers: extraHeaders, ...rest } = options;
   try {
     const res = await fetch(path, {
       headers: {
         'content-type': 'application/json',
         'x-console-token': CONSOLE_AUTH_TOKEN || CONSOLE_MARKER,
-        ...(rest.headers || {})
+        ...(extraHeaders || {})
       },
       ...rest,
       ...(keepalive ? { keepalive: true } : {}),

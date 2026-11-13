@@ -41,17 +41,38 @@ const add = (level, target, message, hint) => {
 const ROOT_MUST_EXCLUDE = [
   { name: 'data', desc: '运行时数据（API Key / QQ 号 / 群白名单 / 聊天记录 / 日志 / 渲染配置）' },
   { name: 'dev-sandbox', desc: '开发期沙箱调试目录' },
-  { name: '使用说明-排障.txt', desc: '排障笔记，非发布内容' }
+  { name: '使用说明-排障.txt', desc: '排障笔记，非发布内容' },
+  // 改代码前的整目录备份（含 QQ Agent.exe.orig 等）。2026-11-12 实测每个包
+  // 白带 180MB —— 发布包里塞一份旧版 exe，既浪费体积又可能被当成可用程序。
+  { name: 'backup', desc: '旧的整目录备份（含 .orig 旧 exe），不进发布包' },
+  // 自更新（2026-11-12，P3-6）的残留物。它们**正好都在安装根**：用户机器上跑过一次
+  // 应用内更新之后再来打包，就会把旧 exe（.update-old）或半套 147MB 的新包
+  // （.update-staging / .update-download）静默压进发布包 —— 体积翻倍，而且
+  // .update-old 里是上一版的 exe，收包人拿到手可能误以为那是可用的程序。
+  { name: '.update-old', desc: '自更新替换时挪开的旧文件（含旧 exe），不是发布内容' },
+  { name: '.update-staging', desc: '自更新解压出的新版本文件（可能半套），不是发布内容' },
+  { name: '.update-download', desc: '自更新下载中的 zip（可能上百 MB），不是发布内容' },
+  { name: '.update-pending', desc: '自更新待应用标记，发布包里绝不能带' },
+  { name: '.update-result.json', desc: '自更新应用结果（含本机路径），发布包里绝不能带' },
+  { name: '.update-helper.lock', desc: '自更新助手进程锁（本机 pid），发布包里绝不能带' }
 ];
 
 /** app 目录内不进包的东西（同样是"本机存在正常、但会污染分发"）。 */
 const APP_MUST_EXCLUDE = [
   { name: '.workbuddy', desc: '本项目的智能体工作目录（含对话与记忆）' },
+  // ⚠️ 数据实际位置：config.js 的 ROOT = resources/app，故 DATA_DIR = resources/app/data。
+  // 这里必须把 resources/app/data 排除，否则打包会把本机 API Key / 会话 / 记忆 /
+  // 聊天记录 / config.json 一起塞进分发包（既泄露又污染收包人的数据）。
+  // （根级 data 的检查见 ROOT_MUST_EXCLUDE：仅当用 QQ_AGENT_DATA_DIR 把数据重定向
+  //  到安装根时才命中；默认布局下数据在 resources/app/data，根级没有 data。）
+  { name: 'data', desc: '运行时数据（API Key / 会话 / 记忆 / 聊天记录 / 配置）；实际位于 resources/app/data' },
   { name: 'plugin-data', desc: '插件运行时数据' },
   // docs/ 是版本历史 / 验证报告 / 架构分析这类内部资料（1.8MB）。
   // 不进包：既是体积浪费，里面的分析文档还带本机绝对路径。
   // 注意与 doc/（单数，面向插件开发者的接口文档）区分，后者仍随包分发。
-  { name: 'docs', desc: '开发内部资料（历史/验证/分析），不对外分发' }
+  { name: 'docs', desc: '开发内部资料（历史/验证/分析），不对外分发' },
+  // make-patch.mjs 的输出目录（patch zip / staging）：发布资产单独上传，不进全量包
+  { name: 'dist', desc: '补丁包产物目录（scripts/make-patch.mjs 输出）' }
 ];
 
 /** 打包必须保留的文件（缺了就是打不出能用的包）。 */
@@ -64,7 +85,16 @@ const REQUIRED = [
   'resources/app/ui/index.html',
   'resources/app/plugins/desktop-pet/index.js',
   'resources/app/src/app.js',
-  'resources/app/builtin-modules.json'
+  'resources/app/builtin-modules.json',
+  // 运行时依赖的第三方包（2026-11-12 补）：这三个是**分发包起不来的确定性根因** ——
+  // 打包命令漏带 node_modules 里的任何一个，收包人双击就是 ENOENT / MODULE_NOT_FOUND，
+  // 而这一层错误在主进程起来之前就发生，连日志都没有。
+  //   js-yaml  → 配置/前端数据解析
+  //   undici   → 运行时 HTTP（fetch 的 Node 实现）
+  //   ws       → 控制台/协议端的 WebSocket
+  'resources/app/node_modules/js-yaml',
+  'resources/app/node_modules/undici',
+  'resources/app/node_modules/ws'
 ];
 
 // ── 1. 安装根残留 ──────────────────────────────────────────────────────────
@@ -79,6 +109,8 @@ for (const entry of fs.readdirSync(ROOT, { withFileTypes: true })) {
   const is = (re) => re.test(name);
   if (is(/\.flag$/i)) add('EXCLUDE', name, '运行时渲染/调试开关文件', '打包时排除');
   if (is(/\.bak-/i)) add('EXCLUDE', name, '备份文件（改代码时留下的）', '打包时排除，或确认无用后删除');
+  if (is(/\.orig$/i)) add('EXCLUDE', name, '备份文件（.orig：patch/替换前的原件）', '打包时排除，或确认无用后删除');
+  if (is(/\.rej$/i)) add('EXCLUDE', name, 'patch 冲突残留（.rej）', '打包时排除');
   if (is(/\.lnk$/i)) add('EXCLUDE', name, '快捷方式，指向的是本机路径', '打包时排除');
   if (is(/^测试-.*\.bat$/i)) add('EXCLUDE', name, '排障脚本，收包人双击会关掉安全沙箱', '打包时排除');
   if (is(/^data[-_]?probe/i)) add('EXCLUDE', name, '排障用的临时数据目录', '打包时排除');

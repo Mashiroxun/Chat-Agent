@@ -37,6 +37,10 @@ import {
   parseWindowState, resolveWindowBounds,
   WINDOW_DEFAULT_W, WINDOW_DEFAULT_H, WINDOW_MIN_W, WINDOW_MIN_H
 } from './window-state.js';
+// 自更新（2026-11-12）：janitor 清理上次更新的残骸（.update-old / 结果文件 / 超龄标记），
+// 布局探测复用 src/self-update.js 的 resolveRootDir（两者不 import electron，纯 node 可跑）。
+import { runJanitor } from './self-update-apply.js';
+import { resolveRootDir } from '../src/self-update.js';
 
 
 // ── GPU 硬件加速：默认启用（壁纸套件）────────────────────────────────────
@@ -330,6 +334,13 @@ function noteRendererCrash(where) {
   sandboxFallbackDone = true;
   const ok = patchRenderConfig({
     sandbox: false,
+    // ⚠️ sandboxOffBy 必须写明来源（D2，2026-11-12 审查）：这一位以前是空串，
+    //    而 render-policy.js 的自动撤销（shouldRevokeAutoCompat）只认 AUTO_COMPAT_MARK
+    //    ('auto-pet')，于是"崩溃降级"写进去的 sandbox:false 永远不可能被自动撤销。
+    //    本轮只补标记，**不**让 shouldRevokeAutoCompat 认 'auto-crash' ——
+    //    崩塌 → 降级 → 撤销 → 再崩塌 会变成抖动循环；自动撤销 auto-crash 需要
+    //    "连续健康启动计数"，留作后续。
+    sandboxOffBy: 'auto-crash',
     sandboxOffReason: `渲染进程 60 秒内连续崩溃 ${sandboxCrashCount} 次（${where}），疑似被本机安全软件拦截`,
     sandboxOffAt: new Date().toISOString()
   });
@@ -890,6 +901,21 @@ function resolveDataDir() {
 }
 process.env.QQ_AGENT_DATA_DIR = resolveDataDir();
 
+/**
+ * 版本号文案（弹窗标题用）。从 package.json 读，读不到再退回 app.getVersion()。
+ * 为什么不硬编码（E3，2026-11-12 审查）：这里原本写死 'v0.4.9.2'，发版 bump
+ * 版本号时没人会想起改它 —— 用户看到的"已经在运行"框会一直停在旧版本号上，
+ * 反而让人怀疑自己装的到底是不是新版。
+ */
+function appVersionText() {
+  try {
+    const pkgPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json');
+    const version = String(JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version || '').trim();
+    if (version) return version;
+  } catch { /* 读不到走下面兜底 */ }
+  try { return String(app.getVersion?.() ?? '').trim(); } catch { return ''; }
+}
+
 // 单实例锁：重复启动（双击 .bat）不产生第二个实例，而是唤出已有窗口。
 // 没有锁的话第二个实例会双份连同一个协议端，群消息会被双重回复。
 //
@@ -937,7 +963,7 @@ if (!gotLock) {
     app.whenReady().then(() => {
       showDialog({
         type: 'info',
-        title: '洛版 QQ Agent v0.4.9.2',
+        title: `洛版 QQ Agent v${appVersionText() || '?'}`,
         message: 'QQ Agent 已经在运行了',
         detail: '已为你唤出正在运行的窗口。\n如果那个窗口一直停在启动画面，请从右下角托盘图标选择「退出」，再重新打开。',
         buttons: ['知道了']
@@ -2012,6 +2038,11 @@ function createWindow(port) {
   // 连崩 5 次就放弃重载，避免真有代码级崩溃时陷入死循环。
   // （r92：rendererCrashCount / loadFailRetries 的声明已挪到上方事件注册之前）
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    // 正常退出 / 自愈重启时渲染进程必然被杀 —— 那不是崩溃（D1，2026-11-12 审查）。
+    // 不加这个判断的后果：用户每次从托盘退出都被记一条"[渲染进程崩溃] reason=killed"，
+    // 连着退出几次就会凑够 noteRendererCrash 的"60 秒内 3 次"，于是把本机判成
+    // "沙箱不可用"并**永久**写 sandbox:false —— 这就是本机长期无沙箱的来源之一。
+    if (quitting) return;
     // R70：改 logCritical（原先 console.error 不落盘，崩了等于没发生）。
     logCritical('window', `[渲染进程崩溃] ${JSON.stringify(details)}`);
     // 2026-10-28：只对"被外部拦杀"的特征码触发沙箱降级 ——
@@ -2874,6 +2905,17 @@ app.whenReady().then(async () => {
     // 应用只访问本机回环地址：强制直连，防止系统代理（Clash/加速器等）劫持 127.0.0.1 导致白/黑屏
     await session.defaultSession.setProxy({ mode: 'direct' });
     console.log('[window] 代理模式：direct（绕过系统代理）');
+    // ── 自更新 janitor（2026-11-12）────────────────────────────────────────
+    // 上一次「应用内更新」的收尾：助手进程跑在旧 exe 镜像上删不掉 .update-old，
+    // 只能由新进程在这里清；同时读 .update-result.json 把结果落日志，方便排查。
+    // 必须尽力而为：任何失败都只记录，绝不阻塞启动链。
+    try {
+      const updateRoot = resolveRootDir(app.getAppPath());
+      const janitor = runJanitor(updateRoot, (m) => console.log(`[self-update] ${m}`));
+      if (janitor.cleanedOld) console.log('[self-update] 已清理上次更新的旧版本备份（.update-old）');
+    } catch (error) {
+      console.log(`[self-update] janitor 失败（不影响启动）：${error?.message ?? error}`);
+    }
     const { createApp } = await import('../src/app.js');
     // 桌宠宿主先建、再注入 core：core 通过它挂 /api/desktop-pet/*，
     // 它通过 getService 反向取插件能力。此刻 core 还是 null —— getService 是闭包，
@@ -2917,6 +2959,10 @@ app.whenReady().then(async () => {
     } catch (error) {
       logKey('composition', `启动组合加载失败，按出厂实现继续：${error?.message ?? error}`);
     }
+    // 自更新（2026-11-12）：把「退出」钩子交给路由层（/api/app/quit）。
+    // quitting=true 走的就是托盘「退出」同一条 before-quit → core.stop() 清理链，
+    // 助手进程等到本进程真正退出后再执行文件替换并重启，全程无文件锁冲突。
+    compositionComponents['app.quit'] = () => { quitting = true; try { app.quit(); } catch { /* ignore */ } };
     core = createApp({ log: (...args) => console.log(...args), desktopPetHost, components: compositionComponents, composition: compositionReport });
     // 2026-10-28：界面「开启兼容模式」按钮的落点。
     // 本机实测的唯一出路：软件模式下想让 Live2D 拿到 GL，就必须放 SwiftShader；

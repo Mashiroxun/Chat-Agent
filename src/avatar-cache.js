@@ -31,6 +31,12 @@ const TTL_MS = 7 * 24 * 60 * 60 * 1000;             // 缓存 7 天（头像改�
 const NEG_TTL_MS = 10 * 60 * 1000;                  // 拉取失败的负缓存：10 分钟内不重试
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000;           // 过期清理节流
 const TMP_MAX_AGE_MS = 60 * 60 * 1000;              // 原子写残留的临时文件，超过 1 小时清掉
+// 负缓存 Map 的容量上限（E8，2026-11-12 审查）：`negative` 是纯内存 Map，
+// 每个拉取失败的头像留一条，从来没有过期清理。大群/长跑场景下群成员数 × 尺寸档位
+// 可以堆到几千条 —— 单条不大，但这是"只增不减"的结构，且没有任何上限兜底。
+// 超过阈值时先清掉已过 NEG_TTL_MS 的条目；仍然超限就整体清空（负缓存只是省流量的
+// 优化，丢了下次重试一次而已，绝不能为了它撑爆内存）。
+const NEG_MAX_ENTRIES = 2000;
 
 // 允许的尺寸白名单：只放全站实际用到的几档，不接受任意值拼 URL。
 // 导出给 /api/avatar 路由做参数校验，避免两处各写一份慢慢漂移。
@@ -69,10 +75,36 @@ export function sniffImageType(buffer) {
 
 function dropFile(p) { try { fs.unlinkSync(p); } catch { /* 已被删/不存在 */ } }
 
+/**
+ * 负缓存 Map 的容量控制（E8）。
+ * 正常情况下只需要清过期条目；极端情况下（一次性遇到几千个失败头像）直接清空 ——
+ * 负缓存的作用只是"别在 10 分钟内反复打同一个坏地址"，清空的代价是可以接受的。
+ * @param {number} now
+ */
+export function pruneNegative(now = Date.now()) {
+  if (negative.size <= NEG_MAX_ENTRIES) return;
+  for (const [key, at] of negative) {
+    if (!withinWindow(at, NEG_TTL_MS, now)) negative.delete(key);
+  }
+  if (negative.size > NEG_MAX_ENTRIES) negative.clear();
+}
+
+/** 测试用：重置并填充负缓存（`${qq}|${size}` → 失败时间戳）。 */
+export function __seedNegativeForTest(entries) {
+  negative.clear();
+  for (const [key, at] of entries) negative.set(key, at);
+}
+
+/** 测试用：当前负缓存的键列表（断言"哪些被清掉了"）。 */
+export function __negativeKeysForTest() {
+  return [...negative.keys()];
+}
+
 function prune() {
   const now = Date.now();
   if (withinWindow(lastPrune, PRUNE_INTERVAL_MS, now)) return;
   lastPrune = now;
+  pruneNegative(now);
   try {
     for (const f of fs.readdirSync(dir())) {
       const p = path.join(dir(), f);

@@ -1,7 +1,7 @@
 # QQ Agent（洛版 v0.4.9.3 · 桌面端）
 ![平台](https://img.shields.io/badge/platform-Windows%20%7C%20Electron-lightgrey)
 ![技术栈](https://img.shields.io/badge/stack-Node.js%20%7C%20原生前端-orange)
-![测试](https://img.shields.io/badge/tests-536%20cases-brightgreen)
+![测试](https://img.shields.io/badge/tests-590%20cases-brightgreen)
 一个跑在你自己电脑上的 QQ 群聊机器人：装完双击启动，扫码登录，填个模型 Key 就能用。
 事件驱动 + 无状态会话架构，每次处理的 token 成本恒定可控；所有操作都在图形控制台里完成，不用碰命令行。
 从 [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge) 彻底改造而来的独立 QQ agent 应用。
@@ -155,13 +155,13 @@ git clone https://github.com/Mashiroxun/Chat-Agent.git
 cd Chat-Agent
 npm install
 npx electron .      # 需要自备 Electron 运行时；日常使用请用发布包
-npm test            # 全量测试：536 个用例（node --test tests/*.test.mjs）
+npm test            # 全量测试：590 个用例（node --test tests/*.test.mjs）
 npm run baseline    # 改了 plugins/ 或 skills/ 后重算内置指纹基线
 ```
 源码只声明了 `js-yaml` / `undici` / `ws` 三个运行时依赖，桌面壳（Electron）由发布包提供。
 
 ### 测试
-`npm test`（等价 `npm run check`）跑 `tests/*.test.mjs`，当前 **536 个用例**，覆盖启动组合装配与生命周期、
+`npm test`（等价 `npm run check`）跑 `tests/*.test.mjs`，当前 **590 个用例**，覆盖启动组合装配与生命周期、
 能力审计、协议与消息规范化、发送闸与白名单、记忆与提示词注入、用量统计、头像缓存、便携 QQ 进程管理等。
 
 ### QQ 怎么来的？（免安装包，推荐）

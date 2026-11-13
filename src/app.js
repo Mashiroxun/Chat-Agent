@@ -55,6 +55,9 @@ import { skillManager, setSkillManager } from './skills/manager.js';
 import { PANEL_ROUTE_PREFIX, PANEL_DATA_SEGMENT, PANEL_FILE_TYPES, panelCsp } from './skills/panel.js';
 import { extractCandidateUrls, dispatchMediaLinks } from './media-links.js';
 import { createRoutes } from './routes.js';
+// 应用内自更新服务（2026-11-12，方案 A+B）：/api/update-apply 三条路由的后端。
+// 纯 node 模块（不 import electron），headless 下同样可用（仅少「自动退出」一步）。
+import { createSelfUpdateService } from './self-update.js';
 // 桌宠 HTTP 适配器：只处理 /api/desktop-pet/*，且挂在控制台鉴权 + 同源检查之后。
 import { handleDesktopPetRequest } from './desktop-pet-api.js';
 import { createPetChat } from './pet-chat.js';
@@ -1319,10 +1322,18 @@ export function createApp({ log = console.log, desktopPetHost = null, components
 
   // 声明式路由表（src/routes.js）：把所有依赖一次性注入。
   // 路由 handler 通过闭包取用这些依赖，handleHttp 只负责匹配分发。
+  // 自更新服务（2026-11-12）：一个 createApp 实例一份（job 状态在服务闭包里）。
+  // electron/main.js 通过 components['app.quit'] 注入退出钩子，路由层直接读 components。
+  const selfUpdate = createSelfUpdateService({ appDir: ROOT, log, getConfig, localVersion, compareSemver });
+
   const apiRoutes = createRoutes({
     store, memory, sessions, onebot, orchestrator,
     emit, log,
     localVersion, compareSemver, UPDATE_INFO_URL,
+    selfUpdate,
+    // electron/main.js 注入的进程能力（含 app.quit）——/api/app/quit 靠它触发
+    // 真正的退出链路；headless/测试不传时路由会明确告知"手动退出"。
+    components,
     sanitizeConfig, keyEndpointAllowed, sanitizeProvider,
     readBody, authorize,
     qqPortableStatus, qqPortableLogs, launchPortableQQ, stopPortableQQ,
