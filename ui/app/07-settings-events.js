@@ -1577,21 +1577,127 @@ function bindSettingsEvents(c) {
       .catch(() => { curVerEl.textContent = ''; });
   }
   const checkUpdateBtn = $('#check-update-btn');
+  // ⚠️ 结构必须**稳定**（C1，2026-11-12 审查）：以前「一键更新」按钮与「去下载」
+  // 链接是写进 #update-hint 的 innerHTML 里的，而进度轮询每 1 秒用 setHint()
+  // 覆盖一次 innerHTML —— 第一次轮询（1 秒内）就把这两个节点从 DOM 上抹掉了：
+  // 更新失败后既不能重试也不能去下载，applyBtn.disabled = false 作用在一个
+  // 已经游离的节点上（用户看到按钮一直是灰的）。
+  // 现在 #update-hint 里常驻「文字 span + 按钮 + 链接」：
+  //   · setHint() 只改 #update-hint-text 的文字；
+  //   · 按钮/链接只改 disabled 与显隐，永不参与覆盖。
+  // ⚠️ 而且**每次都按 id 重新查**（P3-5，2026-11-12 QA 回归）：renderSettings()
+  // 会整段重建 DOM，缓存下来的节点在重渲染后就游离了 —— 后面所有 setHint /
+  // disabled 都写进了不显示的旧节点，界面看起来"卡在 8%"再也不动。
+  const hintTextEl = () => document.getElementById('update-hint-text');
+  const applyBtnEl = () => document.getElementById('apply-update-btn');
+  const dlLinkEl = () => document.getElementById('update-download-link');
+  const setHint = (text) => { const el = hintTextEl(); if (el) el.textContent = String(text ?? ''); };
+  const setHintHtml = (html) => { const el = hintTextEl(); if (el) el.innerHTML = String(html ?? ''); };
+  const setApplyDisabled = (disabled) => { const btn = applyBtnEl(); if (btn) btn.disabled = !!disabled; };
+  const showUpdateActions = (on) => {
+    const btn = applyBtnEl();
+    if (btn) btn.style.display = on ? '' : 'none';
+    const link = dlLinkEl();
+    if (link) link.style.display = on ? '' : 'none';
+  };
+  // 事件委托到 #update-hint 容器上：容器本身不参与覆盖（只改它内部的文字 span），
+  // 重渲染后重新绑定也只挂一次，不需要在每轮渲染里重新给按钮挂监听。
+  const updateHintBox = document.getElementById('update-hint');
+  if (updateHintBox) {
+    updateHintBox.addEventListener('click', (event) => {
+      const target = event.target;
+      if (!target || target.id !== 'apply-update-btn') return;
+      runApplyUpdate({ applyBtn: target });
+    });
+  }
+
   if (checkUpdateBtn) checkUpdateBtn.addEventListener('click', async () => {
-    const hint = $('#update-hint');
     checkUpdateBtn.disabled = true;
-    if (hint) hint.textContent = '检查中…';
+    setHint('检查中…');
     const data = await runUpdateCheck({ manual: true });   // 手动：即使关过浮窗也再弹一次
     if (!data) {
-      if (hint) hint.textContent = '检查失败：网络不可达';
+      setHint('检查失败：网络不可达');
     } else if (!data.ok) {
-      if (hint) hint.textContent = `检查失败：${data.error || '未知错误'}`;
+      setHint(`检查失败：${data.error || '未知错误'}`);
     } else if (data.hasUpdate) {
-      // 有新版：给下载链接。Electron 里 target=_blank 会被 main.js 转给系统浏览器。
-      if (hint) hint.innerHTML = `发现新版本 <b>v${esc(data.latest)}</b>（当前 v${esc(data.current)}） <a href="${esc(data.url)}" target="_blank" rel="noopener">去下载</a>`;
-    } else if (hint) hint.textContent = `已是最新（v${data.current}）`;
+      // 有新版：优先「一键更新」（应用内下载→校验→重启后自动替换，2026-11-12 方案 A+B）。
+      // 「去下载」链接保留兜底：自更新服务不可用 / 用户想手动来。
+      const link = dlLinkEl();
+      if (link && data.url) link.href = data.url;
+      showUpdateActions(true);
+      setApplyDisabled(false);
+      setHintHtml(`发现新版本 <b>v${esc(data.latest)}</b>（当前 v${esc(data.current)}）`);
+    } else {
+      showUpdateActions(false);
+      setHint(`已是最新（v${data.current}）`);
+    }
     checkUpdateBtn.disabled = false;
   });
+
+  // ── 一键更新：调 /api/update-apply → 轮询 status → 就绪后请求退出（助手进程完成替换并重启）──
+  // 进度只在设置页提示行上就地展示，不弹窗：更新是用户主动触发的一次性动作，
+  // 离开页面也不影响后端继续跑（job 状态在服务闭包里，回来还能看到结果）。
+  // ⚠️ setHint 是 textContent 写入（见上方的稳定结构说明），所以这里**不要**再套
+  //    esc()：那会把引号之类转成实体、以字面量显示出来。
+  async function runApplyUpdate({ applyBtn = null } = {}) {
+    // ⚠️ 按钮状态每次重新查节点（P3-5）：applyBtn 可能是重渲染前抓到的游离节点，
+    //    写它的 disabled 用户看不见。轮询里也每轮压一次 —— 中途重渲染后按钮会变回可点。
+    if (applyBtn) applyBtn.disabled = true;
+    setApplyDisabled(true);
+    try {
+      const start = await api('/api/update-apply', { method: 'POST', timeoutMs: 15000 });
+      if (!start.ok) {
+        setHint(`更新失败：${start.error || '未知错误'}`);
+        setApplyDisabled(false);
+        return;
+      }
+    } catch (e) {
+      setHint(`更新失败：${e?.message || '网络错误'}`);
+      setApplyDisabled(false);
+      return;
+    }
+    // 轮询上限 40 分钟（全量包 147MB 慢网也要兜得住），到点放弃并把按钮还回来。
+    const deadline = Date.now() + 40 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 1000));
+      let st = null;
+      try { st = await api('/api/update-apply/status', { timeoutMs: 8000 }); } catch { continue; }
+      if (!st || !st.ok) continue;
+      setApplyDisabled(true);   // 重渲染可能把按钮变回可点，每轮压一次
+      if (st.state === 'downloading') {
+        const pct = st.total ? Math.round((st.received / st.total) * 100) : 0;
+        const sizeTxt = st.total
+          ? `${(st.received / 1048576).toFixed(1)} / ${(st.total / 1048576).toFixed(1)}MB`
+          : `${(st.received / 1048576).toFixed(1)}MB`;
+        setHint(`正在下载${st.mode === 'patch' ? '补丁' : '更新包'}… ${pct}%（${sizeTxt}）`);
+      } else if (st.state === 'extracting' || st.state === 'validating' || st.state === 'preparing') {
+        setHint(st.message || '正在准备更新…');
+      } else if (st.state === 'idle') {
+        // 服务端判定"已是最新"（常见于：检查更新走 version.json 缓存、apply 走
+        // release API，两边版本短暂不同步）。没有这个分支 UI 会干等 40 分钟超时。
+        setHint(st.message || '已是最新版本，无需更新');
+        setApplyDisabled(false);
+        return;
+      } else if (st.state === 'error') {
+        setHint(`更新失败：${st.error || '未知错误'}`);
+        // 重渲染会把按钮/链接重置成隐藏，这里补一次"重新显示"——否则用户中途
+        // 重渲染后既看不到重试按钮、也看不到「去下载」，只剩一行错误文字。
+        showUpdateActions(true);
+        setApplyDisabled(false);
+        return;
+      } else if (st.state === 'ready') {
+        setHint(`更新已就绪（v${st.latest}），正在退出应用 —— 助手进程稍后会自动重启新版…`);
+        try {
+          const q = await api('/api/app/quit', { method: 'POST', timeoutMs: 8000, keepalive: true });
+          if (q && q.ok === false && q.hint) setHint(q.hint);
+        } catch { /* 进程退出导致请求失败是预期 */ }
+        return;
+      }
+    }
+    setHint('更新超时（40 分钟未完成），请重试或改用「去下载」手动安装');
+    showUpdateActions(true);
+    setApplyDisabled(false);
+  }
 
   // ── OneBot 区块事件 ──
   /* ── r100：一键启动 + 便携版管理（从旧 SnowLuma 页整体迁入）──

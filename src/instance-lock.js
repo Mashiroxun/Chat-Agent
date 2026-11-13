@@ -26,6 +26,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { DATA_DIR } from './config.js';
+// processImageName 迁到零依赖的 process-image.js：electron/main.js 会静态 import
+// self-update.js，若后者经由本模块连带求值 config.js，DATA_DIR 会在 main.js 任何
+// 一行代码执行之前被固化成 headless 布局（详见 process-image.js 头部注释）。
+// 下面 re-export，保持第三轮加的对外契约不断（成本为零）。
+import { processImageName } from './process-image.js';
+export { processImageName } from './process-image.js';
 
 const LOCK_FILE = path.join(DATA_DIR, 'qq-agent.lock');
 
@@ -55,34 +61,10 @@ function pidAlive(pid) {
   }
 }
 
-/**
- * R93：先花很小的代价问一次**镜像名**（tasklist，通常 30~80ms）。
- *
- * 为什么要分两步：R76 的实现一上来就 `Get-CimInstance`，而 powershell 冷启动
- * 要 300~800ms（超时上限 5s）。这段是**同步**跑在 `createApp()` 里、**建窗之前**，
- * 所以"上次崩溃留下锁 + 那个 PID 恰好被系统复用"时，用户双击后要干等几百
- * 毫秒到 5 秒才见到窗口 —— 与"双击半天不出窗"是同一笔账。
- *
- * 而绝大多数情况下（PID 被**无关程序**复用，正是硬崩溃后最常见的场景）镜像名
- * 就对不上，第一步即可下结论，根本不需要惊动 powershell。
- *
- * 返回 null 表示"查不到"（非 Windows / tasklist 不可用 / PID 不在列表里），
- * 调用方据此回退到 CIM 全量查询 —— 不改变任何判定语义，只是把快路径提前。
- */
-function processImageName(pid) {
-  if (process.platform !== 'win32') return null;
-  try {
-    const out = execFileSync('tasklist', [
-      '/FI', `PID eq ${pid}`, '/NH', '/FO', 'CSV'
-    ], { timeout: 1500, windowsHide: true, encoding: 'utf8' });
-    // 命中时形如："QQ Agent.exe","1234","Console","1","188,788 K"
-    // 未命中时 tasklist 输出的是本地化的"没有运行的任务…"提示，正则自然不匹配。
-    const m = String(out).match(/"([^"]+)"/);
-    return m ? m[1].toLowerCase() : null;
-  } catch {
-    return null;
-  }
-}
+// ── 进程镜像名探测 ──────────────────────────────────────────────────────
+// 实现位于 ./process-image.js（零依赖模块）：self-update.js 被 electron/main.js
+// 静态 import，必须能直接复用这份判定而不经过本文件（本文件 import config.js）。
+// 顶部已 import 并 re-export，下面 lockIsLive() 照旧调用，判定语义完全不变。
 
 /**
  * R76：查一个 PID 的进程身份（镜像名 + 创建时刻，Unix 毫秒）。

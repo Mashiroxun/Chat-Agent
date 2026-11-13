@@ -195,6 +195,56 @@ export function systemRoutes(deps, shared) {
       }
     },
     {
+      // ── 应用内自更新（2026-11-12，方案 A+B）────────────────────────────────
+      // 原来发现新版只给「去下载」链接，用户要手动下 zip 重装。现在：
+      //   POST /api/update-apply         启动更新（下载→校验→解压→写标记→拉助手进程），立即返回
+      //   GET  /api/update-apply/status  轮询进度（下载百分比 / 就绪 / 失败原因）
+      //   POST /api/update-apply/cancel  取消本次更新（清 staging / 下载缓存 / pending 标记）
+      //   POST /api/app/quit             退出应用 —— 助手进程随后完成替换并自动重启
+      // 详见 src/self-update.js 头注释。
+      method: 'POST', pattern: '/api/update-apply',
+      handler: async ({ res, json }) => {
+        if (!deps.selfUpdate) return json(res, 503, { ok: false, error: '自更新服务未启用' });
+        const r = await deps.selfUpdate.apply();
+        return json(res, r.ok ? 200 : 409, r);
+      }
+    },
+    {
+      // 取消入口（B7，2026-11-12 审查）：没有它时，用户点错「一键更新」只能等
+      // 40 分钟 UI 超时，期间 staging 与下载缓存一直占着盘、job 也一直卡在 downloading。
+      method: 'POST', pattern: '/api/update-apply/cancel',
+      handler: async ({ res, json }) => {
+        if (!deps.selfUpdate) return json(res, 503, { ok: false, error: '自更新服务未启用' });
+        const r = deps.selfUpdate.cancel();
+        return json(res, r.ok ? 200 : 409, r);
+      }
+    },
+    {
+      method: 'GET', pattern: '/api/update-apply/status',
+      handler: async ({ res, json }) => {
+        if (!deps.selfUpdate) return json(res, 503, { ok: false, error: '自更新服务未启用' });
+        return json(res, 200, deps.selfUpdate.status());
+      }
+    },
+    {
+      method: 'POST', pattern: '/api/app/quit',
+      handler: async ({ res, json }) => {
+        // quitApp 由 electron/main.js 通过 components['app.quit'] 注入（quitting=true + app.quit()）。
+        // headless / 测试环境没有它：不假装成功，明确告诉用户手动退出。
+        const quit = typeof deps.components?.['app.quit'] === 'function' ? deps.components['app.quit'] : null;
+        if (!quit) {
+          return json(res, 200, {
+            ok: false, quitRequested: false,
+            hint: '当前运行方式不支持自动退出：请手动关闭程序（托盘右键 → 退出），更新会在退出后自动完成'
+          });
+        }
+        try { quit(); } catch (error) {
+          return json(res, 500, { ok: false, error: `退出请求失败：${String(error?.message ?? error)}` });
+        }
+        return json(res, 200, { ok: true, quitRequested: true });
+      }
+    },
+    {
       // 最近的日志（UI 日志页签首次加载）
       method: 'GET', pattern: '/api/logs',
       handler: async ({ res, json, url }) => {

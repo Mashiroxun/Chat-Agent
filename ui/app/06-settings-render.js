@@ -1797,7 +1797,7 @@ function renderDesktopSection(c) {
     <div class="field"><label>当前版本 <b id="update-current">…</b><span id="update-status-text">${updateAvailable ? '<b style="color:var(--orange)">；发现新版本</b>' : '；检查线上是否有新版本'}</span></label>
       <div style="display:flex;gap:10px;align-items:center">
         <button class="btn btn-small" id="check-update-btn">检查更新</button>
-        <span class="hint" id="update-hint" style="margin:0"></span>
+        <span class="hint" id="update-hint" style="margin:0"><span id="update-hint-text"></span><button class="btn btn-small" id="apply-update-btn" style="display:none;margin-left:6px">一键更新</button><a id="update-download-link" href="https://kondius.cn/qq-agent" target="_blank" rel="noopener" style="display:none;margin-left:6px">去下载</a></span>
       </div></div>`;
 }
 

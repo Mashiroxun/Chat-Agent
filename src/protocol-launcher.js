@@ -424,7 +424,13 @@ export function createProtocolLauncher({
     if (!child || child.killed) return;
     try {
       if (process.platform === 'win32') {
-        spawnImpl('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' }).unref?.();
+        // ⚠️ 必须挂 'error' 监听（E6，2026-11-12 审查）：spawn 失败（taskkill 不存在 /
+        //    被安全软件拦）时 ChildProcess 会发 'error'，没人监听就是 uncaughtException ——
+        //    这条路径挂在应用退出链上，抛出去会打断退出流程，甚至弹未捕获异常框。
+        //    与同文件 stop()（约 404 行）的写法对齐。
+        const killer = spawnImpl('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, stdio: 'ignore' });
+        killer.on('error', () => { /* 退出链上不抛：杀不掉就留给系统收尸 */ });
+        killer.unref?.();
       } else {
         child.kill('SIGTERM');
       }

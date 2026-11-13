@@ -15,7 +15,8 @@ process.env.QQ_AGENT_DATA_DIR = tmp;
 
 const {
   getAvatar, sniffImageType, avatarCacheStats, AVATAR_SIZES,
-  __readAvatarCacheForTest
+  __readAvatarCacheForTest,
+  pruneNegative, __seedNegativeForTest, __negativeKeysForTest
 } = await import('../src/avatar-cache.js');
 
 const dir = path.join(tmp, 'avatar-cache');
@@ -100,4 +101,34 @@ test('缓存统计只数合法缓存文件', () => {
   const st = avatarCacheStats();
   assert.equal(st.count, files.length);
   assert.ok(st.bytes > 0);
+});
+
+// ── 负缓存容量控制（P3-7，2026-11-12 QA 回归）───────────────────────────────
+// `negative` 是无上限的内存 Map，长跑/大群下会一直涨。pruneNegative 的契约：
+//   · ≤2000 条：什么都不做（别为了省内存把热失败记录清了，那会放大对坏地址的请求）
+//   · >2000 条：先清过期（>NEG_TTL_MS），未过期的保留
+//   · 清完仍 >2000：整体清空（负缓存只是优化，丢了下次重试一次）
+test('pruneNegative：超阈值时清过期、保留未过期；仍超限则整体清空（P3-7）', () => {
+  const now = Date.now();
+  const fresh = () => now - 1000;                     // 1 秒前：[未过期]
+  const expired = () => now - 20 * 60 * 1000;         // 20 分钟前：过期（TTL 10 分钟）
+  const seed = (n, at, prefix) => Array.from({ length: n }, (_, i) => [`${prefix}${i}|100`, at()]);
+
+  // ① 未到阈值：一条都不清（哪怕有已过期的）
+  __seedNegativeForTest([...seed(1500, expired, 'e'), ...seed(499, fresh, 'f')]);
+  pruneNegative(now);
+  assert.equal(__negativeKeysForTest().length, 1999, '≤2000 时不应清理');
+
+  // ② 超阈值且含过期条目：过期清掉、未过期保留，清完降到阈值内就不再整体清空
+  __seedNegativeForTest([...seed(1500, expired, 'e'), ...seed(700, fresh, 'f')]);
+  assert.equal(__negativeKeysForTest().length, 2200);
+  pruneNegative(now);
+  const keys = __negativeKeysForTest();
+  assert.equal(keys.length, 700, '1500 条过期必须被清掉，700 条未过期必须留下');
+  assert.ok(keys.every((k) => k.startsWith('f')), '留下的必须都是未过期条目');
+
+  // ③ 清过期后仍超阈值（全都没过期）：整体清空，绝不无界增长
+  __seedNegativeForTest(seed(2500, fresh, 'f'));
+  pruneNegative(now);
+  assert.equal(__negativeKeysForTest().length, 0, '清完仍超限时必须整体清空');
 });
