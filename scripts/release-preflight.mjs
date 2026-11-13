@@ -518,6 +518,29 @@ for (const mustRel of MUST_REACH) {
 }
 gateGraphLine = `${ENTRY_REL} 可达 ${graph.visited.size} 个文件；通往 ${FORBIDDEN_MODULES.join(' / ')} 的路径数 = ${graphPathCounts.join(' / ')}`;
 
+// ── 8. 门禁 C：运行时依赖齐全（防「缺 node_modules」打出去的包）────────────
+// 覆盖安装打不开的根因④：node_modules（js-yaml/ws/undici）没进包 → 收包人
+// ERR_MODULE_NOT_FOUND 直接打不开。git 的 .gitignore 排除 node_modules 只管版本库，
+// 不管 tar 打包清单；一旦打包步骤漏了它，这个 bug 在开发者机器上永远复现不出
+// （本地 node_modules 是好的），只会流到用户端。门禁 C 在「包流出前」拦住。
+// （version.json 一致性已在上面第 1-5 节查过，此处不重复；静态图文件存在性已被
+// 门禁 B 的 collectGraph 隐式保证——读不到就不入图，不必再查一遍。）
+function checkInstallIntegrity() {
+  const pkgPath = path.join(APP_DIR, 'package.json');
+  let pkg;
+  try { pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')); }
+  catch { add('FATAL', 'package.json', 'resources/app/package.json 读不出来', '包里丢了 package.json，应用无法启动'); return { depCount: 0, missing: [] }; }
+  const deps = pkg.dependencies && typeof pkg.dependencies === 'object' ? Object.keys(pkg.dependencies) : [];
+  const missing = deps.filter((dep) => !fs.existsSync(path.join(APP_DIR, 'node_modules', dep)));
+  if (missing.length) {
+    add('FATAL', 'node_modules', `缺少 ${missing.length} 个运行时依赖目录：${missing.slice(0, 8).join(', ')}${missing.length > 8 ? ' …' : ''}`,
+      '依赖没进包 → 收包人 ERR_MODULE_NOT_FOUND 直接打不开。确认打包清单没把 node_modules 排除（.gitignore 只管 git 不管 tar）；或打包前先 npm ci 再 tar');
+  }
+  return { depCount: deps.length, missing };
+}
+const integrity = checkInstallIntegrity();
+let gateIntegrityLine = `门禁 C 依赖完整性：node_modules ${integrity.depCount ? (integrity.missing.length ? `缺 ${integrity.missing.length} 个` : '齐全') : '（无依赖）'}`;
+
 // ── 输出 ───────────────────────────────────────────────────────────────────
 const FATAL = findings.filter((f) => f.level === 'FATAL');
 const EXCLUDE = findings.filter((f) => f.level === 'EXCLUDE');
@@ -532,6 +555,7 @@ console.log(`发布前体检  根目录=${ROOT}`);
 console.log(`已扫描源码文件 ${scannedFiles} 个（跳过 node_modules / data / 二进制）`);
 if (gateTestLine) console.log(`门禁 A 测试：${gateTestLine}`);
 if (gateGraphLine) console.log(`门禁 B 求值图：${gateGraphLine}`);
+if (gateIntegrityLine) console.log(`门禁 C ${gateIntegrityLine}`);
 console.log('');
 
 if (FATAL.length) {
