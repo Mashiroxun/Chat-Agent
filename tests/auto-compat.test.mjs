@@ -149,8 +149,10 @@ test('常量：AUTO_CRASH_MARK 与阈值都别随手改（阈值改了等于改�
 
 test('撤销崩溃降级：auto-crash + 连续 3 次健康启动 → 撤销', () => {
   assert.equal(shouldRevokeCrashCompat(REVOKE_BASE), true);
-  // 2026-11-05 那版写的是空串，同样要认（本机 data 里就是这一条）
-  assert.equal(shouldRevokeCrashCompat({ ...REVOKE_BASE, sandboxOffBy: '' }), true);
+  // 2026-11-05 那版写的是空串，同样要认——但仅当沙箱确实关着（sandbox===false）= 老降级残留
+  assert.equal(shouldRevokeCrashCompat({ ...REVOKE_BASE, sandboxOffBy: '', sandbox: false }), true);
+  // 空串 + 沙箱已开（auto-pet 撤销后的中性态）→ 不撤销（防与 auto-pet 块互相横跳写盘）
+  assert.equal(shouldRevokeCrashCompat({ ...REVOKE_BASE, sandboxOffBy: '', sandbox: true }), false);
   // 超过阈值当然也撤
   assert.equal(shouldRevokeCrashCompat({ ...REVOKE_BASE, consecutiveHealthyBoots: 99 }), true);
 });
@@ -161,8 +163,8 @@ test('撤销崩溃降级：计数不足 → 不撤（2 次不行）', () => {
 });
 
 test('⚠️ 关键分支：sandboxOffBy 的 undefined 与空串必须走不同结论（用户手动开启的兼容模式不能被改回）', () => {
-  // '' = 应用自己在 2026-11-05 那版崩溃降级写的 → 可以撤销
-  assert.equal(shouldRevokeCrashCompat({ sandboxOffBy: '', keepSandbox: false, consecutiveHealthyBoots: 3 }), true);
+  // '' = 应用自己在 2026-11-05 那版崩溃降级写的 → 可以撤销（沙箱关着时）
+  assert.equal(shouldRevokeCrashCompat({ sandboxOffBy: '', keepSandbox: false, consecutiveHealthyBoots: 3, sandbox: false }), true);
   // undefined = 用户在「桌宠」页手动点「开启兼容模式」写的（enableCompatMode 压根不写这个字段）
   // → 那是用户意图，绝不能自动改回，否则用户下次启动直接掉回"被安全软件拦杀"
   assert.equal(shouldRevokeCrashCompat({ sandboxOffBy: undefined, keepSandbox: false, consecutiveHealthyBoots: 3 }), false);
@@ -170,7 +172,7 @@ test('⚠️ 关键分支：sandboxOffBy 的 undefined 与空串必须走不同�
   assert.equal(shouldRevokeCrashCompat({ sandboxOffBy: null, keepSandbox: false, consecutiveHealthyBoots: 3 }), false);
   // 三者结论必须不是同一个值 —— 这条断言本身就是防"把 undefined 和 '' 统一当空值处理"
   assert.notEqual(
-    shouldRevokeCrashCompat({ sandboxOffBy: '', keepSandbox: false, consecutiveHealthyBoots: 3 }),
+    shouldRevokeCrashCompat({ sandboxOffBy: '', keepSandbox: false, consecutiveHealthyBoots: 3, sandbox: false }),
     shouldRevokeCrashCompat({ sandboxOffBy: undefined, keepSandbox: false, consecutiveHealthyBoots: 3 })
   );
 });

@@ -104,7 +104,8 @@ export const SANDBOX_REVOKE_MIN_HEALTHY_BOOTS = 3;
  *  ① keepSandbox：用户/排障用 QQ_AGENT_KEEP_SANDBOX=1 明确要求保沙箱，
  *     那是人的决定，自动逻辑不许覆盖（与 shouldRevokeAutoCompat 同一口径：
  *     truthy 即视为"人要求保沙箱"）。
- *  ② sandboxOffBy 必须是 'auto-crash' 或 **严格等于空串 ''**。
+ *  ② sandboxOffBy 必须是 'auto-crash' 或 **严格等于空串 ''**（空串仅在沙箱确实关着时
+ *     算降级残留，见函数内护栏——否则会与 shouldRevokeAutoCompat 互相触发）。
  *     ⚠️ 这是整个改动最容易改错的一处：空串是 2026-11-05 那版写下的形态，
  *     要认；而 `undefined` / `null` 表示**用户在「桌宠」页手动开启兼容模式** ——
  *     main.js 的 enableCompatMode 压根不写 sandboxOffBy 这个字段。那是用户意图，
@@ -120,9 +121,15 @@ export const SANDBOX_REVOKE_MIN_HEALTHY_BOOTS = 3;
  * @param {{sandboxOffBy?: string, keepSandbox?: boolean, consecutiveHealthyBoots?: number, threshold?: number}} [input]
  * @returns {boolean}
  */
-export function shouldRevokeCrashCompat({ sandboxOffBy, keepSandbox, consecutiveHealthyBoots, threshold } = {}) {
+export function shouldRevokeCrashCompat({ sandboxOffBy, keepSandbox, consecutiveHealthyBoots, threshold, sandbox } = {}) {
   if (keepSandbox) return false;
   if (sandboxOffBy !== AUTO_CRASH_MARK && sandboxOffBy !== '') return false;
+  // 空串有两重含义，必须靠 sandbox 区分，否则会与 shouldRevokeAutoCompat 互相触发：
+  //   · 'auto-crash' 之外，空串曾是 2026-11-05 老版本写的崩溃降级残留 → 沙箱确实关着（sandbox===false），应撤销；
+  //   · 但 shouldRevokeAutoCompat 撤销 auto-pet 时也把 sandboxOffBy 写成空串（中性无标记态）→ 此时沙箱已开（sandbox!==false）。
+  //   不区分的话，auto-pet 撤销后的空串会被本函数当成「老降级」反复撤销，与 auto-pet 块形成
+  //   '' ↔ 'auto-pet' 每次启动横跳写盘、计数永远清零、状态永不收敛。所以空串仅在沙箱关着时才当降级残留。
+  if (sandboxOffBy === '' && sandbox !== false) return false;
   if (!Number.isFinite(consecutiveHealthyBoots)) return false;
   const need = Number.isFinite(threshold) && threshold > 0 ? threshold : SANDBOX_REVOKE_MIN_HEALTHY_BOOTS;
   return consecutiveHealthyBoots >= need;

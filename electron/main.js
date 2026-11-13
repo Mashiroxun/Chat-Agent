@@ -548,12 +548,13 @@ if (shouldRevokeAutoCompat({
 // 严格的边界全在 render-policy.js 的 pure function 里（只认 'auto-crash'/''，
 // 手动开启兼容模式写的是 undefined，绝不自动改回；KEEP_SANDBOX 时不动的）。
 const STARTUP_RENDER_HEALTH = readRenderHealth(RENDER_DATA_DIR);
-if (shouldRevokeCrashCompat({
-  sandboxOffBy: STARTUP_RENDER_CONFIG.sandboxOffBy,
-  keepSandbox: KEEP_SANDBOX,
-  consecutiveHealthyBoots: STARTUP_RENDER_HEALTH.consecutiveHealthyBoots,
-  threshold: SANDBOX_REVOKE_MIN_HEALTHY_BOOTS
-})) {
+  if (shouldRevokeCrashCompat({
+    sandboxOffBy: STARTUP_RENDER_CONFIG.sandboxOffBy,
+    keepSandbox: KEEP_SANDBOX,
+    consecutiveHealthyBoots: STARTUP_RENDER_HEALTH.consecutiveHealthyBoots,
+    threshold: SANDBOX_REVOKE_MIN_HEALTHY_BOOTS,
+    sandbox: STARTUP_RENDER_CONFIG.sandbox
+  })) {
   const ok = patchRenderConfig(RENDER_DATA_DIR, {
     sandbox: true,
     sandboxOffBy: '',
