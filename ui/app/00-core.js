@@ -1242,6 +1242,11 @@ function switchTab(name) {
 // 这里把每个 <select> 换成自绘的 .sel 组件（隐藏原 select 但保留在 DOM ——
 // val()/chk() 与 change 监听全部照常工作，getElementById 绑定零改动）。
 // 由 MutationObserver 自动接管所有后渲染出来的 select（设置页/弹窗/连接页）。
+// 2026-11-13：是否有展开的自绘下拉。同一时刻至多一个（打开会先关其它），
+// 所以布尔足够。用它在全局滚动监听里做 O(1) 守卫，替代每次滚动都全 DOM
+// querySelector('.sel.open, .sel-menu.open')（大页面快滚时的主要开销）。
+let anySelOpen = false;
+
 function enhanceOneSelect(sel) {
   if (sel.dataset.selEnhanced) return;
   sel.dataset.selEnhanced = '1';
@@ -1293,6 +1298,7 @@ function enhanceOneSelect(sel) {
   syncHead(); syncMenu();
 
   const close = () => {
+    if (wrap.classList.contains('open')) anySelOpen = false;
     wrap.classList.remove('open');
     menu.classList.remove('open');
     // ⚠️ 菜单已 portal 到 body 且用 position:fixed 定位。收起动画期间若把
@@ -1415,6 +1421,7 @@ function enhanceOneSelect(sel) {
       // 旧的 ".sel.open .sel-menu" 后代选择器不再命中。
       menu.classList.add('open');
       wrap.classList.add('open');
+      anySelOpen = true;
     }
   });
   menu.addEventListener('click', (e) => {
@@ -1447,6 +1454,7 @@ function enhanceOneSelect(sel) {
       document.querySelectorAll('.sel-menu.open').forEach((m) => {
         if (!m._selWrap || !m._selWrap.isConnected) m.remove();
       });
+      anySelOpen = false;
     };
     document.addEventListener('click', (e) => {
       if (!e.target.closest('.sel')) closeAll();
@@ -1462,13 +1470,15 @@ function enhanceOneSelect(sel) {
     // 2026-11-04（R182）：这是挂在 document 上、capture=true 的**全局**滚动监听，
     // 任何页面任何容器滚动都会走到。原先每次滚动都无条件 closeAll()（内含两次
     // 全 DOM querySelectorAll + 一次 remove），软件渲染下会和合成器抢 CPU。
-    // 加一道短路：没有任何展开的下拉时，滚动根本不需要收起任何东西 ——
-    // 单次 querySelector 找不到就直接返回，99% 的滚动帧到此为止。
-    // 第一次真正滚动时若有展开菜单，仍当场收起，行为和原来一致。
+    // 短路由两层组成：① e.target.closest 排除"在菜单内部滚动"；
+    //   ② anySelOpen 布尔（O(1)）—— 没有任何展开的下拉时直接返回，
+    //   99% 的滚动帧到此为止，不再对整份 DOM 做 querySelector。
+    //   （2026-11-13 优化：原实现每次滚动都全 DOM 遍历找 '.sel.open'，
+    //    自检页这类大 DOM 快滚时是可见的主线程开销。）
     document.addEventListener('scroll', (e) => {
       // 只处理真正滚动的容器；.sel-menu 自己在菜单内滚动时不该收起
       if (e.target && e.target.closest && e.target.closest('.sel-menu')) return;
-      if (!document.querySelector('.sel.open, .sel-menu.open')) return;
+      if (!anySelOpen) return;
       closeAll();
     }, true);
   }

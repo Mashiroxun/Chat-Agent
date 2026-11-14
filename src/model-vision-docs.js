@@ -12,17 +12,29 @@
 // 维护方式：新增模型时在 MODEL_DOCS 里加一行，providerId 有特殊链路时再加 PROVIDER_DOCS。
 // 字段：verdict: 'vision' | 'no-vision'；note 里注明来源。
 
+// ⚠️ 归一化统一走 src/model-key.js（0.4.9.4 / B5）。本文件曾经是**第五套**独立规则
+//    （保留内部空格、只去首尾斜杠、复合键用 |||），与查价侧不一致：同一个模型在
+//    「能不能看图」和「多少钱」两个判断里可能被认成两个不同的键。
+//    改 model-key.js 时这里的语义边界见下方 norm() 的注释。
+import { normalizeModelId, bareModelId } from './model-key.js';
+
+/**
+ * 文档表的键统一小写（MODEL_DOCS 的键全是小写，见 :118 起）。
+ *
+ * 与旧实现逐字等价：`normalizeModelId` 只多做了一件「全角冒号→半角」，
+ * 而本文件所有键里都不含冒号，所以查表结果不变。
+ */
 function norm(s) {
-  return String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return normalizeModelId(s).toLowerCase();
 }
 
-// 模型 ID 归一：统一小写；斜杠前后都可匹配（如 deepseek-ai/deepseek-v4-pro-0813 与 deepseek-v4-pro-0813 等价）。
+/** 模型 ID 归一：斜杠前后都可匹配（deepseek-ai/deepseek-v4-pro-0813 与 deepseek-v4-pro-0813 等价）。 */
 function modelKeys(model) {
-  const m = norm(model).replace(/^\/+|\/+$/g, '');
+  const m = norm(model);
   if (!m) return [];
   const keys = [m];
-  const slash = m.lastIndexOf('/');
-  if (slash >= 0 && slash < m.length - 1) keys.push(m.slice(slash + 1));
+  const bare = bareModelId(m);
+  if (bare && bare !== m) keys.push(bare);
   return keys;
 }
 

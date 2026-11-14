@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>洛版 QQ Agent v0.4.9.2</title>
+  <title>洛版 QQ Agent v0.4.9.4</title>
   <!-- 内容安全策略：控制台只应加载本机资源。
        script-src 仅 'self'：首屏主题预置走**外链**同步脚本（/theme-boot.js，见下方），
        既不用内联、也不需要维护 sha256 hash —— 页面多处 innerHTML 拼接，一旦任何
@@ -61,7 +61,7 @@
   <header id="topbar">
     <div class="brand">QQ Agent <span class="brand-sub"></span></div>
 
-    <!-- ══════════ 一级入口：5 项平铺（会话 / 用量 / 下载 / 工具 / 设置）══════════
+    <!-- ══════════ 一级入口：5 项平铺（会话 / 用量 / 扩展 / 工具 / 设置）══════════
          点一级 → switchTab(该一级的默认二级页)；当前一级由 syncChrome() 高亮。
          data-top 是分组键，data-tab 是页签身份。
 
@@ -77,7 +77,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2" /></svg>用量
       </button>
       <button class="nav-item" type="button" data-top="ext" data-tab="skills" title="人设 / 技能 / 插件市场，以及管理已装的东西">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10M8 10l4 4 4-4M5 18h14" stroke-linejoin="round" /></svg>下载
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10M8 10l4 4 4-4M5 18h14" stroke-linejoin="round" /></svg>扩展
       </button>
       <button class="nav-item" type="button" data-top="ops" data-tab="harness" title="自检、协议端连接与运行日志">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7V5.5A2.5 2.5 0 0 1 11.5 3h1A2.5 2.5 0 0 1 15 5.5V7" /><rect x="3" y="7" width="18" height="13" rx="2" /><path d="M3 12.5h18" stroke-linecap="round" /></svg>工具

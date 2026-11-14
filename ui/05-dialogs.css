@@ -699,7 +699,7 @@ details.forge-summary.is-long > summary:hover { color: var(--text); }
 .sentinel-break-ba-row {
   display: flex; gap: 7px; align-items: baseline; font-size: 11px; margin-top: 5px;
 }
-.sentinel-break-ba-row .sentinel-break-ba-tag { flex: none; font-size: 10px; }
+.sentinel-break-ba-row .sentinel-break-ba-tag { flex: none; font-size: 11px; }
 .sentinel-break-ba-text {
   color: var(--muted); font-family: var(--mono, ui-monospace, monospace);
   word-break: break-all; line-height: 1.6;
@@ -724,7 +724,7 @@ details.forge-summary.is-long > summary:hover { color: var(--text); }
 .sentinel-inv-sec { color: var(--text); }
 .sentinel-inv-mod { color: var(--accent); }
 .sentinel-inv-chars { font-variant-numeric: tabular-nums; }
-.sentinel-inv-row .sentinel-inv-flips { margin-left: auto; font-size: 10px; }
+.sentinel-inv-row .sentinel-inv-flips { margin-left: auto; font-size: 11px; }
 
 .sentinel-attr-tail {
   margin-top: 9px; padding-top: 8px; border-top: 1px dashed var(--border);
@@ -809,7 +809,7 @@ details.forge-summary.is-long > summary:hover { color: var(--text); }
 .doctor-trace-tool { flex: 0 0 auto; color: var(--accent); font-weight: 600; }
 .doctor-trace-args { flex: 1 1 auto; color: var(--muted); word-break: break-all; }
 .doctor-trace-err { flex: 0 0 auto; color: var(--red); }
-.doctor-trace-note { margin-top: 6px; color: var(--faint); font-size: 10px; line-height: 1.5; }
+.doctor-trace-note { margin-top: 6px; color: var(--faint); font-size: 11px; line-height: 1.5; }
 
 /* 模型回答内的极简 Markdown */
 .doctor-bubble p { margin: 0; }
@@ -1703,7 +1703,10 @@ input[type='range'] { accent-color: var(--accent); }
 .uc-bar-val, .up-val, .stat-v { font-variant-numeric: tabular-nums; }
 .stats-band { border: 1px solid var(--line); border-radius: var(--r); background: var(--card-hi); box-shadow: none; }
 
-/* 日志 / 代码块：统一深底等宽面 */
+/* 日志 / 代码块：统一深底等宽面
+   ⚠️ 2026-11-14 摘掉 .tb-code：它是「调用明细」里的工具 ID 列，不是代码块。
+      套上深底 + 边框 + 圆角后每个 ID 都成了一颗黑胶囊，一整列视觉噪音很大，
+      长 ID 还会被定宽截断。它的样式改由 04-usage.css 的 .tb-code 单独定义。 */
 #app-logs-view,
 .snowluma-logs-view,
 .sl-log-short,
@@ -1711,7 +1714,6 @@ input[type='range'] { accent-color: var(--accent); }
 .fix-raw,
 .doctor-code,
 .forge-code,
-.tb-code,
 .guide-code,
 .prompt-preview-content,
 .preview-box,

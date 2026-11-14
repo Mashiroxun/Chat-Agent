@@ -289,6 +289,21 @@ function historySignatureOf(archive, todayStartMs) {
   // 口径与新算法不同。改前缀让全部历史日按新算法重算一遍，随后迁移成
   // 新格式；算不出数据的日子会走"保留旧值 + 对齐新签名"的自愈路径，
   // 不会把仅存的快照抹成 0。
+  //
+  // ⚠️（2026-11-14 / B3）这里**刻意不**把 h2: 换成 h3:（虽然 2026-10-17 那次
+  //    换了，看起来是个顺手可用的"一键作废旧快照"开关）。
+  //
+  //    原因：搜索/工具计数是**派生计数**，跟 token / 成本没有关系。整片快照作废
+  //    会让每个历史日按"当前还在磁盘上的会话 + 账本"重新聚合 token —— 而快照
+  //    存的是生成当时的明细，重算一遍成本就会变（实测本机 7 天成本从
+  //    3.14185832 掉到 2.96126628，因为被裁掉的会话只能用账本补、补出来的行
+  //    没有 model/vendor，按未计价算 0）。用户会看到"历史成本自己变小了"，
+  //    这比搜索数不正确更严重。
+  //
+  //    正确做法：快照的 totals 保持原样，只把 searchCount / toolCounts 这两个
+  //    计数**就地补正**（见 buildUsageStatsWithSnapshots 里的「计数刷新」段，
+  //    用的是 collectDayCounters 的四源取最大）。这样成本一分不动，
+  //    计数自动自愈，也不需要任何迁移代码。
   return `h2:${count}:${mtimeSum}`;
 }
 
@@ -400,10 +415,14 @@ export async function collectUsageRows({ range }) {
     // usage-archived-days.json 里 —— 只遍历账本的日就等于永远看不到它们。
     for (const dayKey of new Set([...ledgerByDay.keys(), ...Object.keys(loadArchivedUsageDays())])) {
       if (!ledgerDayInWin(dayKey)) continue;
-      const gap = authoritativeGapForDay(coveredByDay, ledgerByDay, dayKey);
+      const gap = authoritativeGapForDay(coveredByDay, ledgerByDay, dayKey, { toolCounts });
       if (!gap) continue;
-      rows.push(ledgerGapRow(dayKey, gap));
+      // 只有 token/runs 真有差额才补统计行；纯搜索差额只更新计数（B3）
+      if (gap.hasRowGap) rows.push(ledgerGapRow(dayKey, gap));
       searchCount += gap.webSearchCount;
+      for (const [name, n] of Object.entries(gap.toolCounts || {})) {
+        toolCounts[name] = (toolCounts[name] || 0) + n;
+      }
       doneDays.add(dayKey);
     }
     // 账本日里**没有今天**时（账本刚建立、或跨天后第一段时间），当天权威值
@@ -412,10 +431,13 @@ export async function collectUsageRows({ range }) {
     {
       const todayFile = loadUsageTodayFile();
       if (todayFile && !doneDays.has(todayFile.dayKey) && ledgerDayInWin(todayFile.dayKey)) {
-        const gap = authoritativeGapForDay(coveredByDay, new Map(), todayFile.dayKey);
+        const gap = authoritativeGapForDay(coveredByDay, new Map(), todayFile.dayKey, { toolCounts });
         if (gap) {
-          rows.push(ledgerGapRow(todayFile.dayKey, gap));
+          if (gap.hasRowGap) rows.push(ledgerGapRow(todayFile.dayKey, gap));
           searchCount += gap.webSearchCount;
+          for (const [name, n] of Object.entries(gap.toolCounts || {})) {
+            toolCounts[name] = (toolCounts[name] || 0) + n;
+          }
         }
       }
     }
@@ -493,13 +515,74 @@ const USAGE_DAILY_FILE = path.join(DATA_DIR, 'usage-daily.json');
 // ⚠️ 它与 usage-daily.json 是两回事，别混：usage-daily 存的是"按日聚合快照"，
 //    这个存的是 usage-today.json 那个单槽文件在跨零点时被顶下来的**上一日权威总量**。
 const USAGE_ARCHIVED_FILE = path.join(DATA_DIR, 'usage-archived-days.json');
-const USAGE_DAILY_VERSION = 1;
+const USAGE_DAILY_VERSION = 2;
+
+/**
+ * usage-daily v1 → v2 就地迁移（0.4.9.4 / B2）。
+ *
+ * 语义：输入解析后的 v1 对象 `{version:1, savedAt, days}`，返回 v2 对象
+ * `{version:2, migratedFrom:1, savedAt, days}`，其中每个日条目在**原样保留**
+ * `sig` 与 `aggregates`（成本/token 一分不动）的前提下，新增四个元数据字段：
+ *   · pricingLocked: true        —— 老日子缺逐次 at / 峰谷拆分，不可随改价重算
+ *   · tokenBuckets: null         —— 账本无逐次时间戳，建不起来
+ *   · searchSource: 'migrated-v1'—— 可审计来源
+ *   · priceSig: priceSignature() —— 让未来改价能标记该日失效
+ *
+ * 这是 B2 的核心保证：21 天历史**绝不塌缩**，只是打上"不可重定价"的诚实标记。
+ */
+function migrateUsageDailyV1ToV2(parsed) {
+  const days = {};
+  for (const [dayKey, entry] of Object.entries(parsed.days || {})) {
+    days[dayKey] = {
+      sig: entry?.sig,                                  // 原样保留
+      aggregates: entry?.aggregates,                    // 原样保留（成本/token 一分不动）
+      pricingLocked: true,
+      tokenBuckets: null,
+      searchSource: 'migrated-v1',
+      priceSig: priceSignature(),
+    };
+  }
+  return { version: 2, migratedFrom: 1, savedAt: Date.now(), days };
+}
+
+/**
+ * 迁移 + 原子落盘 + 备份 + 失败兜底（安全性核心，绝不能丢数据）。
+ *
+ * 1. 内存里先算出 v2 对象（先别写盘）；
+ * 2. 仅当 `usage-daily.json.v1.bak` 不存在时，把**当前真实文件字节**复制过去
+ *    （幂等：重复启动不会覆盖已有 .v1.bak，回退永远有 v1 原件）；
+ * 3. 把 v2 写到临时文件再 `renameSync` 原子替换（避免写到一半崩了留半截文件）；
+ * 4. 返回 v2 的 days 供本次统计直接使用；
+ * 5. **任何一步抛错** → catch 里 `return parsed.days`（原始 v1 的 days，不动任何
+ *    文件）：即便迁移失败，app 仍按"升级前"的方式工作（v1 文件原样保留、下一次
+ *    还会再尝试迁移），绝不丢天数、绝不塌缩。
+ */
+function migrateAndPersistV1(parsed) {
+  try {
+    const v2 = migrateUsageDailyV1ToV2(parsed);
+    // ① 备份：仅在不存在时复制当前真实文件字节（幂等）
+    const bakFile = `${USAGE_DAILY_FILE}.v1.bak`;
+    if (!fs.existsSync(bakFile)) {
+      fs.copyFileSync(USAGE_DAILY_FILE, bakFile);
+    }
+    // ② 原子落盘 v2
+    const tmp = `${USAGE_DAILY_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(v2, null, 1), 'utf8');
+    fs.renameSync(tmp, USAGE_DAILY_FILE);
+    return v2.days;
+  } catch {
+    // 失败兜底：原样退回 v1 的 days，绝不抛错、绝不塌缩、绝不碰文件
+    return parsed.days;
+  }
+}
 
 function loadUsageDaily() {
   try {
     const parsed = JSON.parse(fs.readFileSync(USAGE_DAILY_FILE, 'utf8'));
-    if (parsed?.version === USAGE_DAILY_VERSION && parsed.days && typeof parsed.days === 'object') {
-      return parsed.days;
+    if (parsed?.days && typeof parsed.days === 'object') {
+      if (parsed.version === USAGE_DAILY_VERSION) return parsed.days;     // 已是 v2，直接返回
+      if (parsed.version === 1) return migrateAndPersistV1(parsed);        // 迁移（含落盘）
+      // 其它/未知版本 → 返回 {}（既有行为：全量重算）
     }
   } catch { /* 无文件/坏文件 = 全部重算 */ }
   return {};
@@ -680,6 +763,120 @@ function archivedDayTotals(dayKey) {
 }
 
 /**
+ * 某一天的「搜索次数 + 工具调用次数」四源汇总（0.4.9.4 / B3）。
+ *
+ * ── 为什么需要它 ──────────────────────────────────────────────────────
+ * 搜索次数（webSearchCount）与工具计数（toolCounts）是**会话级计数**：
+ * 它们挂在会话上、没有逐次时间戳。而磁盘上的会话文件会被 store.keepSessionFiles
+ * 裁掉（默认 120），一裁就只剩最近几个会话 —— 历史日的搜索数直接变成 0。
+ * 实测本机：11-08~11-12 五天的快照里 searchCount 全是 0，真实值是 5/8/19/1/1。
+ *
+ * 四个来源各有盲区，所以**逐源取最大**（不是 sum —— 同一个会话会同时出现在
+ * 会话文件与账本里，相加就是重复计数）：
+ *   · files    磁盘会话文件：按会话 `started` 归日。最细，但被裁剪后不全。
+ *              跨零点会话（23:50 开、00:10 还在搜）整笔算在开始那天 —— 这是
+ *              刻意口径：会话级计数没有 `at`，按 `at` 归日会把整笔丢掉。
+ *   · ledger   用量账本：逐会话带 `day` + `webSearchCount` + `toolCounts`，
+ *              会话文件删了它还在，是覆盖面最全的一源。
+ *   · archived usage-archived-days.json：跨零点归档的权威日总量，
+ *              只有 webSearchCount、没有逐工具明细 —— 无工具计数时靠它兜底。
+ *   · today    usage-today.json：仅当 dayKey 匹配当天时参与。
+ *   · snapshot 旧快照：**只增不减**的最后一道保险 —— 任何重算都不允许把
+ *              上一个版本已经算出来的更大值改小（否则一次降级/一次归档为空
+ *              就能把用户看到的历史数字抹掉）。
+ *
+ * ── 口径自洽 ──────────────────────────────────────────────────────────
+ * 历史上 `webSearchCount` 恒等于 `toolCounts.web_search + toolCounts.web_fetch`
+ * （实测 21 天逐日全部相等），所以最后再取一次 max，避免出现
+ * 「搜索 48 次，但 web_search+web_fetch 只有 47」这种自相矛盾的数字。
+ *
+ * @param {string} dayKey 'YYYY-MM-DD'
+ * @param {object} [sources]
+ * @param {Map|Iterable} [sources.sessions] 档案层（Map<file,{started,searchCount,toolCounts}>）
+ * @param {object} [sources.ledger]   该日账本聚合（usageLedgerTotals 的 days.get(dayKey)）
+ * @param {object} [sources.archived] 该日归档总量（archivedDayTotals(dayKey)）
+ * @param {object} [sources.today]    usage-today.json 内容（loadUsageTodayFile()）
+ * @param {object} [sources.snapshot] 旧快照的 aggregates
+ * @returns {{dayKey:string, searchCount:number,
+ *            toolCounts:Object<string,number>, source:string, sources:string[]}}
+ */
+export function collectDayCounters(dayKey, {
+  sessions = null, ledger = null, archived = null, today = null, snapshot = null,
+} = {}) {
+  const perSource = [];
+  const push = (name, searchCount, toolCounts) => {
+    perSource.push({
+      name,
+      searchCount: Math.max(0, Number(searchCount) || 0),
+      toolCounts: (toolCounts && typeof toolCounts === 'object') ? toolCounts : null,
+    });
+  };
+
+  // ① 磁盘会话文件：按会话 started 归日（口径见函数头「files」）
+  if (sessions) {
+    const dayStart = new Date(dayKey + 'T00:00:00');
+    const dayStartMs = dayStart.getTime();
+    if (Number.isFinite(dayStartMs)) {
+      const endDate = new Date(dayStartMs);
+      endDate.setDate(endDate.getDate() + 1);      // 夏令时安全，禁止 +86400000
+      const dayEndMs = endDate.getTime() - 1;
+      let sc = 0;
+      const tc = Object.create(null);
+      for (const p of (sessions instanceof Map ? sessions.values() : sessions)) {
+        if (!p || !p.started) continue;
+        const st = Number(p.started) || 0;
+        if (!(st >= dayStartMs && st <= dayEndMs)) continue;
+        sc += Number(p.searchCount) || 0;
+        for (const [name, v] of Object.entries(p.toolCounts || {})) {
+          const c = Number(v) || 0;
+          if (c > 0) tc[name] = (tc[name] || 0) + c;
+        }
+      }
+      push('files', sc, tc);
+    }
+  }
+
+  // ② 账本（最细：逐会话带 dayKey + 逐工具）
+  if (ledger) push('ledger', ledger.webSearchCount, ledger.toolCounts);
+
+  // ③ 跨天归档（只有搜索数）
+  if (archived) push('archived', archived.webSearchCount, archived.toolCounts);
+
+  // ④ 今天的单槽文件：只在 dayKey 真的是"那个今天"时才算
+  if (today && String(today.dayKey || '') === String(dayKey)) {
+    push('today', today.webSearchCount, today.toolCounts);
+  }
+
+  // ⑤ 旧快照：只增不减
+  if (snapshot) push('snapshot', snapshot.searchCount, snapshot.toolCounts);
+
+  let searchCount = 0;
+  const toolCounts = Object.create(null);
+  let winner = 'none';
+  let winnerVal = -1;
+  for (const s of perSource) {
+    if (s.searchCount > winnerVal) { winnerVal = s.searchCount; winner = s.name; }
+    if (s.searchCount > searchCount) searchCount = s.searchCount;
+    for (const [name, v] of Object.entries(s.toolCounts || {})) {
+      const c = Number(v) || 0;
+      if (c > (toolCounts[name] || 0)) toolCounts[name] = c;
+    }
+  }
+
+  // 口径自洽兜底：webSearchCount 历史上 = web_search + web_fetch
+  const webSum = (Number(toolCounts.web_search) || 0) + (Number(toolCounts.web_fetch) || 0);
+  if (webSum > searchCount) searchCount = webSum;
+
+  return {
+    dayKey,
+    searchCount,
+    toolCounts,
+    source: winner,
+    sources: perSource.map((s) => s.name),
+  };
+}
+
+/**
  * 算出某一天"已经进统计行的量"与权威真值之间还差多少。
  *
  * 三个数据源取**逐字段最大值**作为真值：
@@ -697,10 +894,13 @@ function archivedDayTotals(dayKey) {
  * @param {Map<string, object>} coveredByDay 已进 rows 的覆盖量（按天，含 runs=去重会话数）
  * @param {Map<string, object>} ledgerByDay   账本汇总量
  * @param {string} dayKey
+ * @param {{toolCounts?:object}|null} [covered] 已进统计的工具计数（用于算逐工具差额）
  * @returns {{promptTokens:number,completionTokens:number,cachedTokens:number,
- *            webSearchCount:number,runs:number}|null} 无差距返回 null
+ *            webSearchCount:number,toolCounts:object,runs:number,hasRowGap:boolean}|null}
+ *          无任何差距返回 null。**只要有搜索/工具差额就会返回对象**，但
+ *          `hasRowGap=false` 表示 token/runs 是平的 —— 调用方不要再补统计行。
  */
-function authoritativeGapForDay(coveredByDay, ledgerByDay, dayKey) {
+function authoritativeGapForDay(coveredByDay, ledgerByDay, dayKey, covered = null) {
   const c = coveredByDay.get(dayKey) || { promptTokens: 0, completionTokens: 0, cachedTokens: 0, webSearchCount: 0, runs: 0 };
   const num = (v) => Number(v) || 0;
   const todayFile = loadUsageTodayFile();
@@ -720,13 +920,40 @@ function authoritativeGapForDay(coveredByDay, ledgerByDay, dayKey) {
   const gapPrompt = Math.max(0, truth.promptTokens - num(c.promptTokens));
   const gapCompletion = Math.max(0, truth.completionTokens - num(c.completionTokens));
   const gapRuns = Math.max(0, truth.runs - num(c.runs));
-  if (!gapPrompt && !gapCompletion && !gapRuns) return null;
+  // ⚠️（2026-11-14 / B3）搜索次数必须参与"有没有差距"的判定。
+  //
+  //    旧实现的提前返回只看 prompt/completion/runs 三项。而账本正常工作时
+  //    token 与 runs 本来就是平齐的（gap 恒为 0）—— 于是**只要 token 对得上，
+  //    当天搜索数的差额就永远被判定为"没有差距"**，返回 null，搜索数从此漏记。
+  //    本机实测：11-08~11-12 五天的搜索数在快照里固化为 0，真实值 5/8/19/1/1。
+  const gapSearch = Math.max(0, truth.webSearchCount - num(c.webSearchCount));
+  // 工具计数同理：真值取各源逐工具最大值，再与"已进统计的量"比（逐工具分别比）
+  const truthTools = Object.create(null);
+  for (const cand of candidates) {
+    for (const [name, v] of Object.entries(cand.toolCounts || {})) {
+      const n = num(v);
+      if (n > (truthTools[name] || 0)) truthTools[name] = n;
+    }
+  }
+  const coveredTools = (covered && covered.toolCounts) || null;
+  const gapTools = Object.create(null);
+  for (const [name, v] of Object.entries(truthTools)) {
+    const g = Math.max(0, v - num(coveredTools ? coveredTools[name] : 0));
+    if (g > 0) gapTools[name] = g;
+  }
+  const hasToolGap = Object.keys(gapTools).length > 0;
+  // 「要不要补一条统计行」只看 token / runs：纯搜索/工具差额不该凭空多出一条
+  // 0 token、0 cost 的 '(已归档会话)' 行去污染按会话表。
+  const hasRowGap = gapPrompt > 0 || gapCompletion > 0 || gapRuns > 0;
+  if (!hasRowGap && !gapSearch && !hasToolGap) return null;
   return {
     promptTokens: gapPrompt,
     completionTokens: gapCompletion,
     cachedTokens: Math.max(0, truth.cachedTokens - num(c.cachedTokens)),
-    webSearchCount: Math.max(0, truth.webSearchCount - num(c.webSearchCount)),
+    webSearchCount: gapSearch,
+    toolCounts: gapTools,
     runs: gapRuns,
+    hasRowGap,
   };
 }
 
@@ -782,7 +1009,7 @@ function ledgerSessionRow(rec) {
  * 从档案层聚合出"某一个自然日"的统计（不使用快照 —— 这是重算路径）。
  * 返回与 buildUsageStats 的 days/chats/models 三段同构的聚合体。
  */
-function aggregateDayFromArchive(archive, dayKey) {
+function aggregateDayFromArchive(archive, dayKey, { snapshot = null } = {}) {
   const dayStart = new Date(dayKey + 'T00:00:00');
   if (isNaN(dayStart.getTime())) return null;
   // ⚠️ 不能写死 +24h 夏令时切换日会错 1 小时（本地 23h 或 25h 的一天），
@@ -793,7 +1020,7 @@ function aggregateDayFromArchive(archive, dayKey) {
   if (!isFinite(dayEnd)) return null;
   const rows = [];
   let searchCount = 0;
-  const toolCounts = Object.create(null);
+  let toolCounts = Object.create(null);
   // 会话文件已覆盖的量（按天），供账本补差用
   const coveredByDay = new Map();
   for (const parsed of archive.values()) {
@@ -828,9 +1055,13 @@ function aggregateDayFromArchive(archive, dayKey) {
     //    而"归档为空"恰恰是会话文件被外部清空后的常态 —— 于是快照路径每次必抛、
     //    被 buildUsageStats 的 catch 回落到实时聚合，表现为用量页按天只剩今天、
     //    下钻 0 行、成本 0。参考包（洛版修复版）同位置有同样的问题。
+    //
+    // ⚠️（2026-11-14 / B3）不但是"不能抛"，还**不能是赋值**：这份覆盖量是
+    //    authoritativeGapForDay 算差额的基准，一旦被重算改小，差额就会凭空变大、
+    //    或者（旧实现）永远不会触发。一律 Math.max，只增不减。
     const cur = coveredByDay.get(dayKey)
       || { promptTokens: 0, completionTokens: 0, cachedTokens: 0, webSearchCount: 0 };
-    cur.webSearchCount = s;
+    cur.webSearchCount = Math.max(Number(cur.webSearchCount) || 0, Number(s) || 0);
     coveredByDay.set(dayKey, cur);
   }
   // 账本补差：会话文件被 keepFiles 裁掉的会话，其用量在这里补回来。
@@ -867,11 +1098,28 @@ function aggregateDayFromArchive(archive, dayKey) {
     }
     // ③ 与权威真值仍有差距的（账本漏记 / 账本建立之前的日子）再补一条聚合行
     const { days: ledgerByDay } = usageLedgerTotals((d) => d === dayKey);
-    const gap = authoritativeGapForDay(coveredByDay, ledgerByDay, dayKey);
-    if (gap) {
+    const gap = authoritativeGapForDay(coveredByDay, ledgerByDay, dayKey, { toolCounts });
+    // 只有 token/runs 真的有差距才补行：纯搜索/工具差额不能再造一条
+    // 0 token / 0 cost 的 '(已归档会话)' 行去污染按会话表。
+    if (gap?.hasRowGap) {
       rows.push(ledgerGapRow(dayKey, gap));
-      searchCount += gap.webSearchCount;
     }
+    // ④ 搜索次数 / 工具计数：四源（会话文件 · 账本 · 归档/today · 旧快照）
+    //    逐日取最大，只增不减（0.4.9.4 / B3）。
+    //
+    //    这里**不能**再用 `searchCount += gap.webSearchCount` 叠加 ——
+    //    collectDayCounters 已经把账本、归档、today 全部算进 max 里，
+    //    再叠一次就是重复计数。旧实现之所以是 +=，是因为它只有"会话文件 +
+    //    账本差额"两个来源；现在是四源取最大，语义变了。
+    const counters = collectDayCounters(dayKey, {
+      sessions: archive,
+      ledger: ledgerByDay.get(dayKey) || null,
+      archived: archivedDayTotals(dayKey),
+      today: loadUsageTodayFile(),
+      snapshot,
+    });
+    searchCount = counters.searchCount;
+    toolCounts = counters.toolCounts;
   }
   for (const r of rows) {
     r.vendor = String(r.vendor || '').trim() || UNKNOWN_VENDOR;
@@ -913,6 +1161,22 @@ function withDerived(dayKey, aggTotals) {
 }
 
 /**
+ * 进程内记忆：这些"已完结日"的账本已经读过、且确认不会再提供更多工具明细，
+ * 后续统计不必再为它们读盘（0.4.9.4 / B3 边界补丁）。
+ *
+ * 为什么需要它：`needLedger` 的判定改成"工具明细不完整也要读账本"之后，
+ * 一个**健康**部署上每天都会命中一次判定，于是每轮统计都要把窗口内 7~30 个
+ * 账本文件重读一遍（本机实测 +294 ms）。这些日子是已完结的，账本不会再有
+ * 新行，所以读一次就够了 —— 记住"读过了"，第二轮直接跳过。
+ *
+ * 只放已完结日（今天永远不进 wantedDays），所以不存在"今天的新数据被记忆
+ * 挡住"的风险；设上限是为了长时间运行的进程里不无限增长，超了整体清空重来
+ * （重建代价只是一次重读，不影响正确性）。
+ */
+const ledgerExhausted = new Set();
+const LEDGER_EXHAUSTED_MAX = 512;
+
+/**
  * 快照加速版统计：days 维度全部走快照 + 今天实时聚合。
  * 其余维度（chats/models/totals）= 各日快照聚合 + 今天实时。
  * 任一需要的日快照缺失/失效 → 重算该日并回写快照。
@@ -931,6 +1195,9 @@ async function buildUsageStatsWithSnapshots({ range = '7' } = {}) {
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   const historySig = historySignatureOf(archive, todayStart.getTime());
+  // B4：当前价格指纹。日快照判据与回写都要比对它——改价后历史快照必须失效并
+  // 按新价重算（今天/有逐次时间戳的日子），缺时间戳的 migrated-v1 日子则诚实保留旧成本。
+  const curPriceSig = priceSignature();
 
   // 需要的已完结日：窗口起点到昨天；快照里已有的更早日子只在 all 模式需要
   const snapshotDays = loadUsageDaily();
@@ -959,14 +1226,29 @@ async function buildUsageStatsWithSnapshots({ range = '7' } = {}) {
   const needDays = [];
   for (const dayKey of wantedDays) {
     const snap = snapshotDays[dayKey];
-    if (snap && snap.sig === historySig && snap.aggregates) {
+    if (snap && snap.sig === historySig && snap.aggregates && snap.priceSig === curPriceSig) {
       byDayRaw.push({ dayKey, totals: snap.aggregates.totals });
     } else {
       needDays.push(dayKey);
     }
   }
   for (const dayKey of needDays) {
-    const agg = aggregateDayFromArchive(archive, dayKey);
+    const prev = snapshotDays[dayKey];
+    // B4：历史 pricingLocked 的日子（多为 v1→v2 迁移来的老日子）缺逐次时间戳，
+    // 改价后**无法重算成本**。这里不重算，只把 sig + priceSig 对齐到当前状态：
+    //   · 让快路径回归（下一轮不再因 priceSig 失配而反复进 needDays）；
+    //   · 诚实保留旧 aggregates 的成本（不谎称已按新价重算）。
+    if (prev?.pricingLocked) {
+      if (prev.aggregates) byDayRaw.push({ dayKey, totals: prev.aggregates.totals });
+      snapshotDays[dayKey] = { sig: historySig, priceSig: curPriceSig, aggregates: prev.aggregates };
+      continue;
+    }
+    // 把**旧快照**作为一路来源传进去：搜索/工具计数「只增不减」——
+    // 降级、或会话文件被外部清空导致重算算不出数据时，不能把上一版
+    // 已经算出来的更大值改小（0.4.9.4 / B3）。
+    const agg = aggregateDayFromArchive(archive, dayKey, {
+      snapshot: prev?.aggregates || null,
+    });
     // ⚠️（2026-10-17）重算"算不出数据"时**不能拿零去覆盖已有快照**。
     //    触发场景：会话文件被外部清空（用户点了「清空已结束的会话记录」）→
     //    归档为空 → 所有历史日的 sig 全部失配进 needDays → 每个都重算出全零，
@@ -975,7 +1257,6 @@ async function buildUsageStatsWithSnapshots({ range = '7' } = {}) {
     const aggHasData = agg
       && ((Number(agg.totals?.runs) || 0) > 0 || (Number(agg.totals?.totalTokens) || 0) > 0);
     if (!aggHasData) {
-      const prev = snapshotDays[dayKey];
       if (prev?.aggregates) {
         byDayRaw.push({ dayKey, totals: prev.aggregates.totals });
         // ⚠️（2026-10-17 N9）**把签名一起对齐到当前归档状态** —— 让快照"自愈"。
@@ -991,20 +1272,105 @@ async function buildUsageStatsWithSnapshots({ range = '7' } = {}) {
         //      · 一旦归档恢复/新增（用户补回文件、或明天又有会话完结），
         //        historySig 立刻变 → 快照重新失配 → 正常走重算路径并覆盖。
         //        也就是说对齐只**推迟**重算，不会**阻止**重算。
-        snapshotDays[dayKey] = { sig: historySig, aggregates: prev.aggregates };
+        //    B4：补齐 priceSig，使该日与当前价格口径对齐（成本仍沿用 prev，不重算）。
+        snapshotDays[dayKey] = { sig: historySig, priceSig: curPriceSig, aggregates: prev.aggregates };
       }
       continue;
     }
     byDayRaw.push({ dayKey, totals: agg.totals });
-    snapshotDays[dayKey] = { sig: historySig, aggregates: agg };
+    snapshotDays[dayKey] = { sig: historySig, priceSig: curPriceSig, aggregates: agg };
     recomputed++;
+  }
+
+  // ── 搜索 / 工具计数刷新（0.4.9.4 / B3）──────────────────────────────
+  //
+  // 快照里的 searchCount / toolCounts 是 0.4.9.4 之前算出来的：只认磁盘上的
+  // 会话文件，被 store.keepSessionFiles 裁掉的日子就固化成 0（本机实测
+  // 11-08~11-12 五天全是 0，真实值是 5/8/19/1/1）。
+  //
+  // 这两个字段是**派生计数**，与 token / 成本没有任何关系 —— 所以这里就地补正，
+  // **绝不碰 aggregates.totals**：
+  //   · 成本一分不变（这就是这次不换签名前缀的原因，见 historySignatureOf）；
+  //   · 计数靠 collectDayCounters 的四源取最大自愈；
+  //   · 补正后回写快照，下一轮零额外成本。
+  //
+  // IO 控制：只给"确实可能有差额"的日子读账本，而且同一个进程里同一天只读一次
+  // （`ledgerExhausted`）。健康部署上第二轮的这一段是纯内存操作，不会因为 B3
+  // 让每次统计都多扫一遍账本。
+  let countersRefreshed = 0;
+  {
+    const todayFileForCounters = loadUsageTodayFile();
+    const needLedger = new Set();
+    for (const dayKey of wantedDays) {
+      if (ledgerExhausted.has(dayKey)) continue;      // 本进程已确认这天没有更多明细
+      const snapAgg = snapshotDays[dayKey]?.aggregates || null;
+      // 没快照的日子走 needDays 重算路径，那边的 aggregateDayFromArchive 自带账本，
+      // 这里不用重复读盘。
+      if (!snapAgg) continue;
+      const arch = archivedDayTotals(dayKey);
+      const truthSearch = Math.max(
+        Number(arch?.webSearchCount) || 0,
+        (todayFileForCounters && todayFileForCounters.dayKey === dayKey)
+          ? Number(todayFileForCounters.webSearchCount) || 0 : 0,
+      );
+      const snapSearch = Number(snapAgg.searchCount) || 0;
+      const snapWebSum = (Number(snapAgg.toolCounts?.web_search) || 0)
+        + (Number(snapAgg.toolCounts?.web_fetch) || 0);
+
+      // ① 搜索数比归档/today 的真值少 —— 这是 B3 主体要修的那类
+      // ② **工具明细不完整**：真值说这天有 ~N 次搜索，快照里的 web_search+web_fetch
+      //    却不到 N（或整个 toolCounts 是 {}）→ 必须读账本才知道 ws/wf 怎么分。
+      //    0.4.9.4 第一版只判了 ①，于是"搜索数恰好已对齐、但工具明细缺失"的日子
+      //    永远补不上（本机数据不触发，换用户完全可能：某天只有搜索没有别的工具，
+      //    或旧快照的 toolCounts 就是 {}）。
+      // ③ 自相矛盾：快照自称有搜索，却一条 ws/wf 都没有 → 同样要读。
+      if (snapSearch < truthSearch
+          || (truthSearch > 0 && snapWebSum < truthSearch)
+          || (snapSearch > 0 && snapWebSum === 0)) {
+        needLedger.add(dayKey);
+      }
+    }
+    // 逐工具比较：键集合相同且每个值相等才算"没有变化"
+    const sameCounts = (a, b) => {
+      const ka = Object.keys(a || {});
+      const kb = Object.keys(b || {});
+      if (ka.length !== kb.length) return false;
+      return ka.every((k) => (Number(a[k]) || 0) === (Number(b[k]) || 0));
+    };
+    const ledgerDays = needLedger.size
+      ? usageLedgerTotals((d) => needLedger.has(d)).days
+      : new Map();
+    // 记忆上限：超了清空重来（下次多读一轮，正确性不受影响）
+    if (ledgerExhausted.size > LEDGER_EXHAUSTED_MAX) ledgerExhausted.clear();
+    for (const dayKey of wantedDays) {
+      // 这一轮已经为它读过账本 → 无论有没有补到东西，本进程内都不用再读：
+      // 下面会把"已知最大值"写回快照，而快照本身也是 collectDayCounters 的一路来源，
+      // 所以再读一次只可能拿到同一批数据。
+      if (needLedger.has(dayKey)) ledgerExhausted.add(dayKey);
+      const snapAgg = snapshotDays[dayKey]?.aggregates;
+      if (!snapAgg) continue;                    // 没快照的日子由重算路径负责
+      const counters = collectDayCounters(dayKey, {
+        sessions: archive,
+        ledger: ledgerDays.get(dayKey) || null,
+        archived: archivedDayTotals(dayKey),
+        today: todayFileForCounters,
+        snapshot: snapAgg,
+      });
+      if ((Number(snapAgg.searchCount) || 0) === counters.searchCount
+          && sameCounts(snapAgg.toolCounts, counters.toolCounts)) continue;
+      snapAgg.searchCount = counters.searchCount;
+      snapAgg.toolCounts = counters.toolCounts;
+      countersRefreshed += 1;
+    }
   }
 
   // 今天（窗口含今天才需要）：实时聚合
   const includesToday = win.end >= new Date(todayKey + 'T00:00:00').getTime();
   let todayAgg = null;
   if (includesToday) {
-    todayAgg = aggregateDayFromArchive(archive, todayKey);
+    todayAgg = aggregateDayFromArchive(archive, todayKey, {
+      snapshot: snapshotDays[todayKey]?.aggregates || null,
+    });
   }
 
   // ⚠️ 把今天补进 days（2026-10-16 修复「按天」图表空白）。
@@ -1120,7 +1486,7 @@ async function buildUsageStatsWithSnapshots({ range = '7' } = {}) {
   // 顺带裁掉数据元年之前的空日：老版本被 'all' 范围灌进来的两万条空日
   // 就靠这一句自愈（正常运行时每次统计都过一遍，裁剪本身是字符串比较，可忽略）。
   const prunedDays = pruneUsageDaily(snapshotDays, floorMs);
-  if (recomputed > 0 || needDays.length > 0 || prunedDays > 0) {
+  if (recomputed > 0 || needDays.length > 0 || prunedDays > 0 || countersRefreshed > 0) {
     // 只保留窗口需要的 + 已有的（不清老数据——删掉将来还得重算）
     saveUsageDaily(snapshotDays);
   }
@@ -1247,6 +1613,7 @@ const USAGE_STATS_CACHE_TTL_MS = 3 * 60 * 60 * 1000;
 const usageStatsCache = new Map();   // `${range}#${价格指纹}` -> { at, stats }
 const usageStatsInflight = new Map(); // 同上 key -> Promise（每个 key 各有各的在途统计）
 let usageStatsMicro = { key: '', at: 0, stats: null };
+let lastPriceSig = null;             // B4：上次统计时的价格指纹；变化时清缓存强制重算
 
 /** 清空统计结果缓存（测试用；也留给将来"重置用量统计"这类操作）。 */
 export function resetUsageStatsCache() {
@@ -1314,9 +1681,16 @@ export function hasUsageProvider() {
 export async function buildUsageStats(opts = {}) {
   if (typeof usageProvider?.buildUsageStats === 'function') return usageProvider.buildUsageStats(opts);
   const { range = '7', force = false } = opts;
+  // B4：价格指纹相对上次统计变化（或首次统计）时，旧缓存作废 → 改单价后
+  // 不必点刷新、下一次统计即按新价重算（resetUsageStatsCache 同时清掉行缓存与归档）。
+  const curPriceSig = priceSignature();
+  if (curPriceSig !== lastPriceSig) {
+    resetUsageStatsCache();
+    lastPriceSig = curPriceSig;
+  }
   const rangeKey = String(range);
   // 缓存键带上价格指纹：改单价后旧缓存自动作废（见 priceSignature 注释）
-  const key = `${rangeKey}#${priceSignature()}`;
+  const key = `${rangeKey}#${curPriceSig}`;
   // force 必须**同时**绕过两层缓存。踩过的坑：微缓存判定写在前面却没看 force，
   // 于是"点刷新"在两次请求间隔 <5 秒时直接吃微缓存 —— 结果是刷新按钮按下去
   // 数字纹丝不动（实测 computedAt 完全不变），比慢更让人困惑。
@@ -1339,7 +1713,7 @@ export async function buildUsageStats(opts = {}) {
   // 同时全量重算，把刚做的缓存优化全还回去（大档案下表现为卡顿）。
   // 改成 Map：每个 key 各有各的在途 Promise，互不覆盖。
   const inflight = usageStatsInflight.get(key);
-  if (inflight) return infight;
+  if (inflight) return inflight;
   const promise = (async () => {
     let stats = null;
     try {

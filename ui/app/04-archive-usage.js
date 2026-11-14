@@ -604,6 +604,7 @@ function smoothPath(pts) {
  *    原生 tooltip 会渲染成淡黄色色块（见 tooltip.js）。
  */
 function usageLineChart(points, metric, width, height = 156) {
+  const metricLabel = (USAGE_METRICS.find(([k]) => k === metric) || [])[1] || metric;
   const w = Math.max(280, Math.round(width || 680));
   const h = height;
   const padL = 46, padR = 14, padT = 10, padB = 22;
@@ -650,6 +651,11 @@ function usageLineChart(points, metric, width, height = 156) {
   const total = vals.reduce((a, v) => a + v, 0);
   const avg = n ? total / n : 0;
   const dayOf = (i) => String(points[i]?.day || '').slice(5);
+  // 2026-11-13：给 SVG 一句可读的无障碍描述（原来只有 role="img"、没有标签，
+  // 读屏软件只会念"图像"）。摘要条上的数字与它同源，信息不额外增加。
+  const ariaLabel = `按天${metricLabel}趋势：峰值 ${fmtMetric(peakV, metric)}`
+    + (peakIdx >= 0 ? `（${dayOf(peakIdx)}）` : '')
+    + `，日均 ${fmtMetric(avg, metric)}，合计 ${fmtMetric(total, metric)}`;
 
   // 均值虚线：全 0 时贴着基线没意义，只有真的高于 0 才画
   const avgLine = avg > 0
@@ -674,6 +680,7 @@ function usageLineChart(points, metric, width, height = 156) {
   }).join('');
 
   const sumBar = `<div class="uc-sum">`
+    + `<span class="uc-sum-item"><i>${esc(metricLabel)}</i></span>`
     + `<span class="uc-sum-item"><i>峰值</i><b>${esc(fmtMetric(peakV, metric))}</b>`
       + (peakIdx >= 0 ? `<span class="uc-sum-extra">${esc(dayOf(peakIdx))}</span>` : '') + `</span>`
     + `<span class="uc-sum-item${avg > 0 ? ' has-dash' : ''}"><i>日均</i><b>${esc(fmtMetric(avg, metric))}</b></span>`
@@ -681,10 +688,10 @@ function usageLineChart(points, metric, width, height = 156) {
     + `</div>`;
 
   return `<div class="uc-line-wrap">${sumBar}`
-       + `<svg class="usage-line" viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none" role="img">`
+       + `<svg class="usage-line" viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none" role="img" aria-label="${esc(ariaLabel)}">`
        + grid + avgLine + peakGuide + xlabels
        + (areaPath ? `<path class="uc-area" d="${areaPath}"/>` : '')
-       + (linePath ? `<path class="uc-line" d="${linePath}"/>` : '')
+       + (linePath ? `<path class="uc-line" d="${linePath}" pathLength="1" vector-effect="non-scaling-stroke"/>` : '')
        + dots
        + `</svg></div>`;
 }
@@ -698,6 +705,189 @@ function usageLineChart(points, metric, width, height = 156) {
  *   2. 每行右侧给百分比；条形按最大值归一化，第一名永远满格；
  *   3. 底部汇总「合计 + 前 N 项占比」，直接看出集中度（少数会话吃掉大部分用量）。
  */
+/* ── R229（2026-11-14）：条形图「按键调和 + FLIP」────────────────────────
+   切范围/切指标时三张条形图（按会话/按模型/按插件）曾经整块 innerHTML 重建。
+   现在统一按键（key）调和：
+     · 同 key 的行原位更新名次/名称/条宽/数值，条宽走 CSS width 过渡；
+     · 行序变化用 FLIP：旧行平移滑到新位置，而不是闪现重排；
+     · 新行照播 ucBarGrow 的 staggered 入场，消失的行直接移除；
+     · 附带修一个存量 bug：chats/models 的条曾经 width 与 scaleX(--s) 双重
+       叠加（第二条实际只显示真实长度的平方），现在统一纯 width 渲染。
+   行描述符（裸字符串；转义交给 buildBarRow 的 esc，更新走 textContent）：
+     { key, cls?, rank, top?, name, sub?, width, alpha?, valMain, valShare,
+       title?, interactive?, pluginKey? }                                    */
+function reducedMotion() {
+  return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+}
+
+function buildBarRow(d) {
+  const el = document.createElement('div');
+  el.className = `uc-bar-row${d.cls ? ` ${d.cls}` : ''}${d.top ? ' top' : ''}`;
+  el.dataset.barKey = d.key;
+  // data-key 仅供下钻委托（.usage-chart [data-key]）使用：chats/models 行有、
+  // 插件/对照行没有（它们走自己的 openPluginToolsModal 委托，见 data-plugin-key）
+  if (d.dataKey) el.dataset.key = d.key;
+  if (d.interactive) { el.setAttribute('role', 'button'); el.setAttribute('tabindex', '0'); }
+  if (d.title) el.title = d.title;
+  el.style.setProperty('--i', String(d.stagger ?? 0));
+  el.innerHTML = `
+    <div class="uc-bar-label"><span class="uc-rank">${esc(d.rank)}</span><span class="uc-name" title="${esc(d.name + (d.sub ? ' · ' + d.sub : ''))}">${esc(d.name)}${d.sub ? `<i class="uc-name-sub">${esc(d.sub)}</i>` : ''}</span></div>
+    <div class="uc-bar-track"><div class="uc-bar-fill" style="width:${d.width.toFixed(1)}%;opacity:${Number(d.alpha ?? 1).toFixed(2)}"></div></div>
+    <div class="uc-bar-val"><b>${esc(d.valMain)}</b><span class="uc-bar-share">${esc(d.valShare)}</span></div>`;
+  return el;
+}
+
+function reconcileBarBlock(host, data, opts = {}) {
+  if (!host) return;
+  if (data.empty) {
+    if (host.dataset.barMode !== 'empty' || host.innerHTML !== data.empty) host.innerHTML = data.empty;
+    host.dataset.barMode = 'empty';
+    return;
+  }
+  if (host.dataset.barMode !== 'rows' || !host.querySelector(':scope > .uc-bars')) {
+    host.innerHTML = '<div class="uc-bars"></div>';
+    host.dataset.barMode = 'rows';
+  }
+  const barsBox = host.querySelector(':scope > .uc-bars');
+  const reduce = reducedMotion();
+  // FLIP · First：调和前先记旧行位置
+  const first = new Map();
+  if (!reduce) {
+    barsBox.querySelectorAll(':scope > .uc-bar-row').forEach((el) => {
+      first.set(el.dataset.barKey ?? '', el.getBoundingClientRect());
+    });
+  }
+  const byKey = new Map();
+  barsBox.querySelectorAll(':scope > .uc-bar-row').forEach((el) => byKey.set(el.dataset.barKey ?? '', el));
+  const kept = new Set();
+  data.rows.forEach((d, idx) => {
+    let el = byKey.get(d.key);
+    if (!el) {
+      el = buildBarRow({ ...d, stagger: idx });
+    } else {
+      // ── 原位更新（不重建、不重播入场动画）──
+      el.className = `uc-bar-row${d.cls ? ` ${d.cls}` : ''}${d.top ? ' top' : ''}`;
+      const rank = el.querySelector('.uc-rank');
+      if (rank && rank.textContent !== d.rank) rank.textContent = d.rank;
+      const name = el.querySelector('.uc-name');
+      const nameSig = `${d.name}\u0001${d.sub || ''}`;
+      if (name && el.dataset.nameSig !== nameSig) {
+        el.dataset.nameSig = nameSig;
+        name.textContent = d.name;
+        let sub = name.querySelector('.uc-name-sub');
+        if (d.sub) {
+          if (!sub) { sub = document.createElement('i'); sub.className = 'uc-name-sub'; name.appendChild(sub); }
+          sub.textContent = d.sub;
+        } else if (sub) sub.remove();
+      }
+      const fill = el.querySelector('.uc-bar-fill');
+      if (fill) {
+        // 旧行被 insertBefore 移动时会重插节点 → CSS 入场动画重播（条重新"长一遍"）。
+        // 老行一律禁播入场动画：宽度本就走 width transition，入场只属于新行。
+        if (fill.style.animation !== 'none') fill.style.animation = 'none';
+        const w = `${d.width.toFixed(1)}%`;
+        if (fill.style.width !== w) fill.style.width = w;   // 宽度交给 CSS transition
+        const op = Number(d.alpha ?? 1).toFixed(2);
+        if (fill.style.opacity !== op) fill.style.opacity = op;
+      }
+      const val = el.querySelector('.uc-bar-val');
+      if (val) {
+        const b = val.querySelector('b');
+        if (b && b.textContent !== d.valMain) b.textContent = d.valMain;
+        const sh = val.querySelector('.uc-bar-share');
+        if (sh && sh.textContent !== d.valShare) sh.textContent = d.valShare;
+      }
+    }
+    if (d.interactive) {
+      if (!el.hasAttribute('role')) { el.setAttribute('role', 'button'); el.setAttribute('tabindex', '0'); }
+    } else { el.removeAttribute('role'); el.removeAttribute('tabindex'); }
+    if (d.title !== undefined && el.title !== d.title) el.title = d.title;
+    if (d.pluginKey) el.dataset.pluginKey = d.pluginKey;    // 插件下钻委托读这个
+    if (d.dataKey) { if (el.dataset.key !== d.key) el.dataset.key = d.key; }
+    else if (el.dataset.key !== undefined) el.removeAttribute('data-key');
+    kept.add(d.key);
+    // 顺序对齐：只在不在预期位置时才移动（移动 = 重插节点，会重播 CSS 动画）
+    if (barsBox.children[idx] !== el) barsBox.insertBefore(el, barsBox.children[idx] || null);
+  });
+  // 占位行（.uc-ph，见下方 R233）不在这里删除 —— 它们的去留由下面的
+  // opts.filler 分支按剩余高度重新裁定，删了再加会重播入场动画。
+  byKey.forEach((el, key) => { if (!kept.has(key) && !el.classList.contains('uc-ph')) el.remove(); });
+  let footEl = host.querySelector(':scope > .uc-rest');
+  if (data.footHtml) {
+    if (!footEl) { footEl = document.createElement('div'); footEl.className = 'uc-rest'; host.appendChild(footEl); }
+    if (footEl.innerHTML !== data.footHtml) footEl.innerHTML = data.footHtml;
+  } else if (footEl) footEl.remove();
+  /* ── R233（2026-11-14，用户：「底下这一大块不能空着吧，假装有群聊占位」）────
+     按会话真实条目少（比如只有 4 条）时，面板底部会剩一大块空白。用「假群聊」
+     占位行把版面填满：
+       · 只动 DOM：不进 data.rows / footHtml，不参与合计、占比与点击下钻；
+       · 占位行走稳定 key（ph:0…）的原位调和 —— 轮询刷新时不会闪、不会重播动画；
+       · 样式 .uc-ph 整体调灰 + 虚线名次徽标，一眼能看出是占位（见 04-usage.css）。
+     R235c：行数不再实测剩余高度。实测方案接连出三个同源 bug —— 隐藏态量出
+     0/0 得 NaN；used 口径含占位行导致补了删、删了补的振荡；更隐蔽的是
+     .uc-bars 为 flex:1 且 min-height:auto，旧占位行会把容器撑高，clientHeight
+     随之变大 → free 恒为正 → 占位永不消失，面板卡在拉伸态（3→8 行切换实测
+     复现：文案说「其余 2 项」下面却还挂着 3 行假群聊）。改为**无状态按固定
+     容量补**：CAP 与 BAR_LIMIT 同源（R234 实测 400px 基准最多 6 行，R236
+     收拢为 USAGE_BAR_CAP），真实行多到撑高面板时 rows.length > CAP，
+     自动一行不补；隐藏态调和也成立（无测量即无 NaN/振荡/自持）。 */
+  if (opts.filler) {
+    const n = Math.max(0, Math.min(USAGE_BAR_CAP - data.rows.length, 4));
+    const phBy = new Map();
+    barsBox.querySelectorAll(':scope > .uc-bar-row.uc-ph').forEach((el) => phBy.set(el.dataset.barKey, el));
+    const phKept = new Set();
+    const base = data.rows.length;                      // 名次接着真实行往下编
+    for (let i = 0; i < n; i++) {
+      const key = `ph:${i}`;
+      phKept.add(key);
+      const d = opts.filler(i, base);
+      let el = phBy.get(key);
+      if (!el) {
+        el = buildBarRow({ ...d, key, stagger: base + i });
+        el.classList.add('uc-ph');
+      } else {
+        const rank = el.querySelector('.uc-rank');
+        if (rank && rank.textContent !== d.rank) rank.textContent = d.rank;
+        const name = el.querySelector('.uc-name');
+        if (name && name.textContent !== d.name) name.textContent = d.name;
+        const fill = el.querySelector('.uc-bar-fill');
+        if (fill) {
+          const w = `${d.width.toFixed(1)}%`;
+          if (fill.style.width !== w) fill.style.width = w;
+          const op = Number(d.alpha ?? 1).toFixed(2);
+          if (fill.style.opacity !== op) fill.style.opacity = op;
+        }
+      }
+      const idx = base + i;
+      if (barsBox.children[idx] !== el) barsBox.insertBefore(el, barsBox.children[idx] || null);
+    }
+    phBy.forEach((el, key) => { if (!phKept.has(key)) el.remove(); });
+  }
+  // FLIP · Invert + Play：行序/行数变化时，旧行平移滑到新位置
+  if (!reduce) {
+    barsBox.querySelectorAll(':scope > .uc-bar-row').forEach((el) => {
+      const f = first.get(el.dataset.barKey ?? '');
+      if (!f) return;                                       // 新行走 ucBarGrow 入场
+      // R236：调和发生在隐藏块（如按天视图下轮询跑到按会话卡）时，First 位置
+      // 量出来全是 0 —— 切回可见的瞬间 dx/dy 是巨大的负位移，行会从屏外飞入。
+      // First 没有尺寸说明当时不可见，直接放弃 FLIP（行留在原位即可）。
+      if (!f.width && !f.height) return;
+      const l = el.getBoundingClientRect();
+      const dx = f.left - l.left;
+      const dy = f.top - l.top;
+      if (!dx && !dy) return;
+      el.style.transition = 'none';
+      el.style.transform = `translate(${dx.toFixed(1)}px, ${dy.toFixed(1)}px)`;
+      el.getBoundingClientRect();                           // 强制 reflow
+      el.style.transition = 'transform .45s cubic-bezier(.22, .85, .28, 1)';
+      el.style.transform = '';
+      const clear = () => { el.style.transition = ''; el.style.transform = ''; el.removeEventListener('transitionend', clear); };
+      el.addEventListener('transitionend', clear);
+      setTimeout(clear, 520);
+    });
+  }
+}
+
 function usageBars(list, metric, labelOf, limit = 8) {
   // key 做二级比较项，保证排序稳定（同指标值的条目不随刷新跳动）
   const items = (list || []).slice().sort((a, b) => {
@@ -705,7 +895,7 @@ function usageBars(list, metric, labelOf, limit = 8) {
     if (d) return d;
     return String(a.key ?? '').localeCompare(String(b.key ?? ''));
   });
-  if (!items.length) return '<div class="uc-empty muted">这段时间没有记录</div>';
+  if (!items.length) return { empty: '<div class="uc-empty muted">这段时间没有记录</div>' };
   const shown = items.slice(0, limit);
   const max = Math.max(...shown.map((x) => metricOf(x, metric)), 0) || 1;
   const totalV = items.reduce((a, x) => a + Math.max(0, metricOf(x, metric)), 0);
@@ -715,30 +905,33 @@ function usageBars(list, metric, labelOf, limit = 8) {
 
   const rows = shown.map((x, i) => {
     const v = metricOf(x, metric);
-    // ⚠️ 曾经是 Math.max(2, (v/max)*100)：值为 0 的项也被画出 2% 宽的条，
-    // 看起来"有数据"，点进去却是 0。零值就该是零宽度（仍保留行与百分比，
-    // 用户能看到"有这一项但没用量"）。
+    // ⚠️ 曾经是 Math.max(2, ...)：值为 0 的项也画出 2% 宽的条，看起来"有数据"
+    // 点进去却是 0。零值就该是零宽度（仍保留行与百分比）。
     const w = max > 0 ? Math.max(0, (v / max) * 100) : 0;
-    // 占比分母用全量 totalV（不截断），保证所有行占比之和为 100%。
-    // 负数（如退款场景）会破坏这个不变量，所以负值一律按 0 显示，
-    // 避免出现「各行加起来 120%」的诡异数字。
+    // 占比分母用全量 totalV（不截断），负值一律按 0，保证各行占比之和为 100%
     const share = totalV > 0 ? Math.max(0, (v / totalV) * 100) : 0;
-    // 名次色阶：第一名 1.0，每降一名淡 0.1，最低 0.34（再淡就看不清了）
     const alpha = Math.max(0.34, 1 - i * 0.1);
-    return `<div class="uc-bar-row${i === 0 ? ' top' : ''}" data-key="${esc(x.key)}" role="button" tabindex="0" title="点击查看明细">`
-         + `<div class="uc-bar-label"><span class="uc-rank">${i + 1}</span><span class="uc-name">${esc(labelOf(x))}</span></div>`
-         + `<div class="uc-bar-track"><div class="uc-bar-fill" style="width:${w.toFixed(1)}%;opacity:${alpha.toFixed(2)}"></div></div>`
-         + `<div class="uc-bar-val">${esc(fmtMetric(v, metric))}<span class="uc-bar-share">· ${share.toFixed(0)}%</span></div>`
-         + `</div>`;
-  }).join('');
+    return {
+      key: String(x.key ?? `#${i}`),
+      dataKey: true,
+      top: i === 0,
+      rank: String(i + 1),
+      name: labelOf(x),
+      width: w,
+      alpha,
+      valMain: fmtMetric(v, metric),
+      valShare: `· ${share.toFixed(0)}%`,
+      title: '点击查看明细',
+      interactive: true,
+    };
+  });
 
   // 全部项都已经画出来时，「前 N 项占 100%」是废话，只留合计
-  const foot = `<div class="uc-rest">合计 <b>${esc(fmtMetric(totalV, metric))}</b>`
+  const footHtml = `合计 <b>${esc(fmtMetric(totalV, metric))}</b>`
     + (rest.length
         ? ` · 前 ${shown.length} 项占 <b>${topPct.toFixed(0)}%</b> · 其余 ${rest.length} 项占 <b>${(100 - topPct).toFixed(0)}%</b>`
-        : '')
-    + `</div>`;
-  return `<div class="uc-bars">${rows}</div>${foot}`;
+        : '');
+  return { rows, footHtml };
 }
 
 /** 画三张图（用 dataset.sig 做内容指纹，轮询时内容没变就不动 DOM） */
@@ -749,18 +942,148 @@ function renderUsageCharts(stats, box) {
   const host = box.querySelector('[data-chart="days"]');
   // 折线图要用真实像素宽度：优先量自己的容器，量不到再退回外层
   const width = (host?.clientWidth || box.clientWidth || 680) - 4;
-  const html = {
-    days: days.length ? usageLineChart(days, metric, width) : '<div class="uc-empty muted">这段时间没有记录</div>',
-    chats: usageBars(stats?.chats, metric, (c) => formatChatTitle(c.key, chatNameOf(c.key))),
-    models: usageBars(stats?.models, metric, (m) => (m.vendor ? `${m.vendor}：${m.model}` : (m.model ?? m.key)))
-  };
-  for (const name of Object.keys(html)) {
-    const el = box.querySelector(`[data-chart="${name}"]`);
-    if (!el) continue;
-    // 宽度变了也要重画（否则折线图会被拉伸变形）
-    const sig = `${width}|${html[name]}`;
-    if (el.dataset.sig !== sig) { el.innerHTML = html[name]; el.dataset.sig = sig; }
+  // ⚠️ 提前短路（2026-11-13）：原来的流程是"先生成三张图的完整 HTML 字符串，
+  //    再拿字符串比 sig"。轮询一次就算数据一个字节没变，也要白造三遍字符串
+  //    （「全部」范围几百天时是几百个 SVG 节点的字符串）。
+  //    现在只有**按天折线**走「宽度|指标|后端统计时刻」指纹短路 —— computedAt
+  //    是后端真正算完的时刻，走 3 小时结果缓存时它不变，数据没变就整段跳过。
+  //    chats/models **不能**这样短路：它们的标签走 chatNameOf/m.model，
+  //    会话改名后内容会变而 computedAt 不变，按内容比 sig 才不会漏更新
+  //    （这两张每张最多 8 行，字符串生成极便宜，不值得冒险）。
+  const daysStamp = `${width}|${metric}|${stats?.computedAt || ''}`;
+  const dayEl = box.querySelector('[data-chart="days"]');
+  if (dayEl && dayEl.dataset.sig !== daysStamp) {
+    dayEl.innerHTML = days.length ? usageLineChart(days, metric, width, 232) : '<div class="uc-empty muted">这段时间没有记录</div>';
+    dayEl.dataset.sig = daysStamp;
   }
+  // R218（用户：「超出的群聊可以先收起来」）：左侧面板高度统一成 --usage-panel-h(360) 后，
+  //   能放下的条形行数是固定的 —— 实测行距 34.4px、卡头/摘要/合计/数值表共占约 163px，
+  //   (360-163)/34.4 ≈ 5.7，取 5 行最稳（6 行会把面板顶到 369，卡片高度又跟着变）。
+  //   超出部分不是消失：usageBars 的合计行会写「其余 N 项占 X%」，完整清单在「数值表」里。
+  //   R234（2026-11-14，用户：「当前大小下能塞几个会话」）：面板 R221 起为 400、
+  //   条形 14→9px、行距 6px —— 真实 CSS 逐档实测 6 行时卡片仍正好 400px 不被撑高
+  //   （第 7 行起撑到 424）。BAR_LIMIT 5→6：真实会话优先占满容量，占位行只在
+  //   真实不足 6 行时补底（5 时第 6 个真实会话反被占位顶掉，本末倒置）。
+  //   R236：数值收拢为 USAGE_BAR_CAP（定义在 renderChatsBars 上方）。
+  const BAR_LIMIT = USAGE_BAR_CAP;
+  // R229：条形图按键调和（原位更新 + FLIP 行序滑动），不再整块 innerHTML 重建
+  // R233：按会话条目少时底部用「假群聊」占位行填满（只对按会话开 —— 假模型名 /
+  // 假插件名看着像真数据会误导，群号一眼就是凑数的）。占位行名次接在真实行后面。
+  // R233b：抽成独立函数 —— 维度切换（data-udim）不重渲染，切回按会话时要靠
+  // bindUsageDimObserver 立刻补一次调和，两处共用同一段逻辑。
+  renderChatsBars(stats, box);
+  reconcileBarBlock(box.querySelector('[data-chart="models"]'),
+    usageBars(stats?.models, metric, (m) => (m.vendor ? `${m.vendor}：${m.model}` : (m.model ?? m.key)), BAR_LIMIT));
+  renderHeroSpark(stats, box);
+}
+
+/* ── R233：按会话条形图 + 底部占位行 ──────────────────────────────────
+   renderUsageCharts 与 bindUsageDimObserver（R233b）共用。
+   R234：BAR_LIMIT 6 与 renderUsageCharts 保持一致（400px 面板实测容量）。
+   R236：容量常量收拢 —— 此前 6 散在四处（BAR_LIMIT / renderChatsBars /
+   pluginBars 调用 / 占位 CAP），改面板高度时漏改任何一处就会互相打架。 */
+const USAGE_BAR_CAP = 6;   // 400px 面板基准实测容量；改 --usage-panel-h 时两处一起动
+const PH_GROUPS = ['群 114514', '群 1919810', '群 233333', '群 666666', '群 9527'];
+function renderChatsBars(stats, box) {
+  if (!box) return;
+  reconcileBarBlock(box.querySelector('[data-chart="chats"]'),
+    usageBars(stats?.chats, usageMetric(), (c) => formatChatTitle(c.key, chatNameOf(c.key)), USAGE_BAR_CAP),
+    { filler: (i, base) => ({
+        rank: String(base + i + 1),
+        name: PH_GROUPS[i % PH_GROUPS.length],
+        width: Math.max(1.6, 4.2 - i * 1.1),
+        alpha: 0.15,
+        valMain: '—',
+        valShare: '',
+      }) });
+}
+
+/* ── R233b（2026-11-14，用户：「占位有的时候会莫名其妙地消失」）──────────
+   根因：维度切换只写 #usage-page 的 data-udim（14-chrome.js applyUsageDim），
+   不触发重渲染。而在按天等其他视图下，chats 块 display:none，轮询的
+   renderChatsBars 照跑 —— 隐藏时 getBoundingClientRect/clientHeight 全为 0，
+   占位行数会算成 NaN，已有的占位行被当成「不需要」全删。等用户切回按会话，
+   看到的就是被删过的旧 DOM，要干等下一次轮询才补回 —— 表现为「莫名消失」。
+   修法：监听 data-udim 属性变化，切回按会话（或任何切换）时立刻补一次调和；
+   隐藏期间的调和由 reconcileBarBlock 的测量防护兜底（不增不删）。 */
+let usageDimObserverBound = false;
+function bindUsageDimObserver() {
+  if (usageDimObserverBound) return;
+  const box = $('#usage-page');
+  if (!box || typeof MutationObserver === 'undefined') return;
+  usageDimObserverBound = true;
+  new MutationObserver(() => {
+    const args = state.usageRenderArgs;
+    if (!args || !args.stats || state.tab !== 'usage') return;
+    renderChatsBars(args.stats, box);
+  }).observe(box, { attributes: true, attributeFilter: ['data-udim'] });
+}
+
+/* ── Hero 迷你趋势（2026-11-13 Phase 3）──────────────────────────────────
+   Hero 里那条横跨全宽的细线：不用滚到趋势卡，先看"这段时间是平的还是炸的"。
+   只画形状、无坐标轴无文字 —— 它是情绪层，不是读数层（精确值在下面的趋势卡）。 */
+function usageHeroSpark(points, metric) {
+  const list = points || [];
+  const n = list.length;
+  if (n < 2) return '';
+  const W = 1000, H = 44, pad = 3;
+  const vals = list.map((p) => Math.max(0, metricOf(p, metric)));
+  const max = Math.max(...vals, 0);
+  const min = Math.min(...vals, 0);
+  const span = (max - min) || 1;
+  const X = (i) => (W * i) / (n - 1);
+  const Y = (v) => H - pad - ((H - pad * 2) * (v - min)) / span;
+  const line = vals.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(' ');
+  const area = `${line} L${W.toFixed(1)},${H} L0,${H} Z`;
+  return `<svg class="uh-spark-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" focusable="false">`
+    + `<path class="hs-area" d="${area}"/>`
+    + `<path class="hs-line" d="${line}" pathLength="1" vector-effect="non-scaling-stroke"/>`
+    + `<circle class="hs-last" cx="${X(n - 1).toFixed(1)}" cy="${Y(vals[n - 1]).toFixed(1)}" r="3.2"/>`
+    + `</svg>`;
+}
+function renderHeroSpark(stats, box) {
+  const host = box.querySelector('[data-field="spark"]');
+  if (!host) return;
+  const html = usageHeroSpark(stats?.days, usageMetric());
+  if (host.dataset.sig === html) return;
+  host.dataset.sig = html;
+  host.innerHTML = html;
+}
+
+/* ── Hero 成本数字滚动（2026-11-13 Phase 3）──────────────────────────────
+   首次进入/切范围时从旧值滚到新值（easeOutCubic 560ms）。
+   轮询刷新如果值没变就完全不动 DOM —— 否则每次轮询都会重新滚一遍，很吵。 */
+function setCostValue(box, value) {
+  const el = box.querySelector('[data-field="cost"]');
+  if (!el) return;
+  const to = Number(value) || 0;
+  const prev = Number(el.dataset.v);
+  el.dataset.v = String(to);
+  const final = fmtYuan(to);
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce || prev === to) {
+    if (el.textContent !== final) el.textContent = final;
+    return;
+  }
+  // 首次渲染（元素刚建、没有旧值）从 0 滚上去，是这页最直接的"数据在动"信号；
+  // 之后的轮询/切换只从旧值滚到新值，不会每次归零。
+  const from = Number.isFinite(prev) ? prev : 0;
+  if (from === to) { el.textContent = final; return; }
+  const t0 = performance.now();
+  const dur = 480;
+  // 动画代次：快速切范围时可能连着起两次动画，旧的那条必须立刻让位，
+  // 否则两帧交替写 textContent，数字会来回抽。
+  const run = String((Number(el.dataset.run) || 0) + 1);
+  el.dataset.run = run;
+  const frame = (now) => {
+    if (el.dataset.run !== run) return;
+    const k = Math.min(1, (now - t0) / dur);
+    const e = 1 - Math.pow(1 - k, 3);
+    el.textContent = `¥${(from + (to - from) * e).toFixed(2)}`;
+    if (k < 1) requestAnimationFrame(frame);
+    else el.textContent = final;
+  };
+  requestAnimationFrame(frame);
 }
 
 /** 窗口缩放后重画图表（只挂一次，防重复绑定） */
@@ -860,9 +1183,12 @@ function openUsageHelpModal() {
     </div>`;
 }
 
-/* 全局委托：renderUsagePage / 骨架会多次重建按钮，绑一次即可（含加载占位期）。 */
+/* 全局委托：renderUsagePage / 骨架会多次重建按钮，绑一次即可（含加载占位期）。
+   诊断卡里的下钻按钮也随 innerHTML 反复重建，同样挂在这里，只绑一次。 */
 document.addEventListener('click', (e) => {
-  if (e.target?.closest?.('#usage-help-btn')) openUsageHelpModal();
+  if (e.target?.closest?.('#usage-help-btn')) { openUsageHelpModal(); return; }
+  const drill = e.target?.closest?.('.uic-drill[data-udim-go]');
+  if (drill) usageInsightDrill(drill.dataset.udimGo);
 });
 
 function renderUsageSkeleton() {
@@ -872,10 +1198,20 @@ function renderUsageSkeleton() {
     .map((h) => `<i class="sk-col" style="height:${h}%"></i>`).join('');
   const chart = (h) => `<div class="sk-chart" style="height:${h}px">${cols}</div>`;
   const h3 = '<div class="sk-line" style="width:64px;height:15px;margin:22px 0 10px"></div>';
-  // 说明行占位已随 R196 撤掉（静态说明收进「?」弹窗）；只留摘要行占位 ——
-  // 正式版式每块都有这一条，不占位的话数据回来时整页会往下跳。
-  const sum = '<div class="sk-line" style="width:86%;height:30px;margin:0 0 11px;border-radius:9px"></div>';
+  // R219：摘要占位跟着说明卡一起挪到右侧列，图表卡骨架里不再留这一条。
+  const sum = '<div class="sk-line" style="width:100%;height:64px;margin:0;border-radius:10px"></div>';
   // 顺序与正式页面一致（控制条 → 三块图 → 统计卡），加载完成时布局不跳。
+  // R232（2026-11-14）：Hero 骨架也要逐层对齐正式 Hero ——
+  //   ① .uh-ring 是 position:absolute;inset:0，缺了 .uh-ringbox 这层定位父级时
+  //      会相对整个 .usage-hero（position:relative）铺开，环跑到卡片中央被占位条横穿；
+  //   ② 三个 KPI 原来各是一条 44px 大方块，改成 .uh-kpi 里的 label/数值/副文本三条；
+  //   ③ 补 .uh-spark（正式页面 46px 高），否则数据回来时 Hero 会突然长高一截。
+  //   原先 padding-bottom:16px 的补偿随之撤掉，改由真实结构撑高。
+  // R231：光顺序一致还不够 —— 之前两块图用的是裸 .usage-card-panel，
+  // 正式页面里它们分别是 [data-block="days"] 和 .usage-attrib，按天视图下
+  // 后者会被 06-stage.css 隐藏。骨架没这些类名，于是加载时多出一块卡、
+  // 数据回来又突然消失，看着像"跳了一下"。现在类名与正式页面逐一对上，
+  // 显示/隐藏完全交给同一套 [data-udim] 规则。
   // 提示文案（R49）：大数据下统计可能要几秒，让用户知道页面没死。
   return `
     <div class="usage-wrap">
@@ -886,17 +1222,291 @@ function renderUsageSkeleton() {
         <span class="muted" style="font-size:12px">正在统计…历史数据较多时可能需要几秒</span>
         <div class="usage-ctrl"><span class="sk-line" style="width:280px;height:26px;margin:0"></span></div>
       </div>
-      ${h3}${sum}${chart(190)}
-      ${h3}${sum}${chart(150)}
-      ${h3}${sum}${chart(150)}
-      <div class="usage-cards" style="margin-top:22px">${card.repeat(5)}</div>
+      <div class="usage-hero skeleton">
+        <div class="uh-lead">
+          <div class="sk-line" style="width:44%;height:12px;margin:0"></div>
+          <div class="sk-line" style="width:78%;height:36px;margin:9px 0 0;border-radius:10px"></div>
+          <div class="sk-line" style="width:56%;height:12px;margin:9px 0 0"></div>
+        </div>
+        <div class="uh-kpis">
+          ${[0, 1, 2].map(() => `<div class="uh-kpi">
+            <div class="sk-line" style="width:72%;height:10px;margin:0"></div>
+            <div class="sk-line" style="width:88%;height:18px;margin:7px 0 0"></div>
+            <div class="sk-line" style="width:60%;height:9px;margin:7px 0 0"></div>
+          </div>`).join('')}
+        </div>
+        <div class="uh-rate">
+          <div class="uh-ringbox">
+            <svg class="uh-ring" viewBox="0 0 84 84" aria-hidden="true">
+              <circle class="uh-ring-bg" cx="42" cy="42" r="32"/>
+              <circle class="uh-ring-fg" cx="42" cy="42" r="32" pathLength="100"
+                      transform="rotate(-90 42 42)" style="stroke-dasharray:0 100"/>
+            </svg>
+          </div>
+          <div class="sk-line" style="width:56px;height:10px;margin:2px 0 0"></div>
+        </div>
+        <div class="uh-spark"><div class="sk-line" style="width:100%;height:46px;margin:0;border-radius:0"></div></div>
+      </div>
+      <div class="usage-main">
+        <div data-block="days" class="usage-sec usage-card-panel">${h3}${chart(180)}</div>
+        <div class="usage-side">
+          ${sum}
+          <div class="usage-insight skeleton"><div class="usage-card skeleton"><div class="sk-line"></div><div class="sk-line short"></div></div></div>
+        </div>
+      </div>
+      <div class="usage-attrib usage-card-panel">${h3}${chart(150)}</div>
     </div>`;
 }
 
 /** 建骨架（只建一次，轮询走 updateUsagePage 以免滚动位置丢失）。 */
+/* ── 诊断与建议（2026-11-13）──────────────────────────────────────────────
+   只用已有 stats 算规则、不额外请求：命中率偏低 / 成本集中在单一模型 /
+   单一会话吃掉大半成本。数字只有变成"要不要改"才有用。
+
+   本次增量：卡片补常显核心数字（token / 成本 / 调用 / 单轮 / 均值对比）、
+   命中率与占比条、最低命中率会话归因，以及复用左栏维度机制的下钻入口。
+   ⚠️ 用户反馈「信息有点太多」后收敛：每卡只留 3 个指标 + 1 条进度条 +
+      1 行关键对比，占比不再和标题/进度条重复；口径说明压成一句短语，
+      完整口径仍看页头「?」弹窗。改动只删展示项，不改统计口径。
+   ⚠️ 统计全部是**区间聚合值**，不是单价明细：不做"按缓存价省了多少钱"，
+      渲染层没有 estimateCost 同款口径、价格表也不含缓存折扣系数，硬算必错。
+      宁可少一项，只用 stats 里现成的 cost / token / runs 做同口径换算。
+   ⚠️ 下钻只复用左栏那套 data-udim（14-chrome.js 的 applyUsageDim），
+      不新建第二套 Tab、不写内联 hidden 覆盖。 */
+function usageInsightDrill(dim) {
+  const target = ['chats', 'models', 'plugins'].indexOf(String(dim)) >= 0 ? String(dim) : '';
+  if (!target) return;
+  const navBtn = document.querySelector(`#side-nav [data-usage-dim="${target}"]`);
+  if (navBtn && navBtn.getAttribute('aria-disabled') !== 'true') {
+    // 点一下左栏对应按钮：14-chrome.js 的委托会同步 usageDim、写 data-udim、
+    // 刷新左栏高亮并原地重画图表（隐藏块量不到宽度，必须走它那次重绘）。
+    navBtn.click();
+  } else {
+    // 左栏按钮尚未渲染 / 置灰：只写同一个 data-udim，不新建 Tab、不覆盖 hidden。
+    // 不调 updateUsagePage —— 它被 14-chrome.js 包了一层 applyUsageDim，
+    // 会按它自己记住的维度把值改回去。
+    const page = document.querySelector('#usage-page');
+    if (page) page.dataset.udim = target;
+  }
+  const block = document.querySelector(`#usage-page [data-block="${target}"]`);
+  if (!block) return;
+  const det = block.querySelector('details.usage-details');
+  if (det) det.open = true;
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  try {
+    block.scrollIntoView({ block: 'start', behavior: reduce ? 'auto' : 'smooth' });
+  } catch (e) {
+    const pane = document.querySelector('#usage-page');
+    if (pane) pane.scrollTop = 0;
+  }
+}
+
+function renderUsageInsights(stats, box) {
+  const host = box.querySelector('#usage-insight');
+  if (!host) return false;
+  const t = stats?.totals || {};
+  const totalCost = Number(t.cost) || 0;
+  const totalRuns = Math.max(0, Number(t.runs) || 0);
+  const avgUnit = totalCost / Math.max(1, totalRuns);   // 全站单轮成本，除零保护
+  const cards = [];
+
+  // 所有对外展示的数字先过 num()：缺失 / null / 非有限值一律当 0，
+  // 绝不把 NaN / Infinity / undefined 拼进 HTML。
+  const num = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  const pct0 = (v) => (Math.max(0, Math.min(1, num(v))) * 100).toFixed(0);
+  const width = (v) => (Math.max(0, Math.min(1, num(v))) * 100).toFixed(1);
+  const cnt = (v) => String(Math.max(0, Math.round(num(v))));
+  const modelName = (m) => (m.vendor
+    ? `${m.vendor}：${m.model ?? m.key ?? ''}`
+    : String(m.model ?? m.key ?? '未知模型'));
+  const chatName = (c) => formatChatTitle(c.key, chatNameOf(c.key));
+  /** R211：单轮成本 + 与全站均值的倍数，压成一行。
+   *  上一版把「单轮成本」单列一个指标、又在 rows 里写「单轮 vs 全站均值 /
+   *  全站 ¥… · 本项 N 倍」，两处重复且字数偏多。现在合并成一行，只留
+   *  本项数值 + 相对倍数；成本为 0 时不比较，不编数字。 */
+  const unitNote = (unit) => (avgUnit > 0
+    ? `${fmtYuan(unit)} · 全站 ${(num(unit) / avgUnit).toFixed(1)} 倍`
+    : fmtYuan(unit));
+  const kvHtml = (k, v) => `<div class="uic-kv"><span class="uic-k">${esc(k)}</span><b class="uic-v">${esc(v)}</b></div>`;
+
+  // R211：脏数据兜底 —— 后端正常不会给 null / 字符串元素，但排序比较器会
+  // 直接读 b.cost，这种输入一进来就抛 TypeError、整块用量页渲染中断。先滤掉
+  // 非对象元素，后面的 top.cost / modelName() / chatName() 才都有对象可用。
+  const cleanRows = (arr) => (Array.isArray(arr) ? arr : []).filter((x) => x && typeof x === 'object');
+  const byCost = (a, b) => num(b.cost) - num(a.cost)
+    || String(a.key ?? '').localeCompare(String(b.key ?? ''));
+  const models = cleanRows(stats?.models).slice().sort(byCost);
+  const chats = cleanRows(stats?.chats).slice().sort(byCost);
+
+  // ① 峰谷成本（R212）：替换原先与 Hero 圆环 / 输入 token 重复的「缓存命中率」卡。
+  //    Hero 已展示估算成本、缓存命中率(圆环)、输入 token，再放一张缓存卡是纯重复；
+  //    后端 totals 里的 peakCost / offPeakCost / peakRatio(按 token) 是 Hero 完全没有
+  //    的维度，用它讲「峰时贵」这个新故事：峰时只占 peakRatio 的 token，却吃了绝大部分
+  //    成本（峰时单价更高）。整张卡自洽、不下钻——峰谷是时间维度，现有 chats/models/
+  //    plugins 下钻都不展示峰谷拆分，硬下钻会误导，故省略「看明细」按钮。
+  //    成本占比用成本口径算（peakCost/(peak+offPeak)），与后端 peakRatio（token 口径）
+  //    分开，不在同一个数字上混两个口径。两者都为 0（没有峰谷区分的价格）则不发卡。
+  const peakCost = Math.max(0, num(t.peakCost));
+  const offPeakCost = Math.max(0, num(t.offPeakCost));
+  const peakCostRatio = (peakCost + offPeakCost) ? peakCost / (peakCost + offPeakCost) : 0;
+  const peakTokRatio = num(t.peakRatio);   // 后端按 token 算，独立于成本占比
+  if (peakCost + offPeakCost > 0) {
+    // R216：三张卡统一成「环形占比 + 标题 + 明细行」同一骨架（用户「风格不符，
+    //   怎么感觉可以考虑饼状图」）。峰谷卡不再单独出模板：环 = 峰时成本占比，
+    //   三行分别是峰时金额 / 谷时金额 / token 口径占比。
+    //   tone 用 warn（橙）—— 峰时贵本来就是提醒语义，颜色由 tone 驱动，不写行内色。
+    cards.push({
+      key: 'peak-cost',
+      tone: 'warn',
+      ring: peakCostRatio,          // 成本口径，环里显示
+      title: '峰时成本占比',
+      rows: [
+        ['峰时', fmtYuan(peakCost)],
+        ['谷时', fmtYuan(offPeakCost)],
+        ['token 占比', `${pct0(peakTokRatio)}%`]   // 后端 token 口径，与环的成本口径分开
+      ]
+    });
+  }
+
+  // ② 成本集中在单一模型：环 = 占比，明细 3 行 + 下钻。
+  //    R211：删说明句 / 口径定义行；「单轮成本」并入 rows，不再单列第三个指标。
+  //    R216：标题只留模型名（占比已在环里，标题再写一遍就是重复），
+  //          旧标题「成本集中在「X」（67%）」在窄栏里还会被省略号截掉后半句。
+  if (models.length && totalCost > 0) {
+    const top = models[0];
+    const share = num(top.cost) / totalCost;
+    if (share >= 0.6) {
+      const runs = Math.max(1, Math.round(num(top.runs)));
+      const unit = num(top.cost) / runs;
+      cards.push({
+        key: 'top-model',
+        tone: 'info',
+        ring: share,
+        title: modelName(top),
+        rows: [
+          ['区间成本', fmtYuan(top.cost)],
+          ['调用次数', `${cnt(top.runs)} 次`],
+          ['单轮成本', unitNote(unit)]
+        ],
+        drill: { dim: 'models', label: '看明细' }
+      });
+    }
+  }
+
+  // ③ R219 撤掉「单一会话吃掉大半成本」卡：它与右侧「当前视图」说明卡里
+  //    「按会话」那条结论是同一件事（top 会话 + 占比），且 >=50% 的阈值让它在
+  //    49% 这类场景里干脆缺席。位置让给说明卡，右栏不再并排写两遍同一个数字。
+
+  if (!cards.length) {
+    host.hidden = true;
+    host.innerHTML = '';
+    host.dataset.sig = '';
+    return false;
+  }
+  host.hidden = false;
+  // R211：卡片不再渲染说明句（uic-body）与口径定义（uic-hint）—— 这两处是纯文字、
+  //   信息量最低，用户两次反馈「字有点多」。
+  // R216：三张卡统一骨架 —— 左侧环形占比 + 右侧「标题 / 明细行 / 下钻」。
+  //   环用 conic-gradient 画，--p 是百分比；颜色由卡片的 tone 类决定（见 04-usage.css）。
+  //   峰谷卡没有下钻，.uic-foot 为空，靠 CSS 的 :empty 收起，三卡结构仍然一致。
+  // R220：诊断卡不再是「环 + 信息」的小卡片，而是版面读数 ——
+  //   一个超大百分比（呼应 Hero 的 ¥3.14）+ 3px 细进度条 + 细线分隔的明细行。
+  //   右栏因此从「等权卡片堆叠」变成「一主一辅 + 贴底注解」的编辑式层次。
+  const cardHtml = (c) => `
+    <div class="usage-insight-card ${esc(c.tone)}">
+      <div class="uic-readout">
+        <span class="uic-big">${esc(pct0(c.ring))}<span class="uic-pct">%</span></span>
+        <div class="uic-readout-side">
+          <div class="uic-title" title="${esc(c.title)}">${esc(c.title)}</div>
+          <div class="uic-track"><i style="width:${width(c.ring)}%"></i></div>
+        </div>
+      </div>
+      <div class="uic-kvs">${(c.rows || []).map(([k, v]) => kvHtml(k, v)).join('')}</div>
+      <div class="uic-foot">${c.drill ? `<button class="uic-drill" type="button" data-udim-go="${esc(c.drill.dim)}">${esc(c.drill.label)} ›</button>` : ''}</div>
+    </div>`;
+  // R228（2026-11-14，用户反馈「切范围时右栏希望数字和占比条在变，而不是重建」）：
+  // 诊断卡改为**按键调和（keyed reconciliation）**——按 c.key 找 DOM 里的同款卡：
+  //   · 大百分比数字滚动到新值（easeOutCubic 560ms，与 Hero 成本数字同节奏）；
+  //   · 占比条宽度改 inline style，交给 CSS transition 平滑过渡（不再 scaleX 重播）；
+  //   · 明细行键序不变时只原地改 .uic-v 文本；
+  //   · 只有卡出现/消失/明细行结构变化才动 DOM —— 新插入的卡照播 R224 入场动画。
+  const tweenPct = (el, ringValue) => {
+    const target = Math.round(Math.max(0, Math.min(1, num(ringValue))) * 100);
+    const txt = el.firstChild;                       // 文本节点（后随 .uic-pct）
+    if (!txt || txt.nodeType !== 3) return;
+    const from = Number(el.dataset.v ?? target);
+    el.dataset.v = String(target);
+    const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduce || from === target) { txt.textContent = String(target); return; }
+    const t0 = performance.now();
+    const DUR = 560;
+    const ease = (p) => 1 - Math.pow(1 - p, 3);
+    const step = (now) => {
+      const p = Math.min(1, (now - t0) / DUR);
+      txt.textContent = String(Math.round(from + (target - from) * ease(p)));
+      if (p < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  };
+  const existing = new Map();
+  host.querySelectorAll(':scope > .usage-insight-card').forEach((el) => existing.set(el.dataset.uicKey ?? '', el));
+  const kept = new Set();
+  cards.forEach((c, idx) => {
+    let el = existing.get(c.key);
+    if (el) {
+      // ── 原位更新（不重建，不重播入场动画）──
+      if (el.dataset.tone !== c.tone) { el.className = `usage-insight-card ${esc(c.tone)}`; el.dataset.tone = c.tone; }
+      tweenPct(el.querySelector('.uic-big'), c.ring);
+      const bar = el.querySelector('.uic-track i');
+      if (bar) bar.style.width = `${width(c.ring)}%`;
+      const titleEl = el.querySelector('.uic-title');
+      if (titleEl && titleEl.textContent !== c.title) { titleEl.textContent = c.title; titleEl.title = c.title; }
+      const kvBox = el.querySelector('.uic-kvs');
+      const rowKeys = (c.rows || []).map(([k]) => k).join('\u0001');
+      if (kvBox && kvBox.dataset.keys !== rowKeys) {
+        kvBox.dataset.keys = rowKeys;               // 行结构变了才重建明细
+        kvBox.innerHTML = (c.rows || []).map(([k, v]) => kvHtml(k, v)).join('');
+      } else if (kvBox) {
+        const vs = kvBox.querySelectorAll('.uic-v');
+        (c.rows || []).forEach(([k, v], i) => { const n = vs[i]; if (n && n.textContent !== String(v)) n.textContent = String(v); });
+      }
+      const footEl = el.querySelector('.uic-foot');
+      const footHtml = c.drill ? `<button class="uic-drill" type="button" data-udim-go="${esc(c.drill.dim)}">${esc(c.drill.label)} ›</button>` : '';
+      if (footEl && footEl.innerHTML !== footHtml) footEl.innerHTML = footHtml;
+    } else {
+      // ── 新卡：走模板插入（入场动画由 CSS 在插入时自动播放一次）──
+      const tmp = document.createElement('div');
+      tmp.innerHTML = cardHtml(c).trim();
+      el = tmp.firstChild;
+      el.dataset.uicKey = c.key;
+      el.dataset.tone = c.tone;
+      const big = el.querySelector('.uic-big');
+      if (big) big.dataset.v = String(Math.round(num(c.ring) * 100));
+      const kv = el.querySelector('.uic-kvs');
+      if (kv) kv.dataset.keys = (c.rows || []).map(([k]) => k).join('\u0001');
+    }
+    kept.add(c.key);
+    // 顺序对齐：只在不在预期位置时才移动节点（appendChild/insertBefore 会重插
+    // 节点、导致 CSS 入场动画重播 —— 能不动就不动）
+    if (host.children[idx] !== el) host.insertBefore(el, host.children[idx] || null);
+  });
+  existing.forEach((el, key) => { if (!kept.has(key)) el.remove(); });
+  const sig = cards.map((c) => c.key).join(',');
+  if (host.dataset.sig !== sig) { host.dataset.sig = sig; }
+  return true;
+}
+
+let usageSeenOnce = false;        // 是否渲染过一次用量页：入场动画只在首次播放
 function renderUsagePage(stats, st, prices) {
   const box = $('#usage-page');
   if (!box) return;
+  // 首次进入播入场动画；之后切页重建 DOM 不再重播（见 04-usage.css 的 [data-fresh] 段）——
+  // 否则每次切页都"整页浮现"，数据明明还在却像刚加载完，被感知为慢。
+  box.dataset.fresh = usageSeenOnce ? '0' : '1';
+  usageSeenOnce = true;
 
   box.innerHTML = `
     <div class="usage-wrap">
@@ -922,14 +1532,60 @@ function renderUsagePage(stats, st, prices) {
         </div>
       </div>
 
-      <div data-block="days" class="usage-sec">
+      <!-- 2026-11-13：结论区重做成 Hero —— 一个大数 + 四个内联指标，
+           取代原先五张等宽卡片并排（那是旧页面最明显的影子）。
+           data-field / id 保持唯一，updateUsagePage 照旧填充。 -->
+      <div class="usage-hero" data-zone="hero">
+        <div class="uh-lead">
+          <div class="uh-label">估算成本<span class="uh-range" data-hero-range></span></div>
+          <div class="uh-value" data-field="cost">-</div>
+          <div class="uh-sub" data-field="cost-sub">-</div>
+        </div>
+        <div class="uh-kpis">
+          <div class="uh-kpi">
+            <span class="uh-kl">模型调用</span>
+            <b data-field="runs">-</b>
+            <i data-field="runs-sub">-</i>
+            <button class="uh-link" id="runs-card" type="button" title="查看各类工具分别调用了多少次">工具明细 ›</button>
+          </div>
+          <div class="uh-kpi">
+            <span class="uh-kl">输入 token</span>
+            <b data-field="prompt">-</b>
+            <i data-field="prompt-sub">-</i>
+          </div>
+          <div class="uh-kpi">
+            <span class="uh-kl">搜索次数</span>
+            <b data-field="search">-</b>
+            <i data-field="search-sub">-</i>
+          </div>
+        </div>
+        <div class="uh-rate">
+          <div class="uh-ringbox">
+            <!-- SVG 圆环取代 conic-gradient（2026-11-13 用户反馈"不圆润"）：
+                 conic 的弧两端是平头切线，90% 时缺口夹在两个平头之间显得生硬；
+                 stroke-linecap:round 给两端真正的圆头，dasharray 还能平滑过渡。 -->
+            <svg class="uh-ring" data-field="rate-ring" viewBox="0 0 84 84" aria-hidden="true"
+                 title="缓存命中率分档：≥90% 绿 · 75–90% 橙 · &lt;75% 红">
+              <circle class="uh-ring-bg" cx="42" cy="42" r="32"/>
+              <circle class="uh-ring-fg" cx="42" cy="42" r="32" pathLength="100"
+                      transform="rotate(-90 42 42)"/>
+            </svg>
+            <b data-field="rate">-</b>
+          </div>
+          <span class="uh-kl">缓存命中</span>
+          <i data-field="rate-sub">-</i>
+        </div>
+        <!-- 迷你趋势：一眼看出这段时间是"平稳/爬升/尖峰"，不用先滚到趋势卡 -->
+        <div class="uh-spark" data-field="spark" aria-hidden="true"></div>
+      </div>
+
+      <div class="usage-main">
+      <div data-block="days" class="usage-sec usage-card-panel">
         <div class="usage-sec-head">
-          <h3 class="usage-h3">按天</h3>
+          <h3 class="usage-h3">趋势</h3>
           <span class="usage-sec-meta" data-meta="days"></span>
         </div>
-        <!-- R196：静态说明与「这些数字是怎么算的？」已收进页头「?」弹窗，
-             页面只留动态摘要行（data-sum）——updateUsagePage 仍往这里填结论。 -->
-        <p class="usage-sec-sum" data-sum="days"></p>
+        <!-- R219：动态摘要已收进右侧「当前视图」卡，图表卡只放标题 / 图 / 折叠数值表。 -->
         <!-- 时间序列 → 折线图（看趋势） -->
         <div class="usage-chart" data-chart="days"></div>
         <!-- 原始数值表：默认折叠，精确数字与点击下钻都还在 -->
@@ -942,12 +1598,30 @@ function renderUsagePage(stats, st, prices) {
         </details>
       </div>
 
+      <div class="usage-side">
+        <!-- R219：四条 data-sum 共用一张卡，由 04-usage.css 按 data-udim 只显示当前维度那一条。 -->
+        <div class="usage-view-note" id="usage-view-note" aria-live="polite">
+          <p class="usage-sec-sum" data-sum="days"></p>
+          <p class="usage-sec-sum" data-sum="chats"></p>
+          <p class="usage-sec-sum" data-sum="models"></p>
+          <p class="usage-sec-sum" data-sum="plugins"></p>
+        </div>
+        <aside class="usage-insight" id="usage-insight" aria-live="polite"></aside>
+      </div>
+      </div>
+
+      <!-- 维度切换由**左侧栏**（「统计维度」四项）负责：它写 #usage-page 的
+           data-udim，由 06-stage.css 的规则决定哪个 [data-block] 可见。
+           ⚠️ 曾经这里还有一套「按会话/按模型/按插件」的横排 Tab（用 hidden 控制），
+              和侧栏是两套机制抢同一批 [data-block] —— 侧栏点击被 hidden 压掉，
+              表现为"点了没反应"。已删除，只保留侧栏一套。 -->
+      <div class="usage-attrib usage-card-panel" id="usage-attrib">
+
       <div data-block="chats" class="usage-sec">
         <div class="usage-sec-head">
           <h3 class="usage-h3">按会话</h3>
           <span class="usage-sec-meta" data-meta="chats"></span>
         </div>
-        <p class="usage-sec-sum" data-sum="chats"></p>
         <!-- 分类排名 → 横向条形（折线会暗示"前后有趋势"，反而误导） -->
         <div class="usage-chart" data-chart="chats"></div>
         <details class="usage-details">
@@ -964,7 +1638,6 @@ function renderUsagePage(stats, st, prices) {
           <h3 class="usage-h3">按模型</h3>
           <span class="usage-sec-meta" data-meta="models"></span>
         </div>
-        <p class="usage-sec-sum" data-sum="models"></p>
         <div class="usage-chart" data-chart="models"></div>
         <details class="usage-details">
           <summary>数值表</summary>
@@ -1000,7 +1673,6 @@ function renderUsagePage(stats, st, prices) {
           </span>
         </div>
 
-        <p class="usage-sec-sum" data-sum="plugins"></p>
         <div class="usage-chart" data-chart="plugins"></div>
 
         <details class="usage-details">
@@ -1020,39 +1692,8 @@ function renderUsagePage(stats, st, prices) {
           </table>
         </details>
       </div>
-
-      <!-- 统计卡整排挪到图表之后（需求：先看趋势，再看精确数字；首屏只剩标题+图，更简洁）。
-           ⚠️ 这些 data-field / id 一个都不能少 —— updateUsagePage 靠它们填数值，
-              #runs-card 的点击绑定也挂在 renderUsagePage 里。
-           估算成本仍是第一张：它是这页的主指标（accent 描边/底色突出）。 -->
-      <div class="usage-cards">
-        <div class="usage-card accent">
-          <div class="uc-label">估算成本</div>
-          <div class="uc-value" data-field="cost">-</div>
-          <div class="uc-sub" data-field="cost-sub">-</div>
-        </div>
-        <div class="usage-card clickable" id="runs-card" title="点击查看各类工具分别调用了多少次">
-          <div class="uc-label">模型调用次数 <span class="uc-more">明细 ›</span></div>
-          <div class="uc-value" data-field="runs">-</div>
-          <div class="uc-sub" data-field="runs-sub">-</div>
-        </div>
-        <div class="usage-card">
-          <div class="uc-label">搜索次数 <span class="uc-tag">不计入成本</span></div>
-          <div class="uc-value" data-field="search">-</div>
-          <div class="uc-sub" data-field="search-sub">-</div>
-        </div>
-        <div class="usage-card">
-          <div class="uc-label">输入 token</div>
-          <div class="uc-value" data-field="prompt">-</div>
-          <div class="uc-sub" data-field="prompt-sub">-</div>
-        </div>
-        <div class="usage-card">
-          <div class="uc-label">缓存命中率</div>
-          <div class="uc-value" data-field="rate">-</div>
-          <div class="usage-bar"><div class="usage-bar-fill ok" data-field="rate-bar" style="width:0%"></div></div>
-          <div class="uc-sub" data-field="rate-sub">-</div>
-        </div>
       </div>
+
     </div>`;
 
   // 「调用次数」卡片可点开明细（骨架重建后重新绑定，所以放在 renderUsagePage 里）
@@ -1062,10 +1703,23 @@ function renderUsagePage(stats, st, prices) {
   $$('#usage-page [data-range]').forEach((el) => {
     el.addEventListener('click', () => {
       usageRange = el.dataset.range;
-      loadUsageView({ force: true });
+      // R226：inPlace —— 切范围原地更新数值层，不重建 DOM、不重播入场动画
+      loadUsageView({ force: true, keepContent: true, inPlace: true });
     });
   });
-  $('#usage-refresh-btn')?.addEventListener('click', () => loadUsageView({ force: true, hard: true }));
+  // P0-03：刷新点击即进入"重算中"态（防抖 + 反馈），成功/失败都恢复按钮
+  const refreshBtn = $('#usage-refresh-btn');
+  refreshBtn?.addEventListener('click', () => {
+    if (refreshBtn.disabled) return;
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = '重算中…';
+    // R230：带 keepContent+inPlace —— 强制加载也走原地更新，不再整页重建：
+    // ①「重算中…」按钮节点不会被 renderUsagePage 重建冲掉，反馈终能显示；
+    // ② 命中缓存时不再 renderUsagePage 两次，且不丢「展开全部」等前端状态；
+    // ③ 仍然 hard=true（服务端跳过 3h 缓存重算），数据照常是最新的。
+    Promise.resolve(loadUsageView({ force: true, hard: true, keepContent: true, inPlace: true }))
+      .finally(() => { refreshBtn.disabled = false; refreshBtn.textContent = '刷新'; });
+  });
 
   // 图表指标切换：只重画图，不重新请求接口（数据没变）
   $$('#usage-page [data-metric]').forEach((el) => {
@@ -1110,6 +1764,7 @@ function renderUsagePage(stats, st, prices) {
   }
 
   bindUsageResize();
+  bindUsageDimObserver();   // R233b：维度切换不重渲染 → 切回按会话立刻补占位调和
 
   // 行点击 → 弹明细
   box.querySelector('[data-table="days"]')?.addEventListener('click', (e) => {
@@ -1141,6 +1796,15 @@ function renderUsagePage(stats, st, prices) {
   }
 
   updateUsagePage(stats, st, prices);
+
+  // 插件块用**上次的结果**先恢复一份（2026-11-13 修"切到按插件先空白一下"）。
+  // 背景：切页/切范围会重建整页 DOM，插件块的 DOM 也跟着变空；它的数据来自
+  // 独立接口（/api/usage/plugins，同步算约 120ms + 网络），期间「按插件」维度
+  // 就是一片空白。这里用 state.pluginUsage 立刻填好，随后 loadPluginUsage
+  // 到达时再覆盖一次。范围不一致就不恢复（那是另一份数据）。
+  if (state.pluginUsage && pluginUsageRange === usageRange) {
+    try { renderPluginUsage(state.pluginUsage); } catch (e) { /* 恢复失败不阻塞主页 */ }
+  }
 }
 
 /** 只更新数值与表格行，不碰骨架。 */
@@ -1163,10 +1827,35 @@ function updateUsagePage(stats, st, prices) {
     const s = String(v);
     if (el.textContent !== s) el.textContent = s;
   };
+  // R229：Hero 大数字统一「滚动到新值」（easeOutCubic 480ms，与 setCostValue
+  // 完全一致——成本早就滚动，模型调用/输入 token/搜索次数却直跳，一页两种脾气）。
+  // 中间值走同一个 fmt，最终值与直接写完全一致；副行说明文字仍用 set 直换。
+  const tweenField = (field, to, fmt) => {
+    const el = box.querySelector(`[data-field="${field}"]`);
+    if (!el) return;
+    const target = Math.max(0, Number(to) || 0);
+    const from = Number(el.dataset.v ?? target);
+    el.dataset.v = String(target);
+    const final = fmt(target);
+    if (reducedMotion() || from === target) {
+      if (el.textContent !== final) el.textContent = final;
+      return;
+    }
+    const t0 = performance.now();
+    const DUR = 480;
+    const ease = (p) => 1 - Math.pow(1 - p, 3);
+    const step = (now) => {
+      const p = Math.min(1, (now - t0) / DUR);
+      const s = fmt(from + (target - from) * ease(p));
+      if (el.textContent !== s) el.textContent = s;
+      if (p < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  };
 
   // 价格口径说明（不再显示"当前模型" —— 全天可能换过多个模型）
   const today = st?.usage || {};
-  set('runs', t.runs || 0);
+  tweenField('runs', t.runs || 0, (v) => String(Math.round(v)));
   // ⚠️ 这两个数字**口径不同**，曾经并排显示成「132 / 今日 800 次」，
   // 用户必然以为数据错了：
   //   大字 runs      = LLM 调用次数（本页统计，一个会话多轮就是多次）
@@ -1175,7 +1864,9 @@ function updateUsagePage(stats, st, prices) {
   set('runs-sub', `今日 ${today.runs ?? 0} 次会话运行`);
   // 搜索次数：只列数量，不参与成本计算（搜索通常是资源包或免费的）
   const searches = Number(stats?.searchCount) || 0;
-  set('search', fmtTok(searches));
+  // ⚠️ fmtTok 是 toLocaleString，浮点中间值会短暂显示 3 位小数（1,234.567），
+  // 滚动过程中取整，最终值不受影响（token/次数本来就是整数口径）。
+  tweenField('search', searches, (v) => fmtTok(Math.round(v)));
   // 拆开显示搜索与抓取的构成（曾经三元两分支文案相同，判定是死逻辑）
   {
     const nSearch = Number(stats?.toolCounts?.web_search) || 0;
@@ -1184,11 +1875,18 @@ function updateUsagePage(stats, st, prices) {
       ? `搜索 ${nSearch} · 抓网页 ${nFetch}`
       : '本区间没有联网');
   }
-  set('prompt', fmtTok(t.promptTokens));
+  tweenField('prompt', t.promptTokens, (v) => fmtTok(Math.round(v)));
   set('prompt-sub', `输出 ${fmtTok(t.completionTokens)}`);
-  set('rate', fmtRate(t.cacheHitRate));
+  // P1-06（2026-11-14）：区间内没有任何调用时，命中率是"无数据"而不是"缓存很差"
+  // ——曾经 fmtRate(0) 显示红色的 0.0%，把新装首次使用 / 「今日」无调用吓一跳。
+  // 没调用时显示 '—'（环形也走灰色 none 档，见下方 tone）。
+  const hasRuns = (Number(t.runs) || 0) > 0;
+  set('rate', hasRuns ? fmtRate(t.cacheHitRate) : '—');
   set('rate-sub', `命中 ${fmtTok(t.cachedTokens)} / 输入 ${fmtTok(t.promptTokens)}`);
-  set('cost', fmtYuan(t.cost));
+  // P1-05：这行分母是命中率唯一的口径说明（CSS 截断已改为换行），补 title 双保险
+  const rateSubEl = box.querySelector('[data-field="rate-sub"]');
+  if (rateSubEl) rateSubEl.title = '缓存命中率 = 命中 token ÷ 输入 token';
+  setCostValue(box, t.cost);
   // ⚠️（2026-10-17 N7）成本 0 有**两种完全不同的含义**，必须让用户分得清：
   //   ① 真的没花钱（免费模型 / 本区间没调用）—— 正常；
   //   ② **没匹配到官方单价**（走中转站、或模型不在内置价格表里）——
@@ -1201,10 +1899,44 @@ function updateUsagePage(stats, st, prices) {
   const noPriceHint = (costZero && (Number(t.totalTokens) || 0) > 0)
     ? '未匹配到内置官方单价（中转站 / 未收录模型），可在「设置 → 模型与搜索 → 当前模型单价」自定义'
     : '';
-  set('cost-sub', [stats?.rangeLabel || '', noPriceHint].filter(Boolean).join(' · '));
-  const bar = box.querySelector('[data-field="rate-bar"]');
+  // 副标题：区间标签已搬到上面的胶囊里，这里改放"日均"——大数是总额，
+  // 日均是它旁边最有决策价值的一个数。成本为 0（没匹配到单价）时不写日均，
+  // 否则会出现"日均 ¥0"这种误导。
+  {
+    const dayCount = (stats?.days || []).length;
+    const totalCost = Number(t.cost) || 0;
+    const bits = [];
+    if (dayCount >= 2 && totalCost > 0) bits.push(`日均 ${fmtYuan(totalCost / dayCount)} · 共 ${dayCount} 天`);
+    if (noPriceHint) bits.push(noPriceHint);
+    set('cost-sub', bits.join(' · ') || '按当前区间累计估算');
+  }
   const rate = Number(t.cacheHitRate);
-  if (bar) bar.style.width = `${(Number.isFinite(rate) ? Math.max(0, Math.min(100, rate * 100)) : 0).toFixed(1)}%`;
+  const ratePct = Number.isFinite(rate) ? Math.max(0, Math.min(100, rate * 100)) : 0;
+  // 2026-11-13：命中率从"横条"升级成"环形仪表"（SVG 圆环 + 圆头描边，实现细节见
+  // 04-usage.css 的「环形命中率仪表」段与模板注释）。
+  // 分档配色沿用用户定的阈值：≥90% 绿 / 75–90% 橙 / <75% 红。
+  const ring = box.querySelector('[data-field="rate-ring"]');
+  if (ring) {
+    // P1-06：没有调用 → 'none' 灰档（无数据），不落到 'bad' 红档
+    const tone = !hasRuns ? 'none' : ratePct >= 90 ? 'ok' : ratePct >= 75 ? 'warn' : 'bad';
+    const pct = ratePct.toFixed(1);
+    ring.dataset.tone = tone;
+    // SVG 圆环：dasharray 按 pathLength=100 归一化，"pct 100" = 弧长 pct%。
+    // stroke-linecap:round 让弧两端是圆头（conic-gradient 版是平头，用户嫌不圆润）。
+    const fg = ring.querySelector('.uh-ring-fg');
+    if (fg) {
+      if (ring.dataset.painted === '1') {
+        fg.style.strokeDasharray = `${pct} 100`;
+      } else {
+        // 刚插进 DOM 的元素：此时写目标值不会有过渡（首次样式计算就已是终值）。
+        // 等两帧让 0% 的初始样式先生效，再写目标值 —— 环才会"长"出来。
+        ring.dataset.painted = '1';
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          fg.style.strokeDasharray = `${pct} 100`;
+        }));
+      }
+    }
+  }
 
   // 范围按钮高亮
   $$('#usage-page [data-range]').forEach((el) => {
@@ -1223,9 +1955,11 @@ function updateUsagePage(stats, st, prices) {
       + '页面顶部的「今日」概览是实时的，不受此缓存影响。';
   }
 
-  // 单日/24小时 → 隐藏"按天"
+  // 单日/24小时 → 隐藏"按天"。P1-01（2026-11-14）：'all' 模式后端同样返回完整
+  // days（20+ 个点），按天块必须可达 —— 曾经只用 mode==='days' 判断，把「全部」
+  // 范围的趋势图整块藏掉，左栏「按天」还跟着置灰，用户切不回来。
   const daysBlock = box.querySelector('[data-block="days"]');
-  if (daysBlock) daysBlock.style.display = (stats?.mode === 'days') ? '' : 'none';
+  if (daysBlock) daysBlock.style.display = (stats?.mode === 'days' || stats?.mode === 'all') ? '' : 'none';
 
   // 行数很多时（按模型常有几十行）默认只显示前 N 行，点"展开全部"再看全部。
   // 注意：后端不截断（保证求和一致），这里只是前端显示层面的折叠。
@@ -1330,6 +2064,17 @@ function updateUsagePage(stats, st, prices) {
 
   // 三张图（按天折线 / 按会话条形 / 按模型条形）
   renderUsageCharts(stats, box);
+
+  // 诊断与建议（纯前端规则，不额外请求）
+  const hasInsight = renderUsageInsights(stats, box);
+  // 分栏自适应：趋势被隐藏（今日/24h 无按天）、或右列连说明卡带诊断卡都没有时，退成单栏
+  // R219：说明卡也占右列，不能只看 hasInsight，否则右列明明有内容却把整行压成单栏。
+  const hasNote = !!box.querySelector('#usage-view-note [data-sum]:not(:empty)');
+  const main = box.querySelector('.usage-main');
+  if (main) main.classList.toggle('is-single', (stats?.mode !== 'days' && stats?.mode !== 'all') || (!hasInsight && !hasNote));
+  // Hero 的区间标签（"近 30 天"等）—— 放胶囊里，前面不再拼 " · "
+  const hr = box.querySelector('[data-hero-range]');
+  if (hr) hr.textContent = stats?.rangeLabel || '';
 }
 
 /**
@@ -1349,12 +2094,14 @@ function fmtRate(rate) {
    四个维度块统一的「段落计量 + 摘要行」
    （2026-10-19 用户要求：按天 / 按会话 / 按模型 / 按插件 四块风格统一）
 
-   R196 起每块固定三段，顺序不再各自发挥：
+   R219 起图表卡固定两段，顺序不再各自发挥：
      ① .usage-sec-head   左标题 + 右侧计量（data-meta）
-     ② .usage-sec-sum    摘要行（本函数按数据生成；「按插件」由 renderPluginUsage 填）
-     ③ .usage-chart      图表 —— 再往下是折叠的数值表
-   静态说明文案与「这些数字是怎么算的」已收进页头「?」帮助弹窗
-   （openUsageHelpModal），页面不再平铺，但内容一字未丢。
+     ② .usage-chart      图表 —— 再往下是折叠的数值表
+   摘要行（.usage-sec-sum）统一收进右侧「当前视图」卡（.usage-view-note），
+   由 04-usage.css 按 data-udim 只显示当前维度那一条；本函数照旧按数据生成，
+   「按插件」仍由 renderPluginUsage 填。图表卡里不再出现任何常驻说明文字。
+   静态说明文案与「这些数字是怎么算的」仍在页头「?」帮助弹窗
+   （openUsageHelpModal），内容一字未丢。
 
    摘要行只写「不看数字就不知道的事」：平均、最大、占比、命中率。
    合计/占比这类图里已经有的（.uc-rest 脚注）不再重复 ——
@@ -1395,11 +2142,20 @@ function fillUsageSectionSummaries(stats, box) {
   //    用量集中在哪天、日均能不能代表整体。
   const days = Array.isArray(stats?.days) ? stats.days.slice() : [];
   if (days.length) {
-    const runs = days.map((d) => Number(d.runs) || 0);
-    const totalRuns = runs.reduce((a, v) => a + v, 0);
-    const peak = Math.max(...runs, 0);
-    const peakDay = peak > 0 ? days[runs.indexOf(peak)] : null;
-    const peakShare = totalRuns > 0 ? Math.round((peak / totalRuns) * 100) : 0;
+    // P0-04（2026-11-14）：这里曾经硬编码 `days.map(d=>d.runs)` —— 切「成本/Token」
+    // 指标后，同屏的折线/数值表都换了口径，右栏结论仍写调用次数的 41%，还劝用户
+    // 「看峰值比看日均更有意义」（QA 实测复算：41% / 100% / 42% 三种口径并存）。
+    // 现在峰值/合计/占比/日均全部由当前指标派生，与图表永远同口径。
+    const vals = days.map((d) => Math.max(0, metricOf(d, metric)));
+    const totalV = vals.reduce((a, v) => a + v, 0);
+    const peak = Math.max(...vals, 0);
+    const peakDay = peak > 0 ? days[vals.indexOf(peak)] : null;
+    const peakShare = totalV > 0 ? Math.round((peak / totalV) * 100) : 0;
+    const daily = totalV / days.length;
+    // 日均的单位跟指标走：调用 → N 次；成本 → ¥N；Token → 紧凑格式
+    const dailyTxt = metric === 'cost' ? fmtMoneyChart(daily)
+      : metric === 'tokens' ? fmtTok(daily)
+      : `${Math.round(daily)} 次`;
     setMeta('days', `${days.length} 天`);
     if (days.length < 2) {
       setSum('days', '只有一天的记录，折线上只落得下一个点 —— 想看趋势请换「近 7 天 / 近 30 天」。');
@@ -1410,7 +2166,7 @@ function fillUsageSectionSummaries(stats, box) {
     } else {
       setSum('days',
         `用量分布比较均匀（最忙的一天也只占 <b>${peakShare}%</b>），`
-        + `日均 <b>${(totalRuns / days.length).toFixed(0)}</b> 次可以代表整体水平。`);
+        + `日均 <b>${dailyTxt}</b> 可以代表整体水平。`);
     }
   } else {
     setMeta('days', '');
@@ -1473,11 +2229,20 @@ function fillUsageSectionSummaries(stats, box) {
 /**
  * 加载用量页。
  *
- * @param {boolean} force  true = 重建整个页面骨架（切换页签、切换时间范围、点刷新）；
- *                         false = 轮询刷新，只更新数值与表格行，不重建 DOM。
+ * @param {object}  [opts] 全部可选，对象形式传入（不再是位置参数）。
+ * @param {boolean} [opts.force=false]  true = 加载页面（切换页签、切换时间范围、
+ *                         点刷新）；false = 轮询刷新，只更新数值与表格行，不重建 DOM。
+ * @param {boolean} [opts.hard=false]   仅 force 时生效：URL 追加 force=1，服务端
+ *                         跳过 3 小时结果缓存当场重算（只有刷新按钮用）。
+ * @param {boolean} [opts.inPlace=false] [force 时生效] 切换时间范围/点刷新专用：
+ *                         **原地更新数值层**（updateUsagePage），不重建 DOM、
+ *                         不重播入场动画（R226/R230）。
+ * @param {boolean} [opts.keepContent=false] [force 时生效] 目标范围没缓存也没有可
+ *                         原地更新的内容时，保留旧内容淡示"切换中"，不闪骨架屏（R226）。
  *
  * ── 为什么要分开 ──
- * 轮询每 15 秒一次，如果每次都重建 DOM，用户正在看的行会被重新渲染、
+ * 轮询按 ui.refreshMs（默认 15 秒，设置页可调）定时跑，如果每次都重建 DOM，
+ * 用户正在看的行会被重新渲染、
  * 滚动位置也会丢。所以轮询走"只更新数值"这条路。
  *
  * ── 加载为什么快 ──
@@ -1486,8 +2251,50 @@ function fillUsageSectionSummaries(stats, box) {
  * 3. 竞态防护：请求期间用户可能切走或改了时间范围，回来时丢弃过期结果
  */
 let usageLoadToken = 0;          // 每次加载递增，用于丢弃过期结果
-let usageLastData = null;        // 上一次加载成功的数据：{ range, stats, st, prices }
-                                 // 用于切回用量页时先立即画出旧内容，避免"黑一下"
+// R226（2026-11-14，用户反馈「上面切换的时候下侧会闪烁」）：按范围缓存最近几次
+// 加载成功的数据（range → {stats, st, prices}，LRU 上限 6）。用途有二：
+//   ① 切回用量页时立即画出旧内容，避免"黑一下"（原 usageLastData 只存 1 个范围，
+//      来回点「近 7 天 ↔ 近 30 天」永远 miss）；
+//   ② 切换时间范围时若目标范围有缓存，立即渲染再后台更新，全程无骨架。
+const usageDataCache = new Map();
+const USAGE_DATA_CACHE_MAX = 6;  // 页面一共 4 个范围，留余量即够
+function usageDataCachePut(range, data) {
+  usageDataCache.delete(range);                 // delete + set = LRU 触底续命
+  usageDataCache.set(range, data);
+  while (usageDataCache.size > USAGE_DATA_CACHE_MAX) {
+    usageDataCache.delete(usageDataCache.keys().next().value);
+  }
+}
+
+/* P0-03（2026-11-14）：刷新/切范围失败不能再静默 —— 旧数字 + 旧时间戳会伪装成
+   实时（与本页「数据更新于」的设计承诺直接冲突）。非阻断内联横幅挂在
+   #usage-page 顶部（.usage-note 样式），任何一次成功加载即撤；带重试入口。 */
+let usagePollFails = 0;                          // 轮询连续失败计数
+function showUsageErrNote(message) {
+  const box = $('#usage-page');
+  if (!box) return;
+  let note = box.querySelector('#usage-err-note');
+  if (!note) {
+    note = document.createElement('div');
+    note.id = 'usage-err-note';
+    note.className = 'usage-note';
+    note.style.maxWidth = '940px';
+    note.style.margin = '0 auto 14px';
+    box.insertBefore(note, box.firstChild);
+  }
+  const cachedNow = usageDataCache.get(usageRange);
+  const at = cachedNow?.stats?.computedAt
+    ? `当前显示 ${fmtTime(Number(cachedNow.stats.computedAt))} 的旧数据，`
+    : '';
+  note.innerHTML = `${esc(message)} ${at}不影响本页其它操作。`
+    + `<button class="btn btn-small" id="usage-err-retry" style="margin-left:8px">重试</button>`;
+  note.querySelector('#usage-err-retry')?.addEventListener('click', () => {
+    loadUsageView({ force: true, hard: true });
+  });
+}
+function clearUsageErrNote() {
+  $('#usage-page #usage-err-note')?.remove();
+}
 
 /**
  * 统计请求 URL。
@@ -1507,10 +2314,17 @@ function usageStatsUrl(range, hard = false) {
 let pluginUsageAt = 0;
 let pluginUsageRange = '';
 
+let pluginUsageToken = 0;                        // P1-16：竞态防护令牌
 async function loadPluginUsage(range, { force = false } = {}) {
   if (!force && pluginUsageRange === range && Date.now() - pluginUsageAt < 30000) return;
+  const token = ++pluginUsageToken;
   try {
     const r = await api(`/api/usage/plugins?range=${encodeURIComponent(range)}`, { timeoutMs: 20000 });
+    // P1-16（2026-11-14）：曾经回包即渲染，无任何守卫 —— 快速切范围时，慢的旧
+    // 范围回包会把新范围的数据顶掉（插件统计 20s 超时，比主统计慢得多，必现）。
+    // 对齐主统计的四重守卫里管用的三条：令牌 / 页签 / 范围。
+    if (token !== pluginUsageToken) return;            // 期间又发了更新的请求
+    if (state.tab !== 'usage' || usageRange !== range) return;  // 期间切走页签 / 切了范围
     if (!r || r.ok !== true) return;
     pluginUsageAt = Date.now();
     pluginUsageRange = range;
@@ -1544,19 +2358,29 @@ const PLUGIN_METRIC_DEFS = {
   calls: { value: (p) => Number(p.toolCalls) || 0, unit: '次', hint: '区间内功能被调用的次数' }
 };
 
-function pluginBars(plugins, metric = 'total', extras = []) {
+/* ── R235（2026-11-14，用户：「按插件怎么还是这么一大坨」）────────────────
+   第 4 参 limit：排行条总行数上限（**含对照行**）。R218 时代按插件「不受条数
+   限制」是刻意的，但代价是 11+ 个插件时卡片被撑到 600+px，右栏下面空一大块，
+   四个视图高度基准对它失效。现在有了统一的 6 行容量（R234 实测）与占位机制，
+   按插件也一视同仁：只画前 N 名，超出的不消失 —— 合计行写「其余 M 项占 X%」
+   （分母是全量 total，各行 share 之和仍为 100%），完整清单照旧在数值表。 */
+function pluginBars(plugins, metric = 'total', extras = [], limit = 0) {
   const def = PLUGIN_METRIC_DEFS[metric] || PLUGIN_METRIC_DEFS.total;
   const items = (plugins || [])
     .filter((p) => def.value(p) > 0 || p.fixedPerCall > 0 || p.toolCalls > 0)
     .slice()
     .sort((a, b) => def.value(b) - def.value(a) || String(a.id).localeCompare(String(b.id)));
   const extraRows = (extras || []).filter((p) => p && def.value(p) > 0);
-  if (!items.length && !extraRows.length) return '<div class="uc-empty muted">这段时间没有插件消耗记录</div>';
+  if (!items.length && !extraRows.length) return { empty: '<div class="uc-empty muted">这段时间没有插件消耗记录</div>' };
+  // 容量减去对照行：对照行只在 total/fixed 档存在，calls 档插件可以多画一行
+  const cap = limit > 0 ? Math.max(1, limit - extraRows.length) : 0;
+  const shownItems = cap ? items.slice(0, cap) : items;
+  const restItems = cap ? items.slice(cap) : [];
   // 条形长度统一按「含对照行」的最大值归一 —— 这样能一眼看出插件条和对话条谁长，
   // 而不是各自满格造成"插件也很大"的错觉。
   const max = Math.max(...items.map(def.value), ...extraRows.map(def.value), 1);
   const total = items.reduce((a, p) => a + Math.max(0, def.value(p)), 0);
-  const rows = items.map((p, i) => {
+  const rows = shownItems.map((p, i) => {
     const v = Math.max(0, def.value(p));
     const w = max > 0 ? Math.max(0, (v / max) * 100) : 0;
     const share = total > 0 ? Math.max(0, (v / total) * 100) : 0;
@@ -1567,28 +2391,49 @@ function pluginBars(plugins, metric = 'total', extras = []) {
     const sub = metric === 'total'
       ? (p.toolCalls > 0 ? ` · ${p.toolCalls} 次调用` : ' · 装了没用过')
       : '';
-    return `<div class="uc-bar-row${i === 0 ? ' top' : ''}" data-plugin-key="${esc(p.id)}" role="button" tabindex="0" title="点击看它每个功能用了多少">
-      <div class="uc-bar-label"><span class="uc-rank">${i + 1}</span><span class="uc-name">${esc(label)}${sub ? `<i class="uc-name-sub">${esc(sub)}</i>` : ''}</span></div>
-      <div class="uc-bar-track"><div class="uc-bar-fill" style="width:${w.toFixed(1)}%;opacity:${alpha.toFixed(2)}"></div></div>
-      <div class="uc-bar-val">${esc(fmtTok(v))}<span class="uc-bar-share">· ${share.toFixed(0)}%</span></div>
-    </div>`;
-  }).join('');
+    return {
+      key: `p:${String(p.id ?? i)}`,
+      pluginKey: String(p.id ?? ''),
+      top: i === 0,
+      rank: String(i + 1),
+      name: label,
+      sub,
+      width: w,
+      alpha,
+      valMain: fmtTok(v),
+      valShare: `· ${share.toFixed(0)}%`,
+      title: '点击看它每个功能用了多少',
+      interactive: true,
+    };
+  });
   // 对照行（对话内容）：不是插件、不参与名次，放在最后用虚线分隔，
   // 作用是给上面的插件条一个参照系 —— 「插件 3,877 / 对话 11,284」一眼可见。
-  const contrast = extraRows.map((p) => {
+  const contrast = extraRows.map((p, i) => {
     const v = Math.max(0, def.value(p));
     const w = max > 0 ? Math.max(0, (v / max) * 100) : 0;
-    return `<div class="uc-bar-row contrast" data-extra="1" title="${esc(p.title || '')}">
-      <div class="uc-bar-label"><span class="uc-rank">—</span><span class="uc-name">${esc(p.name)}${p.note ? `<i class="uc-name-sub">${esc(p.note)}</i>` : ''}</span></div>
-      <div class="uc-bar-track"><div class="uc-bar-fill" style="width:${w.toFixed(1)}%"></div></div>
-      <div class="uc-bar-val">${esc(fmtTok(v))}<span class="uc-bar-share">${esc(def.unit)}</span></div>
-    </div>`;
-  }).join('');
+    return {
+      key: `x:${String(p.name ?? i)}`,
+      cls: 'contrast',
+      rank: '—',
+      name: String(p.name ?? ''),
+      sub: String(p.note ?? ''),
+      width: w,
+      alpha: 1,
+      valMain: fmtTok(v),
+      valShare: def.unit,
+      title: String(p.title || ''),
+    };
+  });
   // 合计口径标注：摘要行给的是"只算插件"的数，这里包含核心功能——不写清楚会对不上账
   const hasCore = items.some((p) => p.id === '(core)');
-  return `<div class="uc-bars">${rows}${contrast}</div>`
-    + `<div class="uc-rest">插件合计${hasCore ? '（含核心功能）' : ''} <b>${esc(fmtTok(total))}</b> ${def.unit}`
-    + `<span class="uc-rest-hint">${esc(def.hint)}</span></div>`;
+  const shownTotal = shownItems.reduce((a, p) => a + Math.max(0, def.value(p)), 0);
+  const shownPct = total > 0 ? (shownTotal / total) * 100 : 0;
+  const footHtml = `插件合计${hasCore ? '（含核心功能）' : ''} <b>${esc(fmtTok(total))}</b> ${esc(def.unit)}`
+    + (restItems.length
+      ? ` · 前 ${shownItems.length} 项占 <b>${shownPct.toFixed(0)}%</b> · 其余 ${restItems.length} 项占 <b>${Math.max(0, 100 - shownPct).toFixed(0)}%</b>`
+      : '')
+    + `<span class="uc-rest-hint">${esc(def.hint)}</span>`;
+  return { rows: [...rows, ...contrast], footHtml };
 }
 
 /** 把「按插件」块填上数据。骨架在 renderUsagePage 里，这里只写值，不重建 DOM。 */
@@ -1695,8 +2540,21 @@ function renderPluginUsage(r) {
       title: `每次输入里扣除插件与工具说明后剩下的部分，主要是聊天历史被反复重发（本轮新消息约 ${newTextPerCall} tok）`
     };
     const extras = metric === 'calls' ? [] : [chatRow];
-    const html = pluginBars(rowsData, metric, extras);
-    if (chartEl.dataset.sig !== html) { chartEl.innerHTML = html; chartEl.dataset.sig = html; }
+    // R229：条形图按键调和（原位更新 + FLIP），不再整块重建
+    // R234：插件少的时候底部也用占位行填满 —— 与按会话同一套机制
+    // （filler 只动 DOM，不进合计/下钻；条目多到面板被撑高时 free≤0，自动一行不补）。
+    // 假插件名沿用群号梗，一眼是占位；占位行无 data-plugin-key，不会误触下钻委托。
+    const PH_PLUGINS = ['插件 114514', '插件 1919810', '插件 233333', '插件 666666', '插件 9527'];
+    reconcileBarBlock(chartEl, pluginBars(rowsData, metric, extras, USAGE_BAR_CAP), {
+      filler: (i, base) => ({
+        rank: String(base + i + 1),
+        name: PH_PLUGINS[i % PH_PLUGINS.length],
+        width: Math.max(1.6, 4.2 - i * 1.1),
+        alpha: 0.15,
+        valMain: '—',
+        valShare: '',
+      }),
+    });
     if (chartEl.dataset.upBound !== '1') {
       chartEl.dataset.upBound = '1';
       const openFromRow = (e) => {
@@ -1717,6 +2575,13 @@ function renderPluginUsage(r) {
   const tb = box.querySelector('[data-table="plugins"] tbody');
   if (!tb) return;
   const rows = rowsData.filter((p) => p.fixedPerCall > 0 || p.toolCalls > 0 || p.promptVolatile > 0);
+  // R236：summary 补行数标注 —— 按天/按会话/按模型的数值表都有「（N 行）」，
+  // 按插件漏了，四张表一致（也呼应排行条截断后「完整清单在数值表」的引导）。
+  const pSum = tb.closest('details')?.querySelector('summary');
+  if (pSum) {
+    const pTxt = rows.length ? `数值表（${rows.length} 行）` : '数值表（无记录）';
+    if (pSum.textContent !== pTxt) pSum.textContent = pTxt;
+  }
   if (!rows.length) {
     tb.innerHTML = '<tr><td colspan="8" class="muted" style="text-align:center;padding:18px">本区间没有插件开销记录。</td></tr>';
   } else {
@@ -1805,7 +2670,7 @@ function openPluginToolsModal(p) {
   });
 }
 
-async function loadUsageView({ force = false, hard = false } = {}) {
+async function loadUsageView({ force = false, hard = false, keepContent = false, inPlace: opts_inPlace = false } = {}) {
   const box = $('#usage-page');
   if (!box) return;
 
@@ -1830,25 +2695,52 @@ async function loadUsageView({ force = false, hard = false } = {}) {
       //    更新时按需拉取即可。曾经这里请求了一个**不存在的** /api/usage/prices，
       //    404 会让整个 Promise.all reject → 用量页永远加载失败。
       updateUsagePage(stats, st, state.modelPrices || {});
+      // P0-03：轮询恢复/成功 → 清掉过期警示与失败横幅
+      usagePollFails = 0;
+      clearUsageErrNote();
       // 插件维度单独拉（30 秒节流；失败静默，不让它拖累主页面）
       loadPluginUsage(range);
-    } catch (e) { /* 轮询失败静默，不打扰用户 */ }
+    } catch (e) {
+      // P0-03：轮询失败不能完全无声 —— 连续 3 次失败把「数据更新于」改写成
+      // 过期警示（非阻断；下一次成功时 updateUsagePage 会自动覆写回来）。
+      usagePollFails++;
+      if (usagePollFails >= 3 && state.tab === 'usage') {
+        const fresh = $('#usage-page #usage-updated');
+        const at = Number(state.usageStats?.computedAt) || 0;
+        if (fresh) fresh.textContent = `数据可能已过期${at ? ` · 更新于 ${fmtTime(at)}` : ''}（自动重试中）`;
+      }
+    }
     return;
   }
 
-  // ── 强制重建 ──
+  // ── 强制加载（页签进入 / 切时间范围 / 点刷新）──
   const token = ++usageLoadToken;
   const range = usageRange;
 
-  // ★ 先用上一次的数据立即渲染（如果有的话），而不是先画骨架等网络。
-  //   后端统计的冷启动实测约 200ms（要遍历全部会话文件），热数据只要 24ms；
-  //   但缓存 TTL 只有 5 秒、轮询 4 秒一次，切回用量页时缓存经常已经过期，
-  //   于是每次都要等那 200ms —— 表现就是"点过去黑一下"。
-  //   有旧数据时直接先画出来（0ms 可见），再在后台拉新的覆盖。
-  const cached = usageLastData && usageLastData.range === range ? usageLastData : null;
+  // R226（2026-11-14，用户反馈「上面切换的时候下侧会闪烁」，两轮修复）：
+  //   第一轮：切范围不再闪骨架屏 —— 保留旧内容淡示"切换中"。
+  //   第二轮：光不闪骨架还不够 —— 重建 DOM 会让 R224 的入场动画整体重播
+  //   （大数字/读数从 opacity:0 淡入、折线重描），用户看到的仍是闪。
+  //   于是切范围**彻底不重建**：updateUsagePage 就是完整的数值填充层
+  //   （KPI / 成本滚动 / 环形仪表 / 范围角标 / 迷你曲线 / 图表 / 表格 / 按钮高亮
+  //   全在里面），原地更新只有真实变化的部分会动。
+  // inPlace 判据：页面上有**非骨架**的用量内容（骨架里没有可填充的字段节点，
+  // 直接 update 会扑空）；首进页面（骨架或空）仍走原来的骨架→重建流程。
+  const cached = usageDataCache.get(range) || null;
+  const inPlace = !!opts_inPlace && !!box.querySelector('.usage-hero:not(.skeleton)');
+  // R231：骨架阶段也要先定维度。正式页面的 data-udim 由 14-chrome.js 的
+  // applyUsageDim 在 updateUsagePage（数据回来后）才写入，而 index.html 里
+  // #usage-page 初始没有这个属性 —— 骨架时不设，R231 给底部占位加的
+  // .usage-attrib 就不会被 06-stage.css 的 [data-udim="days"] 规则隐藏，
+  // 加载时仍多出一块卡、数据回来又消失。默认维度 days 与 14-chrome.js 的
+  // usageDim 初值一致；用户已选过别的维度时这里不覆盖。
+  if (!box.dataset.udim) box.dataset.udim = 'days';
   if (cached) {
     state.usageStats = cached.stats;
-    renderUsagePage(cached.stats, cached.st, cached.prices);
+    if (inPlace) updateUsagePage(cached.stats, cached.st, cached.prices);
+    else renderUsagePage(cached.stats, cached.st, cached.prices);
+  } else if (inPlace) {
+    box.classList.add('usage-switching');
   } else {
     box.innerHTML = renderUsageSkeleton();
   }
@@ -1864,10 +2756,15 @@ async function loadUsageView({ force = false, hard = false } = {}) {
     if (state.tab !== 'usage' || usageRange !== range) return;
 
     state.usageStats = stats;
-    usageLastData = { range, stats, st, prices };
+    usageDataCachePut(range, { stats, st, prices });
 
-    if (cached) {
-      // 已有页面：只更新数值，不重建（避免打断用户的滚动/交互）
+    box.classList.remove('usage-switching');
+    clearUsageErrNote();                       // P0-03：成功即撤失败横幅
+    usagePollFails = 0;                        // P0-03：强制刷新成功也得归零，否则下个轮询失败一次就又弹过期提示
+    if (inPlace || cached) {
+      // R226：切范围（原地更新）或已有页面（缓存命中）→ 只更新数值层。
+      // textContent / sig 差量替换不重播入场动画；成本数字自带滚动过渡、
+      // 图表随数据重绘，这些本身就是"换了"的反馈，不需要整页闪一遍。
       updateUsagePage(stats, st, prices);
     } else {
       // ⚠️ renderUsagePage 不返回字符串 —— 它内部自己写 box.innerHTML、
@@ -1879,8 +2776,14 @@ async function loadUsageView({ force = false, hard = false } = {}) {
     loadPluginUsage(range, { force: true });
   } catch (e) {
     if (token !== usageLoadToken) return;
-    // 旧数据还在页面上就别用错误覆盖它（用户至少能看到上一次的数字）
-    if (cached) return;
+    // R226：切范围时旧内容还在页面上 —— 拿掉"切换中"淡示即可，别用错误页覆盖
+    // （用户至少能看到上一次的数字）。P0-03：但不能完全无声 —— 挂非阻断横幅，
+    // 写明当前看到的是几点的旧数据，并给重试入口。
+    if (keepContent || cached) {
+      box.classList.remove('usage-switching');
+      showUsageErrNote(`用量统计刷新失败：${String(e?.message || '后端未响应')}。`);
+      return;
+    }
     // 曾经这里只有一行错误文案：请求 hang 死时（无超时时代）骨架屏永远转下去，
     // 用户只能重启。现在超时/失败都落到这张卡上，给一个明确的出路（R49）。
     box.innerHTML = `

@@ -12,7 +12,10 @@
 //   bounds 为 null 时，调用方应回退到默认尺寸 + 系统居中。
 'use strict';
 
-export const WINDOW_MIN_W = 960;
+// 2026-11-13：原 960 高于全部横向响应式断点（≤900），导致窄窗紧凑布局在桌面端
+// 永远不会触发。下调到 900，让既有的 @media(max-width:900) 紧凑版式真正可达；
+// 默认窗口仍是 WINDOW_DEFAULT_W(1360)，正常使用无变化。
+export const WINDOW_MIN_W = 900;
 export const WINDOW_MIN_H = 640;
 export const WINDOW_DEFAULT_W = 1360;
 export const WINDOW_DEFAULT_H = 860;

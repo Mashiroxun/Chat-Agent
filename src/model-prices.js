@@ -23,6 +23,12 @@
 //    走中转站时实际单价通常与官方不同 —— 此时请关闭「使用官方价格」并手填单价。
 //
 // 匹配方式见 resolveOfficialPrice()：精确 → 去 provider 前缀 → 前缀匹配。
+//
+// ⚠️ 归一化（去前缀 / 拆「渠道：模型」/ 前缀边界）**一律走 src/model-key.js**，
+//    本文件不再内联实现。0.4.9.4 之前这里有第三套规则，与使用侧不一致，
+//    模型名带 `/`、空格或全角冒号时会静默查不到价（成本显示 ¥0）。
+
+import { normalizeModelId, splitModelLabel, bareModelId, prefixHit } from './model-key.js';
 
 export const OFFICIAL_PRICES = {
   // ══ DeepSeek ══
@@ -299,22 +305,24 @@ export const OFFICIAL_PRICES = {
  * 查不到返回 null（此时应由用户手动填单价）。
  */
 export function resolveOfficialPrice(modelId) {
-  const raw = String(modelId ?? '').trim().toLowerCase();
+  // 先拆「渠道：模型」标签 —— 旧实现直接拿整串去查，全角冒号不在前缀白名单里，
+  // 于是 `A6API：deepseek-chat` 永远查不到 → 静默 0 元。
+  const { model: bare0 } = splitModelLabel(String(modelId ?? ''));
+  const raw = normalizeModelId(bare0).toLowerCase();
   if (!raw) return null;
 
   const table = EFFECTIVE_PRICES;
   if (table[raw]) return { ...table[raw], matched: raw };
 
   // 去掉 provider 前缀：openai/gpt-5.6-luna → gpt-5.6-luna
-  const bare = raw.includes('/') ? raw.slice(raw.indexOf('/') + 1) : raw;
+  const bare = bareModelId(raw);
   if (bare !== raw && table[bare]) return { ...table[bare], matched: bare };
 
   // 前缀匹配：z-ai/glm-5.3 → glm-5.3（取最长匹配，避免 glm-5 抢先命中 glm-5.3）
+  // 边界由 prefixHit 保证：`glm-50` 不会命中 `glm-5`。
   let best = null;
   for (const key of Object.keys(table)) {
-    if (bare === key || bare.startsWith(key + '/') || bare.startsWith(key + '-') || bare.startsWith(key + '@') || bare.startsWith(key + ':')) {
-      if (!best || key.length > best.length) best = key;
-    }
+    if (prefixHit(bare, key) && (!best || key.length > best.length)) best = key;
   }
   if (best) return { ...table[best], matched: best };
   return null;
@@ -620,26 +628,29 @@ export function resolveModelPrice(modelId, cfg, priceTable = null) {
 
 /** 在一张价格表里匹配模型（供前端用本地数据算，不依赖接口往返）。 */
 export function matchPriceTable(modelId, table) {
-  const raw = String(modelId || '').trim();
+  const { model: bare0 } = splitModelLabel(String(modelId ?? ''));
+  const raw = normalizeModelId(bare0).toLowerCase();
   if (!raw) return null;
-  const id = raw.toLowerCase();
   const list = table || [];
 
-  const exact = list.find((x) => String(x.id).toLowerCase() === id);
+  const exact = list.find((x) => normalizeModelId(x?.id).toLowerCase() === raw);
   if (exact) return { ...exact, matched: exact.id };
 
   // 去 provider 前缀后再试（z-ai/glm-5.3 → glm-5.3）
-  if (id.includes('/')) {
-    const bare = id.split('/').pop();
-    const hit = list.find((x) => String(x.id).toLowerCase() === bare);
+  const bare = bareModelId(raw);
+  if (bare !== raw) {
+    const hit = list.find((x) => normalizeModelId(x?.id).toLowerCase() === bare);
     if (hit) return { ...hit, matched: hit.id };
   }
 
-  // 前缀匹配：取最长的那条，避免 gpt-5 命中 gpt-5.6
+  // 前缀匹配：取最长的那条，避免 gpt-5 命中 gpt-5.6。
+  // ⚠️ 旧实现用裸 startsWith（`glm-50` 会命中 `glm-5`），且比对的是**带前缀**的
+  //    整串（同一 id 在 UI 这里查不到、后端 resolveOfficialPrice 却查得到 ——
+  //    两边对同一个模型给出不同结论）。现在统一走 bare + prefixHit。
   let best = null;
   for (const x of list) {
-    const xid = String(x.id).toLowerCase();
-    if (id.startsWith(xid) && (!best || xid.length > String(best.id).length)) best = x;
+    const xid = normalizeModelId(x?.id).toLowerCase();
+    if (prefixHit(bare, xid) && (!best || xid.length > String(best.id).length)) best = x;
   }
   if (best) return { ...best, matched: best.id };
   return null;
@@ -698,9 +709,7 @@ export function modelLabel(vendor, model) {
   return `${v}：${m}`;
 }
 
-/** 把「渠道：模型 id」拆回两半。拆不开时 vendor 为空串。 */
-export function splitModelLabel(label) {
-  const s = String(label || '');
-  const i = s.indexOf('：');
-  return i > 0 ? { vendor: s.slice(0, i), model: s.slice(i + 1) } : { vendor: '', model: s };
-}
+// 拆标签的实现已收敛到 src/model-key.js（全库唯一实现，见该文件头部说明）。
+// 这里只做一次再导出，保持 `import { splitModelLabel } from 'model-prices.js'`
+// 的既有调用方零改动（usage-stats.js / 历史备份里的 app.js 都这么用）。
+export { splitModelLabel };

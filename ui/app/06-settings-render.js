@@ -1216,7 +1216,7 @@ function openGlobalPersonaModal() {
       </div>
       <div class="field"><label>角色设定</label>
         <textarea id="gp-roletext" class="persona-role-text" style="min-height:180px" placeholder="例如：你是运维群里的老油条……">${esc(per.roleText || '')}</textarea></div>
-      ${ownerPersonaOn ? `<div class="hint" style="color:var(--orange);margin-bottom:8px">⚠️ 已启用「主人专属人设」（主人识别插件）：<b>主人发言时优先使用其专属角色设定，这里的全局人设对主人不生效</b>。想统一用这套人设，去「下载 → 已安装 → 插件」找到「主人识别」，关掉「启用主人专属人设」。</div>` : ''}
+      ${ownerPersonaOn ? `<div class="hint" style="color:var(--orange);margin-bottom:8px">⚠️ 已启用「主人专属人设」（主人识别插件）：<b>主人发言时优先使用其专属角色设定，这里的全局人设对主人不生效</b>。想统一用这套人设，去「扩展 → 已安装 → 插件」找到「主人识别」，关掉「启用主人专属人设」。</div>` : ''}
       <div class="field"><label>管理员附加规则（可选，追加到系统提示）</label>
         <textarea id="gp-customrules" class="persona-role-text" style="min-height:80px">${esc(per.customRules || '')}</textarea></div>
       <div class="field"><label>系统提示词覆盖（高级 · 可选）</label>
@@ -3157,7 +3157,7 @@ function renderModulePage(kind, target, opts) {
                 title="这一页注册了哪些${kind === 'skill' ? '工具' : '能力'}、各自干什么">?</button></h2>
           <div class="usage-days">
             <span class="uc-tag" title="生效中 / 这一页的总数">${mine.active} / ${mine.total} 生效</span>
-            <button class="btn btn-small" data-mod-fullpage="${esc(kind)}" title="回到「下载」页看完整的管理界面（含去市场 / ＋添加 / 刷新）">打开完整管理页</button>
+            <button class="btn btn-small" data-mod-fullpage="${esc(kind)}" title="回到「扩展」页看完整的管理界面（含去市场 / ＋添加 / 刷新）">打开完整管理页</button>
           </div>
         </div>`
     : `<div class="usage-head">
@@ -3398,7 +3398,7 @@ function bindModulePageEvents(kind, scopeEl, opts) {
     try {
       const d = await api('/api/forge/installed', { timeoutMs: 10000 });
       if (d && d.available === false) {
-        qaAlert(`自动适配由「扩展锻造台」插件提供 —— 它当前未启用。\n\n去「下载 → 已安装 → 插件」找到 extension-forge 并启用，然后回来点这个「自动适配」。`);
+        qaAlert(`自动适配由「扩展锻造台」插件提供 —— 它当前未启用。\n\n去「扩展 → 已安装 → 插件」找到 extension-forge 并启用，然后回来点这个「自动适配」。`);
         return;
       }
     } catch { /* 探测失败继续跳 —— 升级页内部还有一层未启用提示兜底 */ }

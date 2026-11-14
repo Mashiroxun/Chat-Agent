@@ -792,7 +792,7 @@
 .cc-pill, .chat-row .cc-pill {
   flex: 0 0 auto; margin-left: 2px;
   display: inline-flex; align-items: center; padding: 2px 8px;
-  border-radius: 10px; font-size: 10px; line-height: 1.6; white-space: nowrap;
+  border-radius: 10px; font-size: 11px; line-height: 1.6; white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 .cc-running  { color: var(--accent-hi); background: color-mix(in srgb, var(--accent) 20%, transparent); }
@@ -900,6 +900,14 @@
 #cc-cards .bs-cb > .detail-header .sub { font-size: 12px; gap: 12px; }
 /* 卡内首屏要是 .empty-hint（加载中 / 未选中）时别撑出 240px 高 */
 #cc-cards .bs-cb > .empty-hint { min-height: 0; padding: 24px 12px; }
+/* R209：切聊天对象时，15 号脚本给占位挂上 data-cc-hold + 内联 min-height，
+   让它先占住上一张展开卡体的高度 —— 详情落地只在原地换内容，下面整列卡
+   不会被推下去（用户报的「先全折叠、再展开一下」）。这里只给这块留白一个
+   极淡的骨架外观；占位节点被真详情整块替换后，本规则和 min-height 一起失效。 */
+#cc-cards .bs-cb > .empty-hint[data-cc-hold] {
+  background: var(--hover); border: 1px dashed var(--line); border-radius: 5px;
+  color: var(--fg-mute);
+}
 
 /* ── 卡体「消息流」：思考气泡 / 工具调用 / 已发送（逐值照原型）────────────────────
    原型这一段的全套（QQAgent-主界面原型-v2.html 847-859 行）：
@@ -1031,11 +1039,93 @@
       这个判断的权威在 04 那边，本层不重复一遍，否则两处会打架。
       此时 applyUsageDim 会把 data-udim 降级成 'chats'，不会出现"选中的块反而看不见"的空页。
    ══════════════════════════════════════════════════════════════════════════ */
-#usage-page[data-udim="days"] > .usage-wrap > [data-block]:not([data-block="days"]),
-#usage-page[data-udim="chats"] > .usage-wrap > [data-block]:not([data-block="chats"]),
-#usage-page[data-udim="models"] > .usage-wrap > [data-block]:not([data-block="models"]),
-#usage-page[data-udim="plugins"] > .usage-wrap > [data-block]:not([data-block="plugins"]) {
+#usage-page[data-udim="days"] .usage-wrap [data-block]:not([data-block="days"]),
+#usage-page[data-udim="chats"] .usage-wrap [data-block]:not([data-block="chats"]),
+#usage-page[data-udim="models"] .usage-wrap [data-block]:not([data-block="models"]),
+#usage-page[data-udim="plugins"] .usage-wrap [data-block]:not([data-block="plugins"]) {
   display: none !important;
+}
+
+/* 外层容器跟着 udim 互斥 —— 2026-11-13 补的：按天块住在 .usage-main（趋势 + 诊断），
+   其余三块住在 .usage-attrib（归因卡），它们**不是** [data-block] 的兄弟，上面那条管不到。
+
+   R213（2026-11-14，用户两次反馈）：
+   ① 第一次「按会话/按模型里怎么没有诊断卡」—— 旧版把整块 .usage-main 一起 display:none，
+      而诊断卡 #usage-insight 就住在 .usage-main 里，于是被连坐隐藏。
+   ② 第二次「下边的跟上面的位置不一样」—— 我一度把诊断卡做成整宽横排放在归因卡上方，
+      但「按天」视图里诊断卡是**竖着堆在右侧窄栏**，两处布局不一致。
+   最终方案：这三个视图把 .usage-wrap 改成与按天一致的两列栅格
+   [归因卡 1.65fr | 诊断列 1fr]，诊断卡仍住在 .usage-main 里，只是 .usage-main 被移到
+   右列、退化成单列窄栏（里面的「趋势」块隐藏，只剩诊断卡），于是诊断卡像按天视图那样
+   竖着贴在归因卡右侧。按天视图**完全不受影响**（规则全部限定在非 days 的 data-udim 上）。 */
+#usage-page[data-udim="chats"] .usage-wrap > .usage-main > [data-block="days"],
+#usage-page[data-udim="models"] .usage-wrap > .usage-main > [data-block="days"],
+#usage-page[data-udim="plugins"] .usage-wrap > .usage-main > [data-block="days"],
+#usage-page[data-udim="days"] .usage-wrap > .usage-attrib {
+  display: none !important;
+}
+/* 三个归因视图：两列栅格，与按天视图同构（左 1.65fr 主卡 / 右 1fr 诊断列） */
+#usage-page[data-udim="chats"] .usage-wrap,
+#usage-page[data-udim="models"] .usage-wrap,
+#usage-page[data-udim="plugins"] .usage-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr);
+  column-gap: 0;             /* R220：两半边框拼成一个连续外框，中间不能再有缝 */
+  align-items: stretch;      /* R220：左右等高，底边才对得齐 */
+}
+/* 页头与 Hero 跨满两列，和按天视图一样压在顶部 */
+#usage-page[data-udim="chats"] .usage-wrap > .usage-head,
+#usage-page[data-udim="models"] .usage-wrap > .usage-head,
+#usage-page[data-udim="plugins"] .usage-wrap > .usage-head {
+  grid-row: 1; grid-column: 1 / -1;
+}
+#usage-page[data-udim="chats"] .usage-wrap > .usage-hero,
+#usage-page[data-udim="models"] .usage-wrap > .usage-hero,
+#usage-page[data-udim="plugins"] .usage-wrap > .usage-hero {
+  grid-row: 2; grid-column: 1 / -1;
+}
+/* 归因卡占左列、诊断列占右列，同一行并排；归因卡原本的 margin-top 会把它顶低 14px，
+   这里清零让两列顶端对齐（行距由 hero 的 margin-bottom:16px 提供）。 */
+#usage-page[data-udim="chats"] .usage-wrap > .usage-attrib,
+#usage-page[data-udim="models"] .usage-wrap > .usage-attrib,
+#usage-page[data-udim="plugins"] .usage-wrap > .usage-attrib {
+  grid-row: 3; grid-column: 1;
+  margin-top: 0 !important;
+}
+#usage-page[data-udim="chats"] .usage-wrap > .usage-main,
+#usage-page[data-udim="models"] .usage-wrap > .usage-main,
+#usage-page[data-udim="plugins"] .usage-wrap > .usage-main {
+  grid-row: 3; grid-column: 2;
+  grid-template-columns: 1fr !important;   /* 退化成单列窄栏：只剩诊断卡 */
+  margin: 0;
+}
+
+/* R227（2026-11-14，QA-P1-07）：窄窗口响应式回退。
+   上面 R213 的两列栅格与"拆边框拼外框"规则没有任何 @media，≤1000px 时右栏
+   被压成纸条。这里与 04-usage.css 的 .usage-main 单栏断点对齐：两列改一列、
+   归因卡与诊断列上下堆叠（DOM 顺序 main 在前，必须显式钉行序）、各自恢复
+   完整圆角边框。桌面常规宽度（>1000px）一字不变。 */
+@media (max-width: 1000px) {
+  #usage-page[data-udim="chats"] .usage-wrap,
+  #usage-page[data-udim="models"] .usage-wrap,
+  #usage-page[data-udim="plugins"] .usage-wrap {
+    grid-template-columns: 1fr;
+  }
+  #usage-page[data-udim="chats"] .usage-wrap > .usage-attrib,
+  #usage-page[data-udim="models"] .usage-wrap > .usage-attrib,
+  #usage-page[data-udim="plugins"] .usage-wrap > .usage-attrib {
+    grid-row: 3; grid-column: 1;
+    border-radius: 14px;
+    border-right: 1px solid var(--border);
+  }
+  #usage-page[data-udim="chats"] .usage-wrap > .usage-main,
+  #usage-page[data-udim="models"] .usage-wrap > .usage-main,
+  #usage-page[data-udim="plugins"] .usage-wrap > .usage-main {
+    grid-row: 4; grid-column: 1;
+    border-radius: 14px;
+    border-left: 1px solid var(--border);
+    margin-top: 14px;
+  }
 }
 
 /* 「今日」范围下按天没有内容（后端 mode='today'）→ 左栏「按天」置灰不可点。
@@ -1145,7 +1235,7 @@
 /* 功能名：中文主名 + 工具 id 副标题（弹窗里给普通人看的是中文名） */
 .upt-what { display: flex; flex-direction: column; gap: 1px; min-width: 0; overflow: hidden; }
 .upt-what b { font-size: 12px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.upt-what i { font-style: normal; font-size: 10px; color: var(--muted); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.upt-what i { font-style: normal; font-size: 11px; color: var(--muted); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 表格上方的一句话结论（前 N 名占比） */
 .up-summary { margin: 14px 0 8px; font-size: 12px; color: var(--muted); line-height: 1.7; }
@@ -1663,7 +1753,7 @@
 }
 .sl-adv > summary::-webkit-details-marker { display: none; }
 .sl-adv > summary::before {
-  content: '▸'; font-size: 10px; opacity: .7;
+  content: '▸'; font-size: 11px; opacity: .7;
   transition: transform .15s ease;
 }
 .sl-adv[open] > summary::before { transform: rotate(90deg); }

@@ -77,14 +77,20 @@
   var ccShown = CC_CARD_PAGE;
 
   // R122：两个卡体小工具。
+  // R208：占位节点抽成 loadingHint —— 切聊天对象时往「已建好的选中卡卡体」里
+  // 只塞这一个节点，绝不再整块写 DETAIL.innerHTML（那会把 #cc-cards 冲掉）。
+  function loadingHint() {
+    var hint = document.createElement('div');
+    hint.className = 'empty-hint';
+    hint.dataset.ccHint = 'loading';
+    hint.textContent = '加载中…';
+    return hint;
+  }
   // loadingBody：「加载中…」占位卡体（R117 点击即展开 / R122-C1 卡体自愈共用）。
   function loadingBody() {
     var body = document.createElement('div');
     body.className = 'bs-cb';
-    var hint = document.createElement('div');
-    hint.className = 'empty-hint';
-    hint.textContent = '加载中…';
-    body.appendChild(hint);
+    body.appendChild(loadingHint());
     return body;
   }
   // pullParkedBody：取回某个会话被手风琴 park 掉的卡体（R122-C5），没有返回 null。
@@ -101,12 +107,197 @@
     }
     return null;
   }
+
+  /** R208：会话选择全屏页接管 02 的「加载中… / 加载失败」占位。
+   *  02-sse-sessions.js 的 selectSession 延迟占位（>200ms）与 loadSessionDetail
+   *  失败分支都是 `detail.innerHTML = '<div class="empty-hint">…</div>'` —— 直接
+   *  覆盖 #session-detail，把本层 #cc-right-head / #cc-cards 骨架整块冲掉：中间
+   *  一帧右栏只剩裸文本（空白帧），随后 promise 落地 restoreSkeleton 再
+   *  applyRight(true) 二次全量重建（闪）。这是「切聊天对象右栏闪一下」的主因之一。
+   *  改写进「当前选中会话卡」的卡体：骨架、会话头、其它卡片、滚动位置全部不动。
+   *  @param {string} text 占位 / 错误文案
+   *  @param {string} sid  本次加载的会话 id
+   *  @returns {boolean} true = 已接管（02 不要再写 innerHTML）；false = 走 02 原路
+   */
+  function placeDetailHint(text, sid) {
+    if (!active || tabNow() !== 'sessions') return false;
+    var cards = DETAIL.querySelector('#cc-cards');
+    if (!cards) return false;              // 骨架已不在，让 02 走原路，15 的兜底会补
+    var sel = '';
+    try { sel = String(sid || state.currentSessionId || ''); } catch (e) { sel = ''; }
+    if (!sel) return false;
+    var card = null;
+    // 按值比对：session id 里出现引号 / 反斜杠时拼属性选择器会抛 SyntaxError
+    var all = cards.querySelectorAll('.bp-card[data-sid]');
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].dataset.sid === sel) { card = all[i]; break; }
+    }
+    if (!card) return false;
+    var body = card.querySelector('.bs-cb');
+    if (!body) {
+      body = document.createElement('div');
+      body.className = 'bs-cb';
+      card.appendChild(body);
+    }
+    // 卡体里已是 02 的真详情（轮询 / SSE 抢先渲染过）就别覆盖 —— 占位只填空体
+    if (body.querySelector('.detail-header, .msg-flow, .tool-card-flow')) return true;
+    var isFail = String(text).indexOf('加载失败') === 0;
+    var hint = body.querySelector('.empty-hint');
+    if (!hint) {
+      hint = loadingHint();
+      while (body.firstChild) body.removeChild(body.firstChild);
+      body.appendChild(hint);
+    }
+    hint.textContent = text;
+    hint.dataset.ccHint = isFail ? 'fail' : 'loading';
+    // 失败兜底：错误留在卡体里（不冲骨架），按会话 5s 节流静默重试一次，
+    // 保留 R193 「补内容」的自愈语义 —— 绕过 R188 同会话短路 + R122-B 暂停窗口。
+    if (isFail) retryFailedHint(sel, body, hint);
+    return true;
+  }
+
+  var ccFailRetryAt = Object.create(null);
+  function retryFailedHint(sid, body, hint) {
+    var key = String(sid);
+    var now = Date.now();
+    if (now - (ccFailRetryAt[key] || 0) < 5000) return;
+    ccFailRetryAt[key] = now;
+    setTimeout(function () {
+      if (!active || tabNow() !== 'sessions') return;
+      if (hint.parentNode !== body) return;                    // 已被新详情替换
+      if (String(state.currentSessionId || '') !== key) return; // 用户已切走
+      try { state.sessionDetail = null; } catch (e) { /* 忽略 */ }
+      ccFromUserClick = key;
+      if (typeof selectSession === 'function') selectSession(key);
+    }, 1500);
+  }
+
+  // 02 通过这个钩子把占位交回本层（未激活 / 非会话页 / 找不到卡体时返回 false）。
+  // 15 号脚本晚于 02 加载，但钩子只在运行时（hintTimer / 失败回调）才被调用，
+  // 那时本 IIFE 早已执行完，钩子一定存在。
+  window.__ccPlaceDetailHint = function (text, sid) {
+    try { return placeDetailHint(text, sid); } catch (e) { return false; }
+  };
+
+  /** R208：把「节点重建 / 离屏摘挂」后重新起步的 CSS 入场动画直接推到终态。
+   *  Chromium 在元素被摘出文档再挂回（R114 的 HOLD）或整块重建后，会重播
+   *  03-workspace.css:583 的 .collapsible[open] > *:not(summary) { animation: pageIn }
+   *  —— 切聊天对象时就是右栏「闪一下」的最后一环。getAnimations({subtree:true})
+   *  强制一次样式计算并返回这些动画；有限次动画 finish() = 立刻呈现终态
+   *  （opacity 1 / transform none），不再淡入；无限循环动画（呼吸点等状态指示）
+   *  跳过。⚠️ prefers-reduced-motion 下 01-base.css:383 已把这类动画置 none，
+   *  getAnimations 返回空，本函数等价无操作 —— 无障碍兜底不受影响。
+   */
+  function settleEntranceAnimations(root) {
+    if (!root || typeof root.getAnimations !== 'function') return;
+    var anims = [];
+    try { anims = root.getAnimations({ subtree: true }) || []; } catch (e) { return; }
+    for (var i = 0; i < anims.length; i++) {
+      try {
+        var a = anims[i];
+        // 只管 CSS 入场动画，别碰 CSSTransition（.bp-chev 折叠旋转等过渡照旧）
+        if (a && a.constructor && a.constructor.name === 'CSSTransition') continue;
+        var t = (a.effect && typeof a.effect.getTiming === 'function') ? a.effect.getTiming() : null;
+        if (t && t.iterations === Infinity) continue;
+        if (a.playState === 'idle' || a.playState === 'finished') continue;
+        a.finish();
+      } catch (e2) { /* 单个动画不支持 finish 不影响其余 */ }
+    }
+  }
+
   // R118：上一次实际渲染过的聊天对象（st.chat）。fillLeft 每次跑完更新。
   // 用来区分「同聊天的列表刷新」（新会话插顶/行重排 → 恢复滚动锚点）与
   // 「切换了聊天对象」（pickChat 会先改 st.chat 再 applyRight → 不恢复，
   // 那份 scrollTop 属于另一个聊天的列表）。只在 applyRightInner / fillLeft
   // 开头读、fillLeft 末尾写 —— 两处 rebuild 路径都先于 fillLeft 或伴随它。
   var ccLastChat = null;
+
+  // R208：显式切换聊天对象的同步窗口 —— pickChat 置位，applyRightInner 内消费。
+  // 置位期间的全量重建必须：
+  //   ① 不用 state.currentSessionId 把 st.chat 改回旧群（那时 selectSession 还没跑）；
+  //   ② 丢弃旧群留在 DETAIL / HOLD 里的详情节点（否则被塞进新群选中卡 → 旧内容一闪）；
+  //   ③ 选中卡卡体只放「加载中…」占位，避免末尾 healEmptyBody 再发一次
+  //      selectSession（两个请求 / 两个 200ms hintTimer / 二次重建的源头）。
+  var ccSwitchingChat = null;
+  // R208：HOLD 里 02 详情节点所属的聊天对象（stashSessionNodes 时记下）。
+  // 在存档 / 记忆页换了群再切回会话时，这批节点属于旧群，不能挂到新群的卡上。
+  var ccHeldChat = null;
+  function dropHeldNodes() {
+    while (HOLD.firstChild) HOLD.removeChild(HOLD.firstChild);
+    ccHeldChat = null;
+  }
+
+  // ── R209（2026-11-13）：把「切聊天对象的首帧 = 选中卡已展开」做成同步不变量 ──
+  //  用户复现：切左栏聊天 → 右栏先出现「整列卡片全折叠」，过一拍第一张才展开，
+  //  看上去像闪了一下。重启后依旧 —— 说明不是旧脚本 / HTTP 缓存，而是 R208 之外
+  //  还有两处没约束住：
+  //   ① 全量重建后、异步详情回来前的这一帧里，autoFoldTick（runSeen 活跃→终态
+  //      迁移）与 refreshCards 的补卡（buildCard 传 selId=null，新建卡一律折叠）
+  //      都可能把选中卡留成 collapsed；随后 renderSessionDetail 包裹层的
+  //      wantExpand / madeBody 才把它掀开 —— 两帧之间正是「全折叠 → 第一张展开」。
+  //   ② 即使折叠态没错，R208 的占位是 .empty-hint，06-stage.css:902 给它
+  //      `min-height:0; padding:24px 12px`，只有几十像素高；真详情（系统提示 +
+  //      本次输入）常有 600~800px，内容一到，下面 8 张卡被整体推下去 —— 观感
+  //      同样是「突然展开」。
+  //  对策：切换窗口内，在每个同步回合的末尾强制选中卡展开且带卡体（seal），
+  //  并把上一张展开卡体的高度带到新占位上，让首帧就占住最终版面。异步详情
+  //  只替换卡体内容，不再改折叠态、不再改列表总高。
+  var ccSwitchSealUntil = 0;   // 切换窗口（ms 时间戳）：仅此窗口内轮询刷新也执行 seal
+
+  /** 首帧证据：万一仍闪，window.__ccDump() 可直接贴出每一帧的真实折叠态，
+   *  不用再靠沙箱推断。纯诊断，任何异常都不许打断渲染。 */
+  function ccSnapshot(cards, selId, tag, sealed) {
+    try {
+      var all = cards ? cards.querySelectorAll('.bp-card[data-sid]') : [];
+      var first = all[0] || null;
+      var fb = first ? first.querySelector('.bs-cb') : null;
+      var rec = {
+        t: Math.round(performance.now()),
+        tag: tag || '',
+        sel: String(selId == null ? '' : selId),
+        total: all.length,
+        expanded: cards ? cards.querySelectorAll('.bp-card[data-sid]:not(.collapsed)').length : 0,
+        firstCollapsed: !!(first && first.classList.contains('collapsed')),
+        firstBodyPx: fb ? Math.round(fb.getBoundingClientRect().height) : 0,
+        sealed: !!sealed
+      };
+      var buf = window.__ccTrace || (window.__ccTrace = []);
+      buf.push(rec);
+      if (buf.length > 80) buf.shift();
+    } catch (e) { /* 诊断失败不影响渲染 */ }
+  }
+  window.__ccDump = function () { return JSON.stringify(window.__ccTrace || [], null, 2); };
+  // 没有 DevTools 也能取证：Alt+Shift+D 弹可复制的轨迹文本框（产品逻辑零参与）。
+  document.addEventListener('keydown', function (e) {
+    if (e.altKey && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
+      try { window.prompt('R209 首帧轨迹（Ctrl+C 复制后发我）', window.__ccDump()); } catch (e2) { /* 忽略 */ }
+    }
+  });
+
+  /** 同步回合末尾：保证选中卡此刻就是展开态、且有卡体。 */
+  function ccSealSelected(cards, selId, tag) {
+    if (!cards || selId == null || selId === '') return;
+    var all = cards.querySelectorAll('.bp-card[data-sid]');
+    var selCard = null;
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].dataset.sid === String(selId)) { selCard = all[i]; break; }
+    }
+    var changed = false;
+    if (selCard) {
+      if (selCard.classList.contains('collapsed')) {
+        selCard.classList.remove('collapsed');
+        changed = true;
+      }
+      // refreshCards 补出来的选中卡没有卡体 —— 补一个「加载中…」占位盒，
+      // 避免它被 02 的 madeBody 分支在下一拍才掀开（那正是两步跳变）。
+      if (!selCard.querySelector('.bs-cb')) {
+        selCard.appendChild(loadingBody());
+        changed = true;
+      }
+    }
+    ccSnapshot(cards, selId, tag, changed);
+  }
+
   // R122-B：自动跟随「用户接管」暂停。治「用户正在读旧卡，每个新会话都把
   // 当前选中切走」（autoFollowRunning 默认 true，02 的 session-start 每次都
   // selectSession 活跃会话）。规则：用户手动选择（点卡头 / 点左栏聊天）后
@@ -618,6 +809,7 @@
    *     改名叫 pickChat，两个都不容易混。 */
   function pickChat(key) {
     if (!key) return;
+    var prevChat = st.chat;
     st.chat = key;
     ccUserPickAt = Date.now();                 // R122-B：点左栏聊天也是用户接管
     var m = tabNow();
@@ -632,11 +824,34 @@
         } catch (e) { /* 忽略 */ }
       }
     } else {
+      // R208（切聊天对象右栏闪一下的根治）：**先同步换骨架，再拉详情**。
+      // 旧顺序是「先 selectSession（未 await）→ 再 applyRight(true)」：
+      //   ① 02 的 selectSession 同步跑 renderSessionList → 15 号包裹层用新群数据
+      //      patch 旧骨架、删掉旧详情节点；紧接着 applyRightInner 又 DETAIL.innerHTML=''
+      //      全量重建 —— 同一帧把右栏改两遍；
+      //   ② 重建后选中卡卡体是空的 → 末尾 healEmptyBody 再发一次 selectSession，
+      //      于是两个 /api/sessions/:id 请求、两个 200ms hintTimer、两个 promise 兜底；
+      //   ③ 详情 >200ms 时 hintTimer 直接 `detail.innerHTML = '加载中…'` 把 #cc-cards
+      //      整块冲掉（空白帧），setTimeout(0) 检查早跑完了，只能等 promise 落地
+      //      restoreSkeleton → applyRight(true) 二次全量重建（闪 + 动画重播）。
+      // 新顺序：applyRight(true) 在 ccSwitchingChat 窗口内一次性建好新群骨架 +
+      // 选中卡「加载中…」占位（绝不复用旧群详情节点），fillLeft 同步左栏选中态，
+      // 最后才 selectSession 拉详情 —— 详情由 renderSessionDetail 包裹层原地填进
+      // 已建好的卡体，骨架不再重建、不出现空白帧、不整体重播入场动画。
+      // 慢加载的占位由 02 的 __ccPlaceDetailHint 钩子写进同一个卡体，详见其注释。
       var list = sessionsOf(key);
-      if (list.length && typeof selectSession === 'function') {
-        ccFromUserClick = list[0].id;             // R122-B：这也是用户发起的选择
-        selectSession(list[0].id);                // 最新一条默认展开
+      var selId = list.length ? list[0].id : null;
+      // R209：覆盖「重建 → selectSession → renderSessionList → refreshCards →
+      // 详情回填」整条链路（本机详情通常几十毫秒，1.5s 足够兜住慢接口）。
+      ccSwitchSealUntil = Date.now() + 1500;
+      ccSwitchingChat = (prevChat !== key) ? key : null;
+      try { applyRight(true); } finally { ccSwitchingChat = null; }
+      fillLeft();
+      if (selId && typeof selectSession === 'function') {
+        ccFromUserClick = selId;                // R122-B：这也是用户发起的选择
+        selectSession(selId);                   // 最新一条默认展开
       }
+      return;
     }
     applyRight(true);
     fillLeft();
@@ -727,7 +942,17 @@
   }
   /** 切到存档 / 记忆前，把 02 的节点挪进离屏暂存区（切回会话时原样取回） */
   function stashSessionNodes() {
-    collectSessionNodes().forEach(function (n) { HOLD.appendChild(n); });
+    // R208：记下这批节点属于哪个聊天对象 —— 切回会话页时按 ccHeldChat 校验，
+    // 期间换了群就不能把它们挂到新群的选中卡上。
+    // ⚠️ 没有新节点可暂存时**不能**改 ccHeldChat：在存档 / 记忆页里再点一次
+    // applyRightAux 时 DETAIL 里只有借来的面板，collectSessionNodes 返回空，
+    // 若此时把归属改写成新群，HOLD 里原有的旧群节点就会被误认成新群的。
+    var got = collectSessionNodes();
+    if (!got.length) return;
+    // 旧归属的残留节点先清掉，避免 HOLD 里混着两个聊天对象的详情
+    if (HOLD.firstChild && ccHeldChat !== st.chat) dropHeldNodes();
+    ccHeldChat = st.chat;
+    got.forEach(function (n) { HOLD.appendChild(n); });
   }
   /** 暂存区里的 02 节点 */
   function heldNodes() { return Array.prototype.slice.call(HOLD.childNodes); }
@@ -1113,7 +1338,21 @@
 
   function applyRightInner() {
     var chatAtEntry = st.chat;   // R122-P2-6：记入口时的聊天对象，末尾只有切换过才重刷左栏
+    var switching = !!ccSwitchingChat;  // R208：显式切聊天对象的同步窗口
     ccShown = CC_CARD_PAGE;      // R126：全量重建 = 分页归零重来（首屏 50 张，滚底再补）
+    // R209：清空 DETAIL 之前先量下「上一张展开卡体」的高度。切群时详情结构
+    // 基本一致（卡头 + 系统提示 + 本次输入），把它带到新骨架的占位上，首帧
+    // 就占住最终版面，真详情回来只在原地换字，下面 8 张卡不会被整体推下去。
+    var switchPrevBodyPx = 0;
+    if (switching) {
+      try {
+        var prevBody = DETAIL.querySelector('#cc-cards .bp-card[data-sid]:not(.collapsed) .bs-cb');
+        if (prevBody && typeof prevBody.getBoundingClientRect === 'function') {
+          var pr = prevBody.getBoundingClientRect();
+          if (pr && pr.height > 0) switchPrevBodyPx = Math.round(pr.height);
+        }
+      } catch (e) { switchPrevBodyPx = 0; }
+    }
     // R118/R119：右栏滚动锚定（详见文件头 captureScrollAnchor 注释）。
     // 入口③（R122-C3 精化）：骨架健在 = DETAIL 内容完好、scrollTop 是实时
     // 有效位置 → force 重抓（每次重建前把锚点推到最新）；骨架没了 = 已被
@@ -1126,7 +1365,10 @@
     var cur = null;
     try { cur = state.currentSessionId || null; } catch (e) { cur = null; }
     var curS = cur ? S().filter(function (s) { return s.id === cur; })[0] : null;
-    if (curS && curS.chatKey && groups.some(function (g) { return g.key === curS.chatKey; })) {
+    // R208：切聊天对象的同步窗口里不能用全局 currentSessionId 把 st.chat 改回旧群
+    // —— 此刻它还没被新群的 selectSession 更新（后者排在本函数之后）。跳过覆盖后，
+    // selId 会由下面的 list 兜底落到新群最新一条，与 pickChat 传给 selectSession 的一致。
+    if (!switching && curS && curS.chatKey && groups.some(function (g) { return g.key === curS.chatKey; })) {
       st.chat = curS.chatKey;
     } else if (!st.chat || !groups.some(function (g) { return g.key === st.chat; })) {
       st.chat = groups.length ? groups[0].key : null;
@@ -1166,8 +1408,17 @@
 
     // ② 把 02 渲染出来的节点从旧卡体（或直接从 #session-detail）里摘出来；
     //    若它们正躺在离屏暂存区（上一轮从存档 / 记忆切回来），就从那儿取回。
-    var nodes = collectSessionNodes();
-    if (!nodes.length) nodes = heldNodes();
+    //    ⚠️ R208：切聊天对象时这些节点**全部属于旧群** —— 一个都不复用，否则
+    //    buildCard 会把上一个群的详情塞进新群选中卡，用户先看到旧内容一闪。
+    //    HOLD 里的暂存节点同样按 ccHeldChat 校验，换了群就地丢弃。
+    var nodes = [];
+    if (!switching) {
+      nodes = collectSessionNodes();
+      if (!nodes.length && ccHeldChat === st.chat) nodes = heldNodes();
+    }
+    if (switching || ccHeldChat !== st.chat) {
+      if (HOLD.firstChild) dropHeldNodes();
+    }
     // R193（2026-11-04）：空态占位不是会话内容 —— 「← 选择左侧会话查看完整过程」
     // （index.html 初始态 / 删除会话后）、「加载中…」（selectSession 延迟占位）混进
     // nodes 会被 buildCard 塞进选中卡卡体，表现为「点开卡头底下空无一物、只剩提示」
@@ -1216,6 +1467,33 @@
     var moreEl = moreHintEl(list.length);
     if (moreEl) cards.appendChild(moreEl);
     DETAIL.appendChild(cards);
+
+    // R208：切聊天对象时，选中卡卡体只放「加载中…」占位：
+    //   ① 绝不挂旧群详情节点（上面 nodes 已置空）；
+    //   ② 末尾 healEmptyBody 看见 firstChild 就不再发第二次 selectSession
+    //      （两个请求 / 两个 hintTimer / 二次重建的源头）；
+    //   ③ 新详情回来由 renderSessionDetail 包裹层原地填进这张卡体，骨架不重建。
+    //   占位只写进卡体，绝不碰 DETAIL.innerHTML —— #cc-cards / 会话头始终在文档里。
+    if (switching && selId) {
+      var selCard0 = null;
+      var cards0 = cards.querySelectorAll('.bp-card[data-sid]');
+      for (var ci = 0; ci < cards0.length; ci++) {
+        if (cards0[ci].dataset.sid === String(selId)) { selCard0 = cards0[ci]; break; }
+      }
+      var body0 = selCard0 && selCard0.querySelector('.bs-cb');
+      if (body0 && !body0.firstChild) {
+        var hint0 = loadingHint();
+        // R209：占位沿用上一张展开卡体的高度（06-stage.css 的 .empty-hint
+        // 原本只有 24px padding，内联 min-height 优先级更高）。夹在
+        // 160~900px：极短 / 极长的旧详情都不至于把版面撑歪。
+        if (switchPrevBodyPx >= 160) {
+          hint0.style.minHeight = Math.min(switchPrevBodyPx, 900) + 'px';
+          hint0.dataset.ccHold = String(switchPrevBodyPx);
+        }
+        body0.appendChild(hint0);
+      }
+      if (selCard0) selCard0.classList.remove('collapsed');
+    }
 
     // ⑤ 卡体里的工具卡：压成原型 .tool-step 单行 + 「查看原文」按钮
     //    （节点可能刚从 HOLD 取回、上一轮已经改造过 —— skinTools 是幂等的）
@@ -1289,6 +1567,7 @@
         }
       } else {
         card.classList.add('collapsed');
+        ccSwitchSealUntil = 0;               // R209：用户接管，立刻停止首帧收口
         // R121：用户手动收起 = 销账（并取消这条会话的"待展开"意图，否则连点两下
         // 时晚到的详情渲染会凭 ccPendingExpand 又把卡抢开）。
         delete ccUserExpanded[card.dataset.sid];
@@ -1298,6 +1577,15 @@
 
     // R193：选中卡卡体空置自愈（占位被过滤 / 无内容可搬时补拉详情）
     if (selId) healEmptyBody(selId);
+
+    // R209：本同步回合的**最后一道**不变量 —— autoFoldTick / restoreExpanded /
+    // healEmptyBody 之后再收口，保证「浏览器画这一帧」时选中卡已经是展开态且有
+    // 卡体。异步详情回来时 renderSessionDetail 包裹层只换卡体内容，不再掀开卡片。
+    ccSealSelected(cards, selId, switching ? 'rebuild:switch' : 'rebuild');
+
+    // R208：全量重建出来的节点会重播 .collapsible[open] > * 的 pageIn 入场动画，
+    // 直接推到终态（切聊天对象 / SSE 自动跟随都不该"整体淡入一次"）。
+    settleEntranceAnimations(cards);
 
     // R122-P2-6：只有 st.chat 被兜底改过（切换了聊天对象）才需要重刷左栏
     // 选中态；没变就别跑 —— 同一个 tick 里 renderSessionList 包裹层已经跑过
@@ -1355,6 +1643,14 @@
     var cards = DETAIL.querySelector('#cc-cards');
     if (!cards || !st.chat) return;
     var list = sessionsOf(st.chat);
+    // R209：刷新里也要认得「哪张是选中卡」。02 的 renderSessionList 会在
+    // selectSession 里同步调到这里，补卡用的是 buildCard(s, null, null)（一律
+    // 折叠、无卡体），正是「先全折叠、下一拍才掀开第一张」的第二个来源。
+    var selNow = null;
+    try { selNow = state.currentSessionId || null; } catch (e) { selNow = null; }
+    if (!list.some(function (s) { return String(s.id) === String(selNow); })) {
+      selNow = list.length ? list[0].id : null;
+    }
     var map = {};
     list.forEach(function (s) { map[s.id] = s; });
     // R122：右栏滚动锚定（补卡插顶会把下面内容推下去）
@@ -1407,6 +1703,9 @@
       else cards.appendChild(moreHintEl(list.length));
     } else if (hintEl) hintEl.remove();
     autoFoldTick();
+    // R209：只在切群窗口内收口。窗口外用户手动收起选中卡是受尊重的（R121），
+    // 不能被每轮轮询强行掀开；窗口内则必须保证首帧不留「全折叠」状态。
+    if (Date.now() < ccSwitchSealUntil) ccSealSelected(cards, selNow, 'refresh');
     // R122：滚动恢复（补偿新增/删除卡的高度，见函数开头的说明）
     if (top0 > 4) {
       var d = DETAIL.scrollHeight - h0;
@@ -1457,6 +1756,7 @@
   function activate() {
     if (active) return;
     active = true;
+    ccSwitchSealUntil = Date.now() + 1500;   // R209：首次打开同样要守住首帧
     buildStatic();
     // 头像兜底：img 加载失败时把首字揭开。左栏绑 W_LIST、右栏绑 DETAIL ——
     // 两个都是长期容器（W_LIST 内部整体重绘、DETAIL 换 innerHTML），
@@ -1673,6 +1973,11 @@
           // （fresh 为空）时也要做运行态迁移检测，否则「跑完自动展开/收起」
           // 要等下一次事件才补上。
           autoFoldTick();         // 运行态自动展开/收起（只在状态迁移时动作）
+          // R208：R114 的「骨架摘进 HOLD → 原样挂回」会让 Chromium 重新起步
+          // 后代的 pageIn 入场动画（02 读 scrollHeight 时发生过一次样式重算）。
+          // 把有限次动画直接推到终态：切群 / 轮询刷新都不再"淡入一下"。
+          // 用户手动开合 <details> 不经过本包裹层，折叠面板的开合淡入照旧。
+          settleEntranceAnimations(DETAIL);
           // 滚动恢复：贴底跟随 / 原样保留（02 在空 DETAIL 上算出的 scrollTop 不可信）
           var run = false;
           try { var s0 = S().filter(function (x) { return x.id === sel; })[0]; run = !!(s0 && isLive(s0)); } catch (e) { run = false; }

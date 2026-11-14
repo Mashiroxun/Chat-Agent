@@ -5,6 +5,10 @@ runtime/
 # ── 用户数据（含 API Key、聊天记录、登录态，绝不入库）──
 data/
 data-*/
+# data.removed-* 是手工挪走的历史数据目录（2026-11-14 排查补丁时产生的）。
+# 它是 data 而不是 data-：原来的 `data-*/` 一行匹配不到，导致它一直是未跟踪状态，
+# 一次 `git add -A` 就会把 config.json（API Key）、logs、memory 一起推上公开仓库。
+data.removed*/
 log/
 logs/
 *.log

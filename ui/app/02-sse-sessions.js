@@ -718,6 +718,13 @@ async function selectSession(id) {
     hintTimer = setTimeout(function () {
       // 期间既没切走、新内容也还没来，才落占位（避免迟到响应把占位留在屏上）
       if (state.currentSessionId === id && state.tab === 'sessions') {
+        // R208：会话选择全屏页（15-chat-chrome.js）里 #session-detail 装着
+        // #cc-right-head / #cc-cards 骨架 —— 整块 innerHTML 覆盖会把骨架冲掉，
+        // 右栏空白一帧，随后 15 号只能再 applyRight(true) 二次重建（用户看到的
+        // 「切换聊天对象闪一下」）。占位交给 15 号写进「当前选中会话卡」的卡体；
+        // 未激活 / 不在会话选择页 / 找不到卡体时返回 false，仍走下面的原路。
+        if (typeof window.__ccPlaceDetailHint === 'function' &&
+            window.__ccPlaceDetailHint('加载中…', id)) return;
         detail.innerHTML = '<div class="empty-hint">加载中…</div>';
       }
     }, 200);
@@ -838,7 +845,16 @@ async function loadSessionDetail(id, { quiet = false } = {}) {
     if (generation !== sessionDetailLoadGeneration || state.currentSessionId !== id || state.tab !== 'sessions') return;
     if (!quiet) {
       const detail = $('#session-detail');
-      if (detail) detail.innerHTML = `<div class="empty-hint">加载失败：${esc(e.message)}</div>`;
+      // R208：失败占位与「加载中…」同理 —— 会话选择全屏页里不能整块覆盖
+      // #session-detail，否则卡片骨架被冲掉。钩子用 textContent 写入卡体，
+      // 原本的 esc() 不再需要（也不会把转义实体当字面文本显示）。
+      if (detail) {
+        const msg = `加载失败：${e && e.message != null ? e.message : ''}`;
+        if (!(typeof window.__ccPlaceDetailHint === 'function' &&
+              window.__ccPlaceDetailHint(msg, id))) {
+          detail.innerHTML = `<div class="empty-hint">加载失败：${esc(e.message)}</div>`;
+        }
+      }
     }
   }
 }

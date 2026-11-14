@@ -44,7 +44,9 @@ const add = (level, target, message, hint) => {
  * 它们的问题不在"存在"，而在"被一起压进 zip"。
  */
 const ROOT_MUST_EXCLUDE = [
-  { name: 'data', desc: '运行时数据（API Key / QQ 号 / 群白名单 / 聊天记录 / 日志 / 渲染配置）' },
+  // B6：data 由 EXCLUDE 升 FATAL —— 安装根残留 data/ 即判定禁止打包（exit≠0），
+  // 杜绝 API Key / QQ 号 / 群白名单 / 聊天记录随包泄露给收包人。
+  { name: 'data', level: 'FATAL', desc: '运行时数据（API Key / QQ 号 / 群白名单 / 聊天记录 / 日志 / 渲染配置）' },
   { name: 'dev-sandbox', desc: '开发期沙箱调试目录' },
   { name: '使用说明-排障.txt', desc: '排障笔记，非发布内容' },
   // 改代码前的整目录备份（含 QQ Agent.exe.orig 等）。2026-11-12 实测每个包
@@ -104,8 +106,11 @@ const REQUIRED = [
 
 // ── 1. 安装根残留 ──────────────────────────────────────────────────────────
 for (const item of ROOT_MUST_EXCLUDE) {
+  const level = item.level || 'EXCLUDE';
   if (fs.existsSync(path.join(ROOT, item.name))) {
-    add('EXCLUDE', item.name, item.desc, '打包命令里必须排除；不要删（本机还在用）');
+    add(level, item.name, item.desc, level === 'FATAL'
+      ? '残留即禁止打包（exit≠0）。打包命令必须排除，并确认这不是本机真实数据'
+      : '打包命令里必须排除；不要删（本机还在用）');
   }
 }
 // 通配型残留：*.flag / *.bak-* / *.lnk / 测试-*.bat / data-probe*
@@ -113,7 +118,7 @@ for (const entry of fs.readdirSync(ROOT, { withFileTypes: true })) {
   const name = entry.name;
   const is = (re) => re.test(name);
   if (is(/\.flag$/i)) add('EXCLUDE', name, '运行时渲染/调试开关文件', '打包时排除');
-  if (is(/\.bak-/i)) add('EXCLUDE', name, '备份文件（改代码时留下的）', '打包时排除，或确认无用后删除');
+  if (is(/\.bak-/i)) add('FATAL', name, '备份文件（改代码时留下的）', '打包时排除，或确认无用后删除；残留即禁止打包');
   if (is(/\.orig$/i)) add('EXCLUDE', name, '备份文件（.orig：patch/替换前的原件）', '打包时排除，或确认无用后删除');
   if (is(/\.rej$/i)) add('EXCLUDE', name, 'patch 冲突残留（.rej）', '打包时排除');
   if (is(/\.lnk$/i)) add('EXCLUDE', name, '快捷方式，指向的是本机路径', '打包时排除');
@@ -148,6 +153,9 @@ walkForBackups(path.join(APP_DIR, 'src'));
 // ui 也是整目录进包的前端资源 —— 曾经漏扫，两个 580KB 的 style.css.bak-* 一直
 // 躺在那里没人报，白占 1.16MB 分发包体积，还可能被误认为有效样式表。
 walkForBackups(path.join(APP_DIR, 'ui'));
+// B6：测试目录的备份副本（*.bak-*/ *.orig / *.rej）也要扫，堵住测试备份随包发布、
+// 污染插件指纹校验的口子。
+walkForBackups(path.join(APP_DIR, 'tests'));
 
 // ── 3. 必需文件 ────────────────────────────────────────────────────────────
 for (const rel of REQUIRED) {

@@ -1,0 +1,314 @@
+# 发版流水线（补丁通道）：tag push 后自动出补丁并挂到 Release。
+#
+# 为什么只做补丁、不做全量包：
+#   全量包 = Electron 运行时（约 188MB exe + resources）+ 本机打包目录，云端没有那份
+#   运行时，重建一遍既慢又容易与用户手上的包不一致。所以分工是：
+#     · 本机：打全量包 <版本>.zip，上传 Release（人工，不可省）；
+#     · 本机：改 version.json / package.json / 更新日志 → commit → push main → 打 tag → push（人工）；
+#     · 本机 + 本流水线：以上一个 tag 为基线出补丁 patch-<版本>.zip（自动）。
+#
+# 为什么第一步就要跑 verify-release-tag：
+#   客户端只认 main 分支上的 version.json，不认 tag 也不认 Release。历史上最容易出的事故
+#   是"在特性分支打 tag、发 Release，用户端毫无反应"。这一步把它变成硬失败。
+#
+# 依赖变更会怎样：make-patch 拒绝出补丁（补丁带不了 node_modules），本流水线按
+# "本版需发全量包"处理并跳过补丁资产上传 —— 但 **draft Release 仍然会建**，
+# 否则 README 里那句"上传到同一个 Release"会 404。
+#
+# 为什么 Release 建成 draft（关键）：
+#   本流水线只能产出补丁，**产不出 147MB 的全量包**；而 version.json 一旦在 main 上，
+#   客户端立刻弹"有更新"。此时跳版本用户点一键更新 → 客户端按 manifest.base 不匹配
+#   回退全量包 → 但回退的前提是 Release 里有全量包（src/self-update.js 里 picked.full），
+#   没有就抛一条用户看不懂的基线错误。窗口长度取决于人工何时上传全量包。
+#   建成 draft 后：draft 不进 releases/latest，客户端 resolveRelease 拿到的是上一版
+#   Release → compareSemver 判定"已是最新" → 什么都不下载，绝不会报基线错误。
+#   人工上传全量包后执行 gh release edit <tag> --draft=false 发布，两件事才对得上。
+#
+# 演练：workflow_dispatch 的 dry_run=true 会跳过所有 gh release 操作，
+#   其余（checkout / install / check / make-patch）照跑，用来在不碰线上 Release 的前提下
+#   验证脚本与产物。
+
+name: release-patch
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要补发的 tag（如 v0.4.9.5），必须是已推送到远端的 tag'
+        required: true
+      dry_run:
+        description: '演练模式：跑完校验/安装/测试/出补丁，但跳过一切 gh release 操作（不建 Release、不上传）'
+        type: boolean
+        default: false
+
+permissions:
+  # 建 Release、上传资产都要写权限。注意：workflow 里的 permissions 不能超过仓库设置的上限 ——
+  # 若 Settings → Actions → General → Workflow permissions 设为「Read repository contents」，
+  # 这里的 write 会被降级，gh release create 会以 403 失败。首次启用前先确认那项是 Read and write。
+  contents: write
+
+concurrency:
+  # ⚠️ workflow_dispatch 请填**裸 tag 名**（v0.4.9.5）。填全名 refs/tags/v0.4.9.5 会得到
+  # release-patch-refs/tags/v0.4.9.5，与 push 那条 release-patch-v0.4.9.5 不同组 →
+  # 两个 run 并行往同一个 Release --clobber。concurrency 在 job 之前求值，拿不到 step output
+  # （meta 步的 TAG#refs/tags/ 归一化救不了这里），只能靠这条约定 + meta 的 check-ref-format 兜底。
+  group: release-patch-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: windows-latest
+    # 卡住比失败更糟：gh 命令在凭据/网络异常时会长时间挂起，而 concurrency 不取消在跑的 job，
+    # 后续 tag 会一直排队。20 分钟足够跑完 install + check + make-patch + upload。
+    timeout-minutes: 20
+    # dry_run 在 job 级一次性归一化成字符串：`inputs` 上下文只在 workflow_dispatch 下有值，
+    # push 事件下是否可求值取决于 runner 版本 —— 一旦求值失败，整个 workflow 会在表达式阶段
+    # 报 Unrecognized named-value: 'inputs' 并且静默不跑（最难查的一类故障）。
+    # github.event.inputs 在所有事件下都存在（push 时为空对象），`|| 'false'` 再兜一层。
+    env:
+      DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: 检出（完整历史，补丁基线依赖 tag）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          # 默认 checkout 会把带 contents: write 的 token 写进 .git/config，
+          # 而紧接着在同一个目录里跑 npm install —— 一条完整的供应链通道。
+          # 本 workflow 全程用 gh + GH_TOKEN，不需要 git 认证，所以直接不落盘。
+          persist-credentials: false
+
+      - name: 准备 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 解析 tag 与补丁基线
+        id: meta
+        env:
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${DISPATCH_TAG:-${GITHUB_REF_NAME}}"
+          # 归一化：workflow_dispatch 允许填 refs/tags/v0.4.9.5 这种全名。
+          TAG="${TAG#refs/tags/}"
+          if [ -z "$TAG" ]; then
+            echo "::error::无法确定 tag：workflow_dispatch 请填 tag 输入"
+            exit 1
+          fi
+          # 格式校验：tag 是自由文本，而 Git ref 规则允许 $() ` ; | & 这些字符，
+          # 双引号内仍会做命令替换。凡是把它交给 shell 之前，先在这里挡一次。
+          if ! git check-ref-format "refs/tags/${TAG}"; then
+            echo "::error::tag 名不合法：${TAG}（git check-ref-format refs/tags/${TAG} 未通过）"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          # 基线交给 verify 脚本算（--print-prev），这里不再用 git describe / grep 重复实现：
+          #   · describe 的缺陷是 fnmatch —— `*` 会吞掉 `-hotfix`，实测 --match 'v[0-9]*'
+          #     与 'v[0-9]*.[0-9]*' 都会选中 v0.4.9.4-hotfix，manifest.base 因此变成
+          #     "0.4.9.4-hotfix"，任何客户端都对不上；
+          #     ⚠️ 该缺陷**只有在"存在 v0.4.9.4-hotfix 而没有任何形式的 v0.4.9.4"时才复现**；
+          #     两者并存时 describe 恰好也能选对 —— 所以用并存场景测不出问题，别以为验过了。
+          #   · describe 取"最近"，补丁基线要"最高"，backport 提交上两者分歧。
+          #   · 一支脚本一份实现：verify 与 make-patch 从此不可能算出不同的 base。
+          if ! PREV="$(node scripts/verify-release-tag.mjs --print-prev --tag "$TAG")"; then
+            echo "::error::无法解析补丁基线（verify --print-prev 失败），已中止以免静默产出一个没有补丁的 Release"
+            exit 1
+          fi
+          echo "prev=$PREV" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}，补丁基线=${PREV:-（无，首个版本）}"
+
+      - name: 发版一致性校验
+        # 值一律走 env，不再内插进命令：workflow_dispatch 的 tag 是自由文本，
+        # double-quoted 的 ${{ }} 内插仍会执行 $() 与反引号，属于命令注入面。
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: node scripts/verify-release-tag.mjs --tag "$TAG"
+
+      - name: 安装运行时依赖
+        # --no-package-lock 不是可选项：仓库没有 package-lock.json，npm 默认会新生成一个，
+        # 它就是工作区里的一个未跟踪文件 —— make-patch 用 git status 判"工作区是否干净"，
+        # 脏了直接拒绝出补丁。少了这个参数，流水线会在"生成补丁"那步必然失败。
+        # --ignore-scripts：这批依赖不需要任何 postinstall，关掉脚本执行可以去掉
+        # 安装期唯一的任意代码执行通道。
+        run: npm install --omit=dev --no-audit --no-fund --no-package-lock --ignore-scripts
+
+      - name: 测试门禁
+        run: npm run check
+
+      - name: 生成补丁包
+        id: patch
+        env:
+          PREV_TAG: ${{ steps.meta.outputs.prev }}
+        run: |
+          set -uo pipefail
+          if [ -z "${PREV_TAG}" ]; then
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=首个版本没有补丁基线，跳过补丁生成" >> "$GITHUB_OUTPUT"
+            echo "首个版本没有补丁基线，跳过补丁生成" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # dist/ 在 .gitignore 里，建目录不会让 git status 变脏（make-patch 的干净性检查看的是
+          # git status）。但必须先建：下面的 tee 要往里写日志，目录不存在会直接丢光输出。
+          mkdir -p dist
+          # 先清掉可能残留的旧产物：make-patch 在"基线..HEAD 无分发内容变化"时是
+          # **退出码 0 且不产出文件**，下面的存在性判定若看到上一次留下的 zip 就会误判成
+          # "本次生成了"，把旧包当新包传上去。
+          rm -f dist/patch-*.zip dist/patch-*.zip.sha256
+          set +e
+          node scripts/make-patch.mjs --from "${PREV_TAG}" --out dist 2>&1 | tee dist/patch.log
+          CODE=${PIPESTATUS[0]}
+          set -e
+          if [ "$CODE" -ne 0 ]; then
+            if grep -q "依赖变更必须发全量包" dist/patch.log; then
+              echo "skip=1" >> "$GITHUB_OUTPUT"
+              echo "skip_reason=本版改动了 package.json 的依赖/入口字段，补丁不适用" >> "$GITHUB_OUTPUT"
+              echo "本版改动了 package.json 的依赖/入口字段，补丁不适用：请发全量包" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            if grep -q "未提交改动" dist/patch.log; then
+              echo "::error::工作区不干净，补丁会静默漏文件。CI 上出现说明本步之前的某一步往仓库里写了文件"
+            fi
+            echo "::error::make-patch 失败（退出码 $CODE），详见上方输出"
+            exit "$CODE"
+          fi
+          # 基线之间没有分发内容变化时 make-patch 同样返回 0，但不产出 zip ——
+          # 不判这一下，后面的 gh release upload 会把字面量 "dist/*.zip" 当文件名传上去。
+          if ! ls dist/patch-*.zip >/dev/null 2>&1; then
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+            echo "skip_reason=基线之间没有分发内容变化，未生成补丁" >> "$GITHUB_OUTPUT"
+            echo "基线之间没有分发内容变化，未生成补丁" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "skip=0" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=" >> "$GITHUB_OUTPUT"
+
+      - name: 创建 draft Release
+        # 这一条**无论 skip 是否为 0 都执行**（只受 dry_run 控制）：
+        # make-patch 因依赖变更拒绝时以前整轮全绿却什么 Release 都没建，
+        # 而 README 让人"上传到同一个 Release" —— gh release upload 会 404。
+        # 所以 Release 的创建与补丁资产上传拆成两步。
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VER: ${{ steps.meta.outputs.version }}
+          PREV: ${{ steps.meta.outputs.prev }}
+          SKIP: ${{ steps.patch.outputs.skip }}
+          SKIP_REASON: ${{ steps.patch.outputs.skip_reason }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          node --input-type=module -e "import fs from 'node:fs'; process.stdout.write(String(JSON.parse(fs.readFileSync('version.json','utf8')).notes || ''))" > dist/release-notes.md
+          if [ ! -s dist/release-notes.md ]; then
+            echo "$TAG" > dist/release-notes.md   # notes 为空时 gh 不接受空 notes-file
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在：保留现状，补丁资产由下一步上传"
+          else
+            # --draft 是关键：draft 不进 releases/latest，客户端此时拿到上一版 Release，
+            # 判定"已是最新"，绝不会在只有补丁、没有全量包的状态下开始下载。
+            gh release create "$TAG" --draft --title "$TAG" --notes-file dist/release-notes.md
+          fi
+          # ::warning:: 必须发到 stdout（annotation），不能写进 summary 文件 ——
+          # 写在 { } >> "$GITHUB_STEP_SUMMARY" 里就只是一行 Markdown 文本。
+          if [ "${SKIP}" != "0" ]; then
+            echo "::warning::未产出补丁（${SKIP_REASON:-见上方日志}）：本版只能走全量包，Release 已建为 draft"
+          fi
+          {
+            echo ""
+            echo "## Release 已建为 draft（未发布）"
+            echo ""
+            echo "- 补丁基线 = \`${PREV:-（无，首个版本）}\`"
+            if [ "${SKIP}" = "0" ]; then
+              echo "- 补丁：下一步上传 \`patch-${VER}.zip\` + \`.sha256\`"
+            else
+              echo "- 补丁：未产出（${SKIP_REASON:-见上方日志}）—— 本版只能走全量包"
+            fi
+            echo "- **draft 不会出现在 \`releases/latest\`，客户端此刻显示「已是最新」，不会下载失败。**"
+            echo ""
+            echo "接下来在本机执行（顺序不能反）："
+            echo ""
+            echo '```bash'
+            echo "gh release upload ${TAG} ${VER}.zip --clobber"
+            echo "gh release edit ${TAG} --draft=false"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 上传补丁资产并断言（含刷新更新源缓存）
+        if: env.DRY_RUN != 'true' && steps.patch.outputs.skip == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VER: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          FILES=(dist/patch-*.zip dist/patch-*.zip.sha256)
+          gh release upload "$TAG" "${FILES[@]}" --clobber
+          # 断言：只靠 gh 的退出码不够（--clobber 会覆盖，但资产名写错也会"成功"）。
+          NAMES="$(gh release view "$TAG" --json assets --jq '[.assets[].name]')"
+          echo "Release 资产：${NAMES}"
+          for want in "patch-${VER}.zip" "patch-${VER}.zip.sha256"; do
+            if ! grep -qF "\"${want}\"" <<< "${NAMES}"; then
+              echo "::error::Release ${TAG} 缺少资产 ${want}（实际：${NAMES}）"
+              exit 1
+            fi
+          done
+          # digest 为空说明 GitHub 没算出摘要，客户端只能退回读同名 .sha256 校验。
+          DIGEST_LINE="$(gh release view "$TAG" --json assets --jq '.assets[] | .name + "|" + (.digest // "")' | grep -F "patch-${VER}.zip|" | head -n 1 || true)"
+          DIGEST="${DIGEST_LINE#*|}"
+          if [ -z "${DIGEST}" ]; then
+            echo "::warning::patch-${VER}.zip 的 digest 为空：客户端将依赖 .sha256 资产校验，请确认它已一并上传"
+          else
+            echo "patch-${VER}.zip digest = ${DIGEST}"
+          fi
+          # best-effort：jsdelivr 有缓存，刷新失败不影响发版结论。
+          curl -fsS "https://purge.jsdelivr.net/gh/Mashiroxun/Chat-Agent@main/version.json" || true
+
+      - name: 汇总
+        if: always()
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          VER: ${{ steps.meta.outputs.version }}
+          PREV: ${{ steps.meta.outputs.prev }}
+          SKIP: ${{ steps.patch.outputs.skip }}
+          SKIP_REASON: ${{ steps.patch.outputs.skip_reason }}
+          # DRY_RUN 不在这里覆盖：用 job 级 env 那份（已经归一化成 'true' / 'false' 字符串），
+          # 否则这里又要写一次 ${{ github.event.inputs.dry_run }}，两处容易不同步。
+        run: |
+          {
+            echo "## 发版结果"
+            echo ""
+            echo "- tag：\`${TAG}\`"
+            # 基线必须显式打印：肉眼要能看出它有没有退化成"首个版本"（那意味着补丁覆盖所有人之外的路径）。
+            echo "- 补丁基线 = \`${PREV:-（无，首个版本 → 只能发全量包）}\`"
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "- 模式：**dry_run 演练**（未建 Release、未上传任何资产）"
+            fi
+            if [ "${SKIP}" = "0" ]; then
+              if [ "${DRY_RUN}" = "true" ]; then
+                echo "- 补丁：已生成（dry_run 演练，未上传）"
+              else
+                echo "- 补丁：已生成并上传 \`patch-${VER}.zip\`（Release 为 draft）"
+              fi
+            else
+              echo "- 补丁：未生成（${SKIP_REASON:-首个版本或依赖变更，见上方说明}）"
+            fi
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "- 全量包：演练未建 Release，真跑时本机打包后 \`gh release upload ${TAG} ${VER}.zip\`"
+            else
+              echo "- 全量包：仍需本机打包后 \`gh release upload ${TAG} ${VER}.zip\`"
+              echo "- 发布：确认全量包已上传后 \`gh release edit ${TAG} --draft=false\`"
+            fi
+            echo ""
+            echo "> 客户端只读 main 上的 version.json；若本 tag 未合入 main，用户端不会提示更新。"
+            echo "> Release 在 --draft=false 之前不进 releases/latest，客户端会显示「已是最新」而不是下载失败。"
+          } >> "$GITHUB_STEP_SUMMARY"

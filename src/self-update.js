@@ -943,12 +943,22 @@ export function createSelfUpdateService({ appDir, log = () => {}, getConfig = ()
                 validated = validatePatchManifest(staging, current);
               } catch (error) {
                 rmRf(staging);
-                if (error?.fallbackToFull && picked.full && isPackagedInstall) {
-                  log('warn', '[self-update] 补丁与当前版本不匹配，回退全量包');
-                  mode = 'full';
-                  asset = mirrorAsset(picked.full, picked);
-                  staging = abs(A.staging);
-                  continue;   // 第二轮：下载全量
+                if (error?.fallbackToFull) {
+                  if (picked.full && isPackagedInstall) {
+                    log('warn', '[self-update] 补丁与当前版本不匹配，回退全量包');
+                    mode = 'full';
+                    asset = mirrorAsset(picked.full, picked);
+                    staging = abs(A.staging);
+                    continue;   // 第二轮：下载全量
+                  }
+                  // 补丁基线对不上、发布方又没传全量包 —— 这是用户点「一键更新」唯一
+                  // 只能失败的路径，而且原来抛出去的是 `补丁基线（0.4.9.3）与当前安装
+                  // （0.4.9.4）不符`：内部术语，用户既不知道发生了什么，也不知道下一步
+                  // 能做什么（2026-11-14 审查确认：全链路里唯一"用户可见却无法自助"的失败）。
+                  // 这里换成人话并给出可执行动作；UI 在 error 态本来就会显示「去下载」链接。
+                  log('warn', `[self-update] 补丁基线不匹配且发布版无全量包：${error.message}`);
+                  fail('这个版本无法用补丁升级（发布方尚未上传完整安装包）。请点下方「去下载」手动安装，或稍后重试');
+                  return;   // 已写 job.error，不再 throw（否则外层 catch 会用原始术语覆盖）
                 }
                 throw error;
               }

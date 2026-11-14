@@ -539,7 +539,7 @@ function openToolBreakdown() {
           <div class="tb-row">
             <span class="tb-icon">${it.icon}</span>
             <span class="tb-name">${esc(it.name)}</span>
-            <span class="tb-code">${esc(it.key)}</span>
+            <span class="tb-code" title="${esc(it.key)}">${esc(it.key)}</span>
             <span class="tb-bar"><i style="width:${(it.n / max * 100).toFixed(1)}%"></i></span>
             <span class="tb-n">${it.n}</span>
           </div>`).join('')}

@@ -10,6 +10,27 @@ import { todayKey } from '../util.js';
 import { logger } from '../logger.js';
 import { buildPluginUsage } from '../plugin-usage.js';
 import { getAvatar, AVATAR_SIZES } from '../avatar-cache.js';
+
+/**
+ * 给更新源 URL 加一次性查询参数，用于绕过 CDN 缓存。
+ *
+ * 为什么需要：客户端查的是 `.../@main/version.json`，jsDelivr 对 `@main` 有约 12 小时
+ * CDN 缓存 —— `fetch(..., { cache: 'no-store' })` 只影响本地（Node/浏览器）缓存，绕不过
+ * CDN 那一层。发版后半天之内点「检查更新」都看到旧版本号，用户会以为没发出去。
+ * 加 `?t=<时间戳>` 让 CDN 视作一个全新 URL 回源，手动检查即可立刻拿到最新。
+ *
+ * 只在手动检查时用：自动检查（启动 + 每小时）走缓存更快，也不至于频繁回源。
+ */
+function withCacheBuster(raw) {
+  try {
+    const u = new URL(raw);
+    u.searchParams.set('t', String(Date.now()));
+    return u.toString();
+  } catch {
+    return raw;            // 非法 URL 原样返回，交给 fetch 报错，别在这里换一种失败
+  }
+}
+
 // 探测结果的"可对外"视图：删掉两枚令牌，只留有无标记。
 // 令牌不越过 HTTP 边界的保证在这个纯函数里，路由只负责调它。
 
@@ -153,7 +174,7 @@ export function systemRoutes(deps, shared) {
     },
     {
       method: 'GET', pattern: '/api/update-check',
-      handler: async ({ res, json }) => {
+      handler: async ({ res, json, url }) => {
         const current = localVersion();
         // 更新源可配置（2026-11-04）：config.update.checkUrl 优先，留空用内置默认。
         // disabled=true 时直接返回，不发起任何网络请求（离线部署用）。
@@ -165,8 +186,12 @@ export function systemRoutes(deps, shared) {
         if (!checkUrl) {
           return json(res, 200, { ok: false, current, error: '未配置更新源地址' });
         }
+        // ?fresh=1 只在手动点「检查更新」时带：绕开 jsDelivr 对 @main 的约 12 小时缓存
+        // （详见 withCacheBuster 的注释）。自动检查不带，走缓存更快。
+        const fresh = url?.searchParams?.get('fresh') === '1';
+        const target = fresh ? withCacheBuster(checkUrl) : checkUrl;
         try {
-          const r = await fetch(checkUrl, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
+          const r = await fetch(target, { signal: AbortSignal.timeout(8000), cache: 'no-store' });
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           const info = await r.json();
           const latest = String(info.version || '');

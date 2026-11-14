@@ -208,6 +208,37 @@ QQ 9.9.x 用的是腾讯自研的 **HummerSetup** 安装器，**不支持静默�
   只按 OneBot v11 协议连接用户自行运行的协议端；「协议端进程」那节提供的只是
   "用户点一下、本程序代为无窗口启动"的便利，可不用，也不影响其它功能
 - 用户自行承担使用本项目的所有风险
+### 发版流程（维护者）
+客户端只认 `main` 分支上的 `version.json` —— 它不读 tag，也不读 Release。所以顺序不能颠倒：
+
+**第 0 步：`git fetch --tags origin`。** `git fetch origin main` 的 tag auto-follow 只带"指向本次已下载提交"的 tag；上一版 tag 若在别的分支上就拉不到，本机算出的补丁基线会静默退回更早的版本，`manifest.base` 随之漂移。这种情况 `verify` 只会给一条 warn，真正避免要在拉 tag 这一层做。
+
+1. 同步改四处版本说明：`package.json` 与 `version.json` 的 `version`；`version.json` 的 `notes`（更新弹窗文案）；`ui/app/14-chrome.js` 的 `STAGE_CHANGELOG`（设置页"更新日志"）；`CHANGELOG.md` 的版本条目（开发日志，必须以 `## <版本>` 这样的标题行开头 —— 只在正文里提一句版本号不算，`verify` 会 warn）；
+2. commit 并 **push `main`** —— 务必包含 `.github/workflows/release-patch.yml`、`scripts/verify-release-tag.mjs`、`scripts/make-patch.mjs`。这三个文件不进 `main`，推 tag 时流水线**不会触发**：GitHub 用被推 commit 里的 workflow 文件，而不是远端分支上的；
+3. 本地打 tag（先不推）：`git tag v<版本>`；
+4. 校验：`node scripts/release-preflight.mjs` 与 `node scripts/verify-release-tag.mjs --tag v<版本>` 都要全绿。**`release-preflight` 有前置条件**：清理安装根的两个 `.bak-*`、把 `data/` 移走（或用 `QQ_AGENT_DATA_DIR` 重定向到别处）—— 只要跑过本程序，安装根就必然有 `data/`，而它在 `ROOT_MUST_EXCLUDE` 里是 FATAL 级，不清理必然不绿；
+5. `git push origin v<版本>` 触发流水线：它出补丁 `patch-<版本>.zip`，并建一个 **draft** Release（draft 不进 `releases/latest`，客户端此时显示"已是最新"，不会出现"有更新但下载失败"）；
+6. 本机打全量包 `<版本>.zip`，先 `gh release upload v<版本> <版本>.zip`，再 `gh release edit v<版本> --draft=false` 发布。Release 此时是 **draft**，客户端看不到它（点"检查更新"只会显示"已是最新"）。必须先补全量包再发布，**顺序不能反**：客户端在有更新时只认 `releases/latest`，一旦 Release 已经发布但里面只有补丁、没有全量包，`manifest.base` 对不上的用户走不到"回退全量包"那条路（回退要求全量资产存在），拿到的是带内部术语（"补丁基线"）的硬错误，而不是自动下载全量包；
+7. 首次发版或本版改了 `package.json` 的依赖/入口字段时，流水线只建 draft、不产补丁（补丁带不了 `node_modules`），全量包就是唯一通道。
+8. **发版后验收**（这一步没有自动红灯：draft 未发布就等于用户永远收不到，而 Actions 可能全绿）：
+
+   ```bash
+   # ① Release 状态与资产
+   gh release view v<版本> --json isDraft,assets --jq '{isDraft, assets: [.assets[].name]}'
+
+   # ② 线上更新源
+   curl -s "https://fastly.jsdelivr.net/gh/Mashiroxun/Chat-Agent@main/version.json" | head -3
+   ```
+
+   - **必须满足**：`isDraft` 为 `false`，且 assets 里含 `<版本>.zip`。
+   - **条件项**：`patch-<版本>.zip` 与 `patch-<版本>.zip.sha256` —— 仅当流水线 summary 里出现「补丁基线 = X」（说明本次确实产出了补丁）时才要求；若 summary 写的是「本版需发全量包（补丁不适用）」，那么**没有**补丁资产是正常的，不要因此判失败。
+   - ②的期望是 `"version": "<版本>"`。若仍是旧版，通常是 jsDelivr 的 `@main` 缓存（约 12 小时），不是发版失败 —— 可用 `https://cdn.jsdelivr.net/gh/Mashiroxun/Chat-Agent@main/version.json?t=<任意值>` 绕过缓存自查。
+
+   **draft 未发布 = 用户收不到**，这是整条链路唯一没有自动红灯的环节。
+
+补丁只覆盖相邻版本（`manifest.base` 必须等于用户当前版本）；跨版本用户要走"自动回退全量包"，前提是该 Release 里**确实已上传**全量包 —— 没有全量包时回退不成立，用户拿到的是硬错误，所以第 6 步的顺序不能反；
+`package.json` 的 `dependencies` / `main` / `type` / `engines` 有变动时补丁不适用，只能发全量。
+
 ### 分发前脱敏
 分享自己的部署副本前，直接删除 `data/` 目录即可 —— 里面是 API Key、群白名单、聊天存档、
 登录态与记忆，程序下次启动会重建一份干净的。只想清聊天记录时，删 `data/sessions/`

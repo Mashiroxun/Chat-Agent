@@ -1627,6 +1627,14 @@ function bindSettingsEvents(c) {
       showUpdateActions(true);
       setApplyDisabled(false);
       setHintHtml(`发现新版本 <b>v${esc(data.latest)}</b>（当前 v${esc(data.current)}）`);
+    } else if (data.stale) {
+      // 更新源落后于当前安装：这不是"已是最新"，而是"服务器上的 version.json 没推进，
+      // 所以新版本永远提示不出来"。服务端 2026-10-23 就算出了 stale / staleHint 并在
+      // 日志里告警过，但这一直没接到界面上 —— 维护者发完版回来点「检查更新」，看到
+      // 「已是最新」只会怀疑流水线坏了，却看不出真正原因（2026-11-15 补）。
+      showUpdateActions(false);
+      setHint(data.staleHint
+        || `更新源版本（v${data.latest}）低于当前安装（v${data.current}）：服务器上的 version.json 尚未推进，因此不会提示更新`);
     } else {
       showUpdateActions(false);
       setHint(`已是最新（v${data.current}）`);

@@ -25,16 +25,20 @@
       块内 —— 选「今日/24小时」时后端 mode ≠ 'days'，整块会被隐藏，控制条住
       在里面就会跟着消失。 */
 .usage-ctrl { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin: 0; }
-/* R200（2026-11-04）：维度切换时四个块的位置统一。
-   R195 这条原写 `.usage-head + [data-block]` —— 只命中 DOM 里紧跟页头的
-   **第一个块（按天）**；切到按会话/按模型/按插件时，那些块前面有（隐藏的）
-   兄弟块，不命中相邻选择器，退回 .usage-sec-head 默认 24px 上边距 ——
-   实测标题行 top：按天 128、其余 134，切维度时整块内容上下跳 6px
-   （用户截图反馈「这个位置和其他几个位置不太一样」）。
-   改为按 data-udim 状态统一：存在 data-udim 时（设计上就是「一次只显示一块」）
-   所有块都用 12px，不再依赖 DOM 顺序；未设置 udim 的旧路径（多块同屏）
-   仍用默认 24px 保留块间距。 */
-#usage-page[data-udim] > .usage-wrap > [data-block] > .usage-sec-head { margin-top: 12px; }
+/* R200（2026-11-04）→ R210（2026-11-13）：标题行顶距统一。
+   R195 原写 `.usage-head + [data-block]`，只命中紧跟页头的第一个块（按天），
+   切维度时标题上下跳 6px；R200 改成按 data-udim 统一成 12px。后来四个块
+   改成互斥显示、并分别住进两个容器：按天在 .usage-main（趋势卡），其余在
+   .usage-attrib（归因卡）。R200 那条 `.usage-wrap > .usage-main [data-block]`
+   于是**只剩趋势卡命中 12px**，归因卡走 .usage-card-panel .usage-sec-head 的 0
+   —— 同样都是 .usage-card-panel，「趋势」两个字却比「按会话 / 按模型 / 按插件」
+   低约 12px（2026-11-13 用户截图反馈「趋势两个字的位置和底下卡片不一致」；
+   像素实测标题距卡片顶 45px vs 30px，水平边距两卡都是 24px，只有垂直差）。
+   ⚠️ 跨块对齐已无意义：统一贴顶，两张卡都用卡片 padding(16px) +
+   .usage-sec-head 的 min-height(28px) 居中，标题落在同一基线。
+   用后代选择器，同时覆盖「面板 > 块头」和「面板 > [data-block] > 块头」
+   两种嵌套，不再依赖 DOM 顺序或相邻关系。 */
+#usage-page[data-udim] .usage-wrap .usage-card-panel .usage-sec-head { margin-top: 0; }
 /* 五张统计卡片固定一行排开。minmax(0,1fr) 防止长数字把列撑爆。
    ⚠️ 整排已从「标题下方」挪到「三张图表之后」（先看趋势再看精确数字，首屏更简洁）。
    现在它是页面最后一个元素，所以上边留白 + 一条细分割线，下边不再需要 margin。 */
@@ -42,9 +46,347 @@
   display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px;
   margin: 22px 0 0; padding-top: 18px; border-top: 1px solid var(--edge);
 }
+/* 2026-11-13：统计卡移到页头下方做「区间总览」——分隔线改到下方、间距另给，
+   让首屏先看到总成本/调用数，再往下看趋势。 */
+.usage-cards--top {
+  margin: 0 0 18px; padding: 0 0 18px;
+  border-top: none; border-bottom: 1px solid var(--edge);
+}
+
+/* ── 2026-11-13：归因区（会话/模型/插件）──
+   维度切换**只由左侧栏**驱动（写 #usage-page 的 data-udim）；
+   这里不再有第二套 Tab，块内的 h3 就是当前维度的标题。 */
+.usage-attrib { margin-top: 2px; }
+
+/* ── 2026-11-13：诊断卡 ──
+   R216（用户：「风格不符…怎么感觉可以考虑饼状图呢」）：
+   上一版把峰谷卡做成「橙色淡染底 + 28px 大数字 + 12px 粗条」，和旁边的会话/模型卡
+   （扁平蓝、13px 标题、细条）完全两个语言，用户直接指出「风格不符」。
+   现在三张卡**同一个骨架**：左侧环形占比（饼图的环形变体，比实心饼在小尺寸下更轻、
+   且 Hero 的缓存命中率已经是环，本页有先例）+ 右侧「标题 / 明细行 / 下钻」。
+   环用 conic-gradient 画（无 SVG、无 canvas），内圈用 ::before 挖空，随主题变量走。
+   R217（用户：「颜色能不能改改？」）：R216 还留着三处上色 —— 彩色描边、彩色标题、
+   峰谷卡橙色环。三张卡并排时橙/蓝互补色撞在一起，整块比页面上任何地方都花，
+   和「扁平 + 语义色只出现在数据图形上」的全站语言不符。现在收敛成：
+   · 描边回到中性 var(--border)，标题回到正文色 var(--fg)；
+   · 环统一主蓝 var(--accent)，颜色只出现在「数据本身」这一处；
+   · tone 类（info/warn/ok）保留在 DOM 上作为语义标记，但不再驱动颜色 ——
+     将来若要恢复区分色，只改下面 --dial 那一处即可。 */
+.usage-insight {
+  margin-top: 22px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px;
+}
+.usage-insight-card {
+  background: var(--layer-1); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 14px; min-width: 0;
+  display: flex; align-items: center; gap: 13px;
+}
+.usage-insight-card:nth-child(2) { animation-delay: .05s; }
+.usage-insight-card:nth-child(3) { animation-delay: .1s; }
+
+/* ── 环形占比 ──
+   --p 是百分比（0~100，由渲染层写进行内 style），--dial 是环的颜色。
+   conic-gradient 的第二个色标写 0 表示「接着上一个停止点画到 100%」，
+   所以整环 = 已用段 + 剩余轨道，不需要额外元素。 */
+.usage-insight-card { --dial: var(--accent); }
+.uic-dial {
+  flex: 0 0 auto; position: relative; width: 116px; height: 116px; border-radius: 50%;
+  display: grid; place-items: center;
+  /* 剩余轨道不能直接用 --layer-2：在暗色主题下它和卡片底几乎同色，环看起来像
+     被咬掉一块。混一点前景色出来，轨道始终比底色亮一档，缺口感才读得出来。 */
+  background: conic-gradient(var(--dial) calc(var(--p, 0) * 1%), color-mix(in srgb, var(--fg) 13%, var(--layer-1)) 0);
+}
+/* 挖出内圈：用卡片底色盖住，比 mask 更稳（不受合成层影响） */
+.uic-dial::before {
+  content: ''; position: absolute; inset: 10px; border-radius: 50%; background: var(--layer-1);
+}
+.uic-dial-num {
+  position: relative; font-family: var(--mono); font-size: 22px; font-weight: 600;
+  line-height: 1; letter-spacing: -.4px; color: var(--fg); font-variant-numeric: tabular-nums;
+}
+.uic-dial-pct { font-size: 13px; font-weight: 500; letter-spacing: 0; margin-left: 1px; }
+
+/* ── 右侧信息区 ── */
+.uic-main { flex: 1; min-width: 0; }
+.uic-title {
+  font-size: 12.5px; font-weight: 600; color: var(--fg);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* 明细行：左标签右取值，长值（单轮成本 + 全站倍数）靠省略号收，不折行撑高卡片 */
+.uic-kvs { display: grid; gap: 6px; margin-top: 8px; }
+.uic-kv { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+.uic-k { flex: 0 0 auto; font-size: 10.5px; color: var(--fg-mute); white-space: nowrap; }
+.uic-v {
+  min-width: 0; font-family: var(--mono); font-size: 11.5px; font-weight: 600; color: var(--fg);
+  font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* 下钻：只在会话/模型卡出现，靠右；峰谷卡不渲染这一行，故用 :empty 收起 */
+.uic-foot { display: flex; justify-content: flex-end; margin-top: 7px; }
+.uic-foot:empty { display: none; }
+.uic-drill {
+  padding: 0; border: 0; background: none; cursor: pointer;
+  font-size: 10.5px; color: var(--accent-hi); white-space: nowrap;
+}
+.uic-drill:hover { text-decoration: underline; }
+.uic-drill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+/* 统一的入场：只动 opacity/transform，走合成器 */
+@keyframes usageRise {
+  from { opacity: 0; transform: translateY(9px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* 入场动画只在**首次进入用量页**播放（2026-11-13）。
+   切页回来时 renderUsagePage 会重建整页 DOM，若动画跟着元素重建重播，
+   每次切页都是"整页浮现"——数据明明还在，却像刚加载完。
+   renderUsagePage 用 box.dataset.fresh 标记首次，之后切页直接出现。 */
+#usage-page[data-fresh="1"] .usage-hero { animation: usageRise .5s cubic-bezier(.2, .8, .2, 1) both; }
+#usage-page[data-fresh="1"] .usage-card-panel { animation: usageRise .5s cubic-bezier(.2, .8, .2, 1) both; animation-delay: .06s; }
+#usage-page[data-fresh="1"] .usage-attrib.usage-card-panel { animation-delay: .12s; }
+#usage-page[data-fresh="1"] .usage-insight-card { animation: usageRise .42s cubic-bezier(.2, .8, .2, 1) both; }
+#usage-page[data-fresh="1"] .usage-insight-card:nth-child(2) { animation-delay: .05s; }
+#usage-page[data-fresh="1"] .usage-insight-card:nth-child(3) { animation-delay: .1s; }
+/* R224：R220 把外框从 .usage-card-panel 改成 .usage-main（days 视图整块 /
+   归因视图右半），旧规则漏掉它 —— 底下因此连首次入场浮现都没有。 */
+#usage-page[data-fresh="1"] .usage-main {
+  animation: usageRise .5s cubic-bezier(.2, .8, .2, 1) both; animation-delay: .12s;
+}
+
+/* 系统开了"减少动态效果"就全部按住：条直接到位、不位移、环不做插值 */
+@media (prefers-reduced-motion: reduce) {
+  .usage-hero,
+  .usage-card-panel,
+  .usage-main,
+  .usage-insight-card,
+  .uc-bar-fill,
+  .uc-area,
+  .usage-line .uc-dot,
+  .usage-line .uc-peak-guide,
+  .uic-big,
+  .uic-track i,
+  .uic-kvs,
+  .uic-foot,
+  .usage-view-note { animation: none !important; }
+  /* R231：骨架屏的无限扫光 / 呼吸此前漏了 —— 系统要求减少动态效果时，
+     数据还没回来反而一直在闪，与其余动画被按住的口径不一致。 */
+  .sk-line::after, .sk-row::after, .sk-chart::after,
+  .sk-col { animation: none !important; }
+  /* 关键的兜底：描线动画被关掉时必须把 dashoffset 归零，否则整条线不可见 */
+  .hs-line { animation: none !important; stroke-dashoffset: 0; }
+  .uc-line { animation: none !important; stroke-dashoffset: 0; }
+  .hs-area { animation: none !important; }
+  .uh-ring-fg { transition: none; }
+}
+
+/* ── 2026-11-13 Phase 3：Hero 重做成「仪表盘」──
+   版式是新的（大数 + 三个 KPI + 环形命中率 + 底线 mini 趋势），但**材质走本项目的
+   PCL 扁平体系**：强调面 = color-mix(accent 6%) 底 + 1px 描边 + 无阴影，
+   不用光晕、渐变字、发光 —— 和全站保持同一套视觉语言。
+   动效只保留"入场"性质的三处（数字滚动 / 环长出来 / 底线描出来）：它们是节奏，
+   不是装饰；prefers-reduced-motion 下全部按住。 */
+.usage-hero {
+  position: relative; overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(180px, .95fr) minmax(0, 1.65fr) auto;
+  grid-template-areas:
+    "lead kpis rate"
+    "spark spark spark";
+  gap: 14px 20px; align-items: center;
+  padding: 17px 20px 0; margin: 0 0 16px;
+  border: 1px solid var(--border); border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 3%, var(--layer-1));
+  box-shadow: var(--lift), var(--paper-edge);
+}
+
+.uh-lead { grid-area: lead; min-width: 0; }
+.uh-label { display: flex; align-items: baseline; gap: 8px; font-size: 12px; color: var(--fg-dim); letter-spacing: .3px; }
+.uh-range {
+  font-size: 10.5px; color: var(--fg-mute); padding: 1.5px 8px; border-radius: 999px;
+  background: var(--layer-2); border: 1px solid var(--line);
+}
+/* 没有区间标签时不要留一个空胶囊 */
+.uh-range:empty { display: none; }
+/* 大数是版面锚点，靠"尺寸 + 等宽字形"立住，不靠颜色花样。
+   上限 30px = 全站已有字号上限（原 .uc-value 22px），只提一档，不外扩视觉尺度。 */
+.uh-value {
+  margin-top: 5px;
+  font-family: var(--mono); font-size: clamp(23px, 2.4vw, 30px); line-height: 1.1;
+  font-weight: 600; letter-spacing: -.8px; font-variant-numeric: tabular-nums;
+  white-space: nowrap; color: var(--fg);
+}
+.uh-sub { margin-top: 6px; font-size: 11.5px; color: var(--fg-mute); line-height: 1.55; }
+
+.uh-kpis { grid-area: kpis; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.uh-kpi {
+  display: flex; flex-direction: column; gap: 3px; min-width: 0;
+  padding-left: 14px; border-left: 1px solid var(--line);
+}
+.uh-kl { font-size: 11px; color: var(--fg-dim); letter-spacing: .3px; }
+.uh-kpi b {
+  font-family: var(--mono); font-size: 20px; font-weight: 600; color: var(--fg);
+  font-variant-numeric: tabular-nums; letter-spacing: -.4px;
+}
+.uh-kpi i { font-style: normal; font-size: 10.5px; color: var(--fg-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.uh-link {
+  align-self: flex-start; margin-top: 3px; padding: 0; border: 0; background: none;
+  cursor: pointer; font-size: 11px; color: var(--accent-hi); opacity: .9;
+}
+.uh-link:hover { text-decoration: underline; opacity: 1; }
+
+/* ── 环形命中率仪表 ──
+   SVG 圆环，stroke-dasharray 按 pathLength=100 归一化：弧两端 stroke-linecap:round
+   是真圆头 —— conic-gradient 的弧端是平头切线，90% 时缺口夹在两个平头之间显得生硬
+   （2026-11-13 用户反馈"不圆润"）。dasharray 本身是可过渡属性，从 0 长到目标值
+   依旧平滑，@property / mask / conic 全都不再需要。
+   分档配色是**信息编码**（≥90 绿 / 75–90 橙 / <75 红），不属于装饰。 */
+.uh-rate { grid-area: rate; display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 98px; }
+.uh-ringbox { position: relative; width: 84px; height: 84px; display: grid; place-items: center; }
+.uh-ring { position: absolute; inset: 0; width: 100%; height: 100%; }
+.uh-ring-bg { fill: none; stroke: var(--layer-2); stroke-width: 9; }
+.uh-ring-fg {
+  fill: none; stroke: var(--accent); stroke-width: 9; stroke-linecap: round;
+  stroke-dasharray: 0 100;
+  transition: stroke-dasharray .65s var(--ease-out-quart);
+}
+.uh-ring[data-tone='ok'] .uh-ring-fg { stroke: var(--green); }
+.uh-ring[data-tone='warn'] .uh-ring-fg { stroke: var(--orange); }
+.uh-ring[data-tone='bad'] .uh-ring-fg { stroke: var(--red); }
+/* P1-06：'none' = 区间内没有任何调用（无数据），灰色而不是红色 0.0% */
+.uh-ring[data-tone='none'] .uh-ring-fg { stroke: var(--fg-mute); opacity: .5; }
+.uh-ringbox b {
+  position: relative; font-family: var(--mono); font-size: 16px; font-weight: 600;
+  color: var(--fg); font-variant-numeric: tabular-nums; letter-spacing: -.4px;
+}
+.uh-rate .uh-kl { font-size: 10.5px; }
+.uh-rate i {
+  font-style: normal; font-size: 10px; color: var(--fg-mute); text-align: center; max-width: 128px;
+  /* P1-05（2026-11-14）：「命中 X / 输入 Y」是命中率唯一的口径说明，曾经
+     nowrap + ellipsis 把分母截掉（输入 69,397,309 只剩一半）。改为可换行。 */
+  white-space: normal; line-height: 1.5; overflow-wrap: anywhere;
+}
+
+/* 迷你趋势：贴满 Hero 底部（负 margin 抵消 padding，圆角交给 overflow 裁） */
+.uh-spark { grid-area: spark; height: 46px; margin: 0 -20px -1px; }
+/* 今日 / 24h 模式没有按天数据 → spark 是空的，别留一条空白 */
+.uh-spark:empty { display: none; }
+.uh-spark-svg { display: block; width: 100%; height: 46px; }
+.hs-area { fill: color-mix(in srgb, var(--accent) 15%, transparent); animation: hsFade .8s ease-out both; }
+/* 入场把这条线"画"出来（pathLength=1 让 dash 长度归一化，与真实路径长度无关） */
+.hs-line {
+  fill: none; stroke: var(--accent); stroke-width: 2;
+  stroke-linejoin: round; stroke-linecap: round; opacity: .85;
+  stroke-dasharray: 1; stroke-dashoffset: 1;
+  animation: hsDraw 1.05s cubic-bezier(.25, 1, .5, 1) .08s forwards;
+}
+@keyframes hsDraw { to { stroke-dashoffset: 0; } }
+@keyframes hsFade { from { opacity: 0; } to { opacity: 1; } }
+.hs-last { fill: var(--accent); stroke: var(--layer-1); stroke-width: 2; }
+
+/* 窄窗：环单独占右上角，KPI 换到第二行 */
+@media (max-width: 1100px) {
+  .usage-hero {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "lead rate" "kpis kpis" "spark spark";
+    gap: 12px 14px;
+  }
+  .uh-kpis { padding-top: 12px; border-top: 1px solid var(--line); }
+  .uh-kpi:first-child { padding-left: 0; border-left: 0; }
+}
+
+.usage-main { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: 14px; align-items: stretch; }
+.usage-main.is-single { grid-template-columns: 1fr; }
+.usage-card-panel {
+  background: var(--layer-1); border: 1px solid var(--border); border-radius: 14px;
+  padding: 16px 18px; min-width: 0;
+}
+.usage-card-panel .usage-sec-head { margin-top: 0; }
+.usage-attrib.usage-card-panel { margin-top: 14px; }
+/* R218：左面板给一个统一基准高度，并把纵向 flex 链接通 ——
+   · 按天：趋势卡本身就是面板（[data-block="days"] 带 .usage-card-panel）；
+   · 其余三视图：.usage-attrib 是面板，里面三个 [data-block] 只有一个可见，
+     可见的那个用 flex: 1 撑满面板，面板内的高度才传得下去。
+   ⚠️ 隐藏块靠 06-stage.css 的 display: none !important 压制，本规则不参与互斥。
+   ⚠️ 只认这两个真实面板，骨架屏的 .usage-card-panel 不受影响。 */
+#usage-page .usage-wrap > .usage-main > [data-block="days"].usage-card-panel,
+#usage-page .usage-wrap > .usage-attrib.usage-card-panel {
+  min-height: var(--usage-panel-h);
+  display: flex; flex-direction: column;
+}
+#usage-page .usage-wrap > .usage-attrib.usage-card-panel > [data-block] {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+/* 数值表永远贴卡片底边：多出来的高度落在列表区，不在底部空一截 */
+#usage-page .usage-wrap .usage-card-panel .usage-details { margin-top: auto; }
+/* 空数据（「今日」还没跑过）不撑基准高度：一张 360 高的空卡片比矮卡片更难看 */
+#usage-page .usage-wrap > .usage-attrib.usage-card-panel:has(.uc-empty) { min-height: 0; }
+/* 列表区吃掉剩余高度：条目少（按会话 4 条）时行距均分铺满，不留大洞。
+   条目多（按插件 12 条）时没有剩余高度，space-between 退化成正常行距。 */
+#usage-page .usage-wrap > .usage-attrib .usage-chart {
+  flex: 1; min-height: 0; display: flex; flex-direction: column;
+}
+/* R222：原先的 space-between 把少数几行强行均分铺满面板高度（按会话 4 行时行距
+   被拉到约 80px），行与行不再成组，看起来像散架的表格。改成固定行距 + 组内垂直
+   居中，多出来的高度变成上下对称的呼吸留白，而不是插进每一行之间。 */
+/* 2026-11-14（用户：「按会话最上面那行比按模型 / 按插件低，整块显稀疏」）：
+   原先 justify-content:center 让列表在固定高度的归因卡里垂直居中 —— 条目少的
+   视图（按会话 4 条）被整块下推，标题与第一名之间空出一大截；条目多的视图
+   （按模型 6 / 按插件 12）本来就贴近顶部，于是四个视图第一行位置不一致。
+   改成顶部对齐：列表一律紧接标题，行距仍由 .uc-bars 的 gap 固定，剩余高度
+   只留在卡片底部（那里本就有「合计」收尾），不再在上方挖洞。 */
+#usage-page .usage-wrap > .usage-attrib .usage-chart .uc-bars { flex: 1; justify-content: flex-start; }
+#usage-page .usage-wrap > .usage-attrib .usage-chart .uc-rest { flex: 0 0 auto; }
+/* 诊断列与左侧面板等高（2026-11-13 起连续四轮反馈）。
+   R214：先拉齐「卡与卡之间」；R215：再拉齐「右列 vs 趋势卡」。
+   R218（用户：「其他界面这个玩意的大小和此界面并不一致」）：前两轮只做到了
+   「各自视图内对齐」，跨视图仍是两套高度 —— 按天视图右列被 1fr 拉到 174.5，
+   按会话/模型/插件是 auto 的 142。真实应用实测（CDP 量 getBoundingClientRect）：
+     视图      左面板   诊断列   卡片高
+     按天       359     359     174.5
+     按会话     301     294     142
+     按模型     380     294     142
+     按插件     625     294     142
+   根因：卡片高度挂在**左面板**上，而左面板是内容驱动的（趋势图 / 4 条会话 /
+   6 个模型 / 12 个插件，天然不等高）。只要高度还依赖左面板，跨视图就不可能一致。
+   现在把卡片高度从「左面板」解耦成常量：
+     · 行高上限 175px（minmax(140px, 175px)；140 是环 116 + 卡片内边距 24 的物理
+       下限，再小环就被压扁）—— 四个视图的卡片一律 175，左面板再高也不拉成巨卡；
+     · 左面板给 min-height: var(--usage-panel-h)（R221 起为 400，见下方说明）；
+       短列表（按会话只有 4 条时是 301）不再比按天矮一截，两列底边四个视图都对得上；
+     · 多出来的高度交给列表行分摊（见下方 .usage-attrib .uc-bars），不在卡片底部留空档。
+   R216：卡片自身是 flex row（环 + 信息区）且 align-items: center，内容整体垂直居中，
+   不需要靠 margin/space-between 分摊，也就不会出现「某个间隙被撑成一个大洞」。 */
+
+/* R221（2026-11-14）：跨视图高度基准，四个视图必须共用同一个值。
+   用户反馈「从按天切到按会话 / 按模型时位置会变动」—— 根因是 R220 把折线图
+   156 -> 232（+76px），但本 token 仍是 360：按天视图的天然高度超过 min-height
+   被内容撑开，归因视图仍由 min-height 主导，两个外框差约 31px。右栏
+   .usage-view-note 与左栏 .usage-details 都用 margin-top:auto，这段差值被
+   吸收成上方空白，于是右栏读数与数值表整体上下漂。
+   ⚠️ 折线图 height（renderUsageCharts 传给 usageLineChart 的第 4 参数）与本
+      token 必须同步复算：token 要 >= 四个视图里最高的内容高，min-height 才主导。 */
+.usage-wrap { --usage-panel-h: 400px; }
+.usage-main .usage-insight {
+  margin: 0; display: grid; grid-template-columns: 1fr;
+  grid-auto-rows: minmax(140px, 175px); align-content: start; gap: 10px;
+}
+.usage-main .usage-insight-card { min-height: 0; }
+/* R219：.usage-insight 现在是 .usage-side 的 flex item，align-self:start 会让它
+   在交叉轴（宽度）上缩到内容宽 —— 只保留给未包 .usage-side 的骨架屏直连结构。 */
+.usage-main > .usage-insight:has(.usage-insight-card:only-child) { align-self: start; }
+
+@media (max-width: 1000px) {
+  .usage-main { grid-template-columns: 1fr; }
+  /* 单栏时右列不再被拉伸到趋势卡高度，卡片按内容排，避免三张卡被强行拉成等高留白 */
+  .usage-main .usage-insight { grid-auto-rows: auto; }
+}
 /* 窗口太窄时退回自动换行，不把卡片压成纸条 */
 @media (max-width: 860px) {
   .usage-cards { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  /* 窄卡里环收小一点，把宽度留给标题与取值 */
+  .uic-dial { width: 72px; height: 72px; }
+  .uic-dial::before { inset: 7px; }
+  .uic-dial-num { font-size: 15px; }
+  .uic-dial-pct { font-size: 9.5px; }
 }
 .usage-card {
   background: var(--layer-1); border: 1px solid var(--border); border-radius: 10px;
@@ -65,7 +407,7 @@
 .usage-card.accent:hover { transform: translateY(-3px); box-shadow: var(--lift-lg), var(--paper-edge); }
 .usage-card.accent {
   box-shadow: var(--lift), var(--paper-edge);
-  background: color-mix(in srgb, var(--accent) 6%, var(--layer-1));
+  background: color-mix(in srgb, var(--accent) 3%, var(--layer-1));
 }
 .uc-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .uc-value { font-size: 22px; font-weight: 600; font-family: var(--mono); line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -73,6 +415,9 @@
 .usage-bar { height: 6px; background: var(--layer-1); border-radius: 999px; overflow: hidden; margin-top: 8px; box-shadow: var(--inset-edge); }
 .usage-bar-fill { height: 100%; border-radius: 999px; background: var(--accent); transform-origin: left; }
 .usage-bar-fill.ok { background: var(--green); }
+/* 2026-11-13：命中率分档 —— 低命中率是成本升高的主因，必须能一眼看出异常 */
+.usage-bar-fill.warn { background: var(--orange); }
+.usage-bar-fill.bad { background: var(--red); }
 .usage-note {
   font-size: 12px; color: var(--muted); background: var(--layer-1); border: 1px solid var(--border);
   border-radius: 10px; padding: 10px 12px; margin-bottom: 20px; line-height: 1.6;
@@ -133,6 +478,36 @@
 /* 没数据时不占位（空 <p> 会白撑一段间距） */
 .usage-sec-sum:empty { display: none; }
 
+/* ══════════════════════════════════════════════════════════════
+   R219：右侧列 = 「当前视图」说明卡 + 诊断卡
+   用户「这一块就应该专门放图表」：四个图表卡里的 .usage-sec-sum 全部收拢到这里，
+   图表卡只剩「标题 -> 图 -> 折叠数值表」。
+   .usage-main 在按天视图是两列栅格（趋势卡 | 侧列），在归因视图被 06-stage.css
+   R213 挪到右列并退化成单列 —— 侧列始终与当前图表同一行，视线不用跨行找。
+   ══════════════════════════════════════════════════════════════ */
+.usage-side { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.usage-view-note { min-width: 0; }
+.usage-view-note::before {
+  content: '当前视图'; display: none;
+  font-size: 11px; color: var(--faint); margin: 0 0 6px 2px;
+}
+.usage-view-note:has(.usage-sec-sum:not(:empty))::before { display: block; }
+/* 四条摘要共用一张卡：只显示 data-udim 对应那一条。
+   !important 是必须的 —— setSum() 会写内联 style.display，普通选择器压不过它。 */
+.usage-view-note .usage-sec-sum {
+  display: none !important;
+  margin: 0; padding: 12px 14px; border-radius: 10px;
+  background: var(--layer-1); border: 1px solid var(--border);
+  font-size: 12px; color: var(--muted); line-height: 1.75;
+}
+#usage-page:not([data-udim]) .usage-view-note [data-sum="days"]:not(:empty),
+#usage-page[data-udim="days"] .usage-view-note [data-sum="days"]:not(:empty),
+#usage-page[data-udim="chats"] .usage-view-note [data-sum="chats"]:not(:empty),
+#usage-page[data-udim="models"] .usage-view-note [data-sum="models"]:not(:empty),
+#usage-page[data-udim="plugins"] .usage-view-note [data-sum="plugins"]:not(:empty) {
+  display: block !important;
+}
+
 /* 第二层折叠（口径说明）：比「数值表」再弱一档，避免两条 summary 抢视线 */
 .usage-details-sub > summary { font-size: 12px; color: var(--faint); }
 .usage-details-sub .up-howto-body { padding: 2px 2px 8px; }
@@ -170,7 +545,7 @@
 .uc-grid { stroke: var(--edge); stroke-width: 1; }
 .uc-ylabel,
 .uc-xlabel { fill: var(--faint); font-size: 11px; font-family: inherit; }
-/* 面积用低透明度铺色即可：渐变在软件渲染下逐像素算，这里没必要 */
+/* 面积用低透明度铺色（不用渐变）：和全站"扁平、无材质"的取向一致 */
 .uc-area { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: none; }
 .uc-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 /* 辅助线（日均 / 峰值下引线）：弱化处理，不能抢主曲线的视线 */
@@ -183,12 +558,31 @@
 .uc-dot-peak { fill: var(--accent); }
 .uc-dot-last { fill: var(--accent); stroke: var(--layer-1); stroke-width: 2; }
 
-/* ── 横向条形图 ── */
-.uc-bars { display: flex; flex-direction: column; gap: 5px; }
+/* ── 横向条形图 ──
+   R229：条宽改为纯 width 渲染 + width 过渡（切指标/范围时原位伸缩）。
+   曾经 width 与 scaleX(--s) 双重叠加（width 50% 再叠 scaleX(.5) 实际只显示
+   25%），且 scaleX 是合成属性不触发重排的收益在「每次刷新都重建 DOM」面前
+   毫无意义——现在入场仍用 scaleX 走合成器（keyframes 终点固定 scaleX(1)，
+   与 width 不再叠加），更新期靠 width transition 平滑过渡。 */
+/* 2026-11-14：行距 10→6px，与条目多时 .uc-bars:has(n+7) 的紧凑档一致，
+   少数几行不再显得散。 */
+.uc-bars { display: flex; flex-direction: column; gap: 6px; }
+/* 行多时自动收紧（按插件视图的条数不受 BAR_LIMIT 限制）：否则 14px 行距会把
+   内容顶过 --usage-panel-h，R221 刚统一的跨视图高度基准又会失效。 */
+.uc-bars:has(.uc-bar-row:nth-child(n+7)) { gap: 6px; }
 .uc-bar-row {
-  display: grid; grid-template-columns: minmax(104px, 226px) minmax(50px, 1fr) auto;
-  align-items: center; gap: 10px; padding: 4px 6px; border-radius: var(--radius-sm);
-  cursor: pointer; transition: background-color var(--dur-base) var(--ease-in-out);
+  /* 2026-11-14：名称列 172→210px。模型/渠道 id 普遍偏长
+     （token.sensenova.cn: …、maas.qianwenapi.com…），172px 下全被 ellipsis
+     砍成半截，加上第一名整行提亮，视觉上显得字又大又挤。
+     这里与「调用明细」一样都是 12px，字号不动，只把名字放出来。 */
+  /* 名称列维持固定 210px：长模型 / 渠道 id 需要这个宽度，四个视图的条形起点
+     也靠它对齐。2026-11-14 试过按内容自适应（fit-content() / max-content），
+     实测在这套 grid 里反而把短名列撑得更宽、条更靠右、条形被挤短，已撤回。
+     短名视图（按会话）右侧的空留白保留，靠上一轮的 title 悬停看全名。 */
+  display: grid; grid-template-columns: minmax(120px, 210px) minmax(50px, 1fr) auto;
+  align-items: center; gap: 10px; padding: 6px 6px; border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--dur-base) var(--ease-in-out);
 }
 .uc-bar-row:hover { background: var(--hover); }
 .uc-bar-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -198,16 +592,47 @@
 .uc-rank {
   flex-shrink: 0; width: 16px; height: 16px; border-radius: 6px; background: var(--inset-bg);
   display: inline-flex; align-items: center; justify-content: center;
-  font-family: var(--mono); font-size: 10px; color: var(--faint); font-variant-numeric: tabular-nums;
+  font-family: var(--mono); font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums;
 }
 .uc-bar-row.top .uc-rank { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
 .uc-bar-row.top .uc-bar-label { color: var(--text); }
-.uc-bar-track { height: 11px; border-radius: 999px; background: var(--inset-bg); overflow: hidden; }
-.uc-bar-fill { height: 100%; border-radius: 999px; background: var(--accent); }
+.uc-bar-track {
+  /* 2026-11-14：14px 在排行里显得过粗；与调用明细 6px、洞察条 6px 的细条语言对齐 */
+  height: 9px; border-radius: 999px; overflow: hidden;
+  background: color-mix(in srgb, var(--fg) 10%, var(--inset-bg));
+}
+.uc-bar-fill {
+  height: 100%; border-radius: 999px; background: var(--accent);
+  animation: ucBarGrow .44s cubic-bezier(.22, .85, .28, 1) both;
+  animation-delay: calc(var(--i, 0) * 18ms);
+  transition: width .55s var(--ease-out-quart);
+}
+@keyframes ucBarGrow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 .uc-bar-val { font-size: 12px; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.uc-bar-val b { font-weight: 600; }
 .uc-bar-share { color: var(--faint); font-size: 11px; margin-left: 6px; }
+/* ── R233（2026-11-14）：排行占位行（.uc-ph）────────────────────────────
+   按会话条目少时，底部用「群 114514」这类假群号行把面板填满，不留大块空白。
+   原则：一眼看出是占位 —— 整行调灰、名次徽标改虚线、数值列只给「—」、
+   不可点（pointer-events:none，hover 不再亮行底）。条填充禁用入场动画：
+   占位行调和时会因顺序调整被重插节点，不禁会反复重播 ucBarGrow。 */
+.uc-bar-row.uc-ph { pointer-events: none; }
+.uc-bar-row.uc-ph:hover { background: none; }
+.uc-ph .uc-rank {
+  background: none;
+  border: 1px dashed color-mix(in srgb, var(--fg) 16%, transparent);
+  color: color-mix(in srgb, var(--fg) 26%, transparent);
+}
+.uc-ph .uc-name { color: var(--faint); }
+.uc-ph .uc-bar-fill {
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+  animation: none;
+}
+.uc-ph .uc-bar-val { color: var(--faint); }
+.uc-ph .uc-bar-val b { font-weight: 400; }
+.uc-ph .uc-bar-share { visibility: hidden; }
 /* 汇总行：合计 + 集中度（前 N 项占多少），比原来的「另有 N 项」更能说明问题 */
-.uc-rest { font-size: 12px; margin-top: 8px; padding: 7px 6px 0; color: var(--muted); border-top: 1px solid var(--edge); }
+.uc-rest { font-size: 12px; margin-top: 12px; padding: 7px 6px 0; color: var(--muted); }
 .uc-rest b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 
 /* ── 折叠起来的原始数值表 ── */
@@ -574,13 +999,20 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 6px; }
 .sk-row { height: 26px; margin: 6px 0; }
 .sk-block { margin-top: 18px; }
 
-/* 微光扫过：用 transform 而非 background-position（GPU 友好） */
+/* R231（2026-11-14）：骨架里的命中率环不要在零进度时画出圆头端点。
+   正式仪表用 stroke-linecap:round，stroke-dasharray:0 100 时 Chromium 仍会在
+   环顶画一颗孤零零的蓝点，加载时看着像坏掉的指示灯。灰环底保留。 */
+.usage-hero.skeleton .uh-ring-fg { stroke: none; }
+
+/* 微光扫过：用 transform 而非 background-position（GPU 友好）。
+   R231：中间色原用 --active（rgba(127,127,127,.16)），在深色骨架底上几乎看不见，
+   整块像静止的坏图；改用 --fg 的 16% 混合，暗/亮主题下都能看出扫过。 */
 .sk-line::after, .sk-row::after {
   content: '';
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, var(--active), transparent);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--fg) 16%, transparent), transparent);
   animation: shimmer 1.4s var(--ease-in-out) infinite;
 }
 
@@ -601,19 +1033,20 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 6px; }
 .sk-col {
   flex: 1;
   border-radius: 6px;
-  background: var(--layer-2);
+  /* R231：--layer-2 与图表底 --layer-1 太接近，柱子几乎融进背景 */
+  background: color-mix(in srgb, var(--fg) 9%, var(--layer-1));
   animation: skPulse 1.5s ease-in-out infinite;
 }
 .sk-col:nth-child(3n+1) { animation-delay: .18s; }
 .sk-col:nth-child(3n+2) { animation-delay: .36s; }
 .sk-col:nth-child(4n)   { animation-delay: .52s; }
-@keyframes skPulse { 0%, 100% { opacity: .4; } 50% { opacity: .95; } }
+@keyframes skPulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
 .sk-chart::after {
   content: '';
   position: absolute;
   inset: 0;
   transform: translateX(-100%);
-  background: linear-gradient(90deg, transparent, var(--active), transparent);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--fg) 16%, transparent), transparent);
   animation: shimmer 1.6s var(--ease-in-out) infinite;
 }
 
@@ -917,7 +1350,7 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 6px; }
 .uc-label { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 /* "明细 ›" 提示：默认很淡，悬浮才显现 */
 .uc-more {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--accent);
   opacity: .55;
   transition: opacity var(--dur-base) var(--ease-in-out);
@@ -925,7 +1358,7 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 6px; }
 .usage-card.clickable:hover .uc-more { opacity: 1; }
 /* "不计入成本" 小标签 */
 .uc-tag {
-  font-size: 10px;
+  font-size: 11px;
   padding: 1px 5px;
   border-radius: 999px;
   color: var(--muted);
@@ -935,7 +1368,15 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 6px; }
 }
 
 /* ── 调用明细弹窗 ── */
-.tool-breakdown { min-width: 380px; }
+.tool-breakdown {
+  min-width: 380px;
+  /* 2026-11-14：.model-modal-body 没有内边距，滚动条（::-webkit-scrollbar 9px）
+     紧贴内容右缘 —— 右对齐的 .tb-n（次数）和 .tb-cat-head 的统计、分隔横线
+     几乎顶到滚动条上。这里给整块明细统一留 12px 右呼吸位：
+     数字、统计、横线一起内缩，右边缘仍互相对齐，且只作用于明细块，
+     不会改动 .model-modal-body 影响别的弹窗。 */
+  padding-right: 12px;
+}
 .tb-lead {
   font-size: 12px;
   color: var(--text);
@@ -970,11 +1411,27 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 6px; }
 .tb-icon { width: 16px; text-align: center; flex: none; }
 .tb-name { width: 74px; flex: none; color: var(--text); }
 .tb-code {
-  width: 118px;
+  /* 2026-11-14：调用明细里的工具 ID 列。原来「118px 定宽 + 11px 等宽 +
+     ellipsis + 深底圆角框」叠在一起，带 skill__ 前缀的长 ID 一律被拦腰截断
+     （keyword-reply__ke_ / sticker__send_sti_ / mem-layered__memo_），
+     一整列看着像一坨黑胶囊。这里做三件事：
+       ① 列宽 118→200px（.tb-bar 是 flex:1，弹窗宽度仍有余量，条形不会被挤没）；
+       ② 字号与同一行的中文名 / 次数对齐到 12px，颜色 --faint→--fg-dim；
+       ③ 深底圆角框在 05-dialogs.css 的共享代码块规则里摘掉，这里只留纯文本。
+     ellipsis 保留作超长兜底，完整 ID 靠 title 属性（08-modals.js）查看。
+     字号 12px = 同一行 .tb-name / .tb-n 的字号（即「🖼️ 看图片」那一档）。
+     想再调字号：只改下面这一行 font-size 即可。 */
+  width: 200px;
   flex: none;
   font-family: var(--mono);
-  font-size: 10px;
-  color: var(--faint);
+  font-size: 12px;
+  letter-spacing: -.2px;
+  color: var(--fg-dim);
+  /* 显式归零：用户明确要求去掉 ID 后头那坨深底圆角块。05-dialogs.css 的
+     通用代码块规则已摘掉 .tb-code，这里再兜一层，防止以后别处把黑底带回来。 */
+  background: none;
+  border: 0;
+  border-radius: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1657,3 +2114,224 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 6px; }
 .module-preview-card { display: flex; flex-direction: column; height: 100%; }
 .module-preview-card .prompt-preview-content { flex: 1; min-height: 0; max-height: none; }
 
+
+/* ══════════════════════════════════════════════════════════════════════════
+   R220（2026-11-14）：分析区重做成一块连续「数据台」
+   用户：Hero（图2）惊艳；底下希望抛弃现有框架。
+   诊断：左右两张卡各带边框圆角，卡里再套说明卡与诊断卡（卡片套卡片）；两列底边
+        不齐、右栏下方留大片空白；窄栏里塞长句；折线图只有 156px，数值表被
+        margin-top:auto 推到底，中间空 100px+。
+   做法：沿用 Hero 的材质与语法 —— 一个外框、一根竖向细线分栏、一个超大数字锚点、
+        细线分隔的读数行、贴底的水平页脚线。内部不再有任何卡片。
+        DOM 骨架 / data-udim 互斥 / 轮询指纹 / 下钻入口全部不动，纯样式重构。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ① 按天视图：.usage-main 自己就是整块画布，内部趋势卡去掉框 */
+#usage-page[data-udim="days"] .usage-wrap > .usage-main,
+#usage-page:not([data-udim]) .usage-wrap > .usage-main {
+  gap: 0; padding: 22px 0;
+  border: 1px solid var(--border); border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 3%, var(--layer-1));
+  box-shadow: var(--lift), var(--paper-edge);
+  min-height: var(--usage-panel-h);
+}
+#usage-page[data-udim="days"] .usage-wrap > .usage-main > [data-block="days"],
+#usage-page:not([data-udim]) .usage-wrap > .usage-main > [data-block="days"] {
+  border: 0; border-right: 1px solid var(--line);
+  background: none; box-shadow: none; border-radius: 0;
+  /* R225（2026-11-14，用户反馈「两个视图的竖线偏移、上下端点不一致」）：
+     分栏线原来只跨内容区高度，上下各被画布的 22px 内边距截断；而归因视图的
+     分栏线（.usage-main 的 border-left）是贯穿面板全高的。两套端点对不齐，
+     整条线看起来像在两个视图之间漂。现在用负 margin 把趋势块顶到画布上下
+     边框（分栏线贯穿全高，与归因视图端点一致），padding 反向补回 22px，
+     图表内容的位置一像素不动。水平方向两条线本来就都落在 1.65fr:1fr 的
+     同一条栅格边界上（差 <1px），端点对齐后视觉即完全重合。 */
+  margin: -22px 0; padding: 22px 26px; min-height: 0;
+}
+/* R225：窄窗单栏时右列折到下方，竖向分栏线失去意义，撤掉（线会贴着滚动条很怪） */
+@media (max-width: 1000px) {
+  #usage-page[data-udim="days"] .usage-wrap > .usage-main > [data-block="days"],
+  #usage-page:not([data-udim]) .usage-wrap > .usage-main > [data-block="days"] {
+    margin: 0; padding: 0 26px; border-right: 0;
+  }
+}
+#usage-page[data-udim="days"] .usage-side,
+#usage-page:not([data-udim]) .usage-side { padding: 0 24px; }
+
+/* ② 归因视图：左半（.usage-attrib）+ 右半（.usage-main）拼成同一个外框 */
+#usage-page[data-udim="chats"] .usage-wrap > .usage-attrib,
+#usage-page[data-udim="models"] .usage-wrap > .usage-attrib,
+#usage-page[data-udim="plugins"] .usage-wrap > .usage-attrib {
+  border-radius: 14px 0 0 14px; border-right: 0;
+  background: color-mix(in srgb, var(--accent) 3%, var(--layer-1));
+  box-shadow: var(--lift), var(--paper-edge);
+  padding: 22px 26px;
+}
+#usage-page[data-udim="chats"] .usage-wrap > .usage-main,
+#usage-page[data-udim="models"] .usage-wrap > .usage-main,
+#usage-page[data-udim="plugins"] .usage-wrap > .usage-main {
+  border: 1px solid var(--border);
+  border-left: 1px solid var(--line);   /* 唯一的内部竖向分栏线 */
+  border-radius: 0 14px 14px 0;
+  background: color-mix(in srgb, var(--accent) 3%, var(--layer-1));
+  box-shadow: var(--lift), var(--paper-edge);
+  padding: 22px 24px;
+  min-height: var(--usage-panel-h);
+}
+/* R223：右栏高度不再跟随左栏拉伸，统一见文件末尾的 .usage-side 规则。 */
+
+/* ③ 标题：从 14px 卡片小标题放大成版面标题（尺寸跨度拉到 5:1） */
+#usage-page .usage-wrap .usage-sec-head { min-height: 0; margin: 0 0 20px; }
+#usage-page .usage-wrap .usage-h3 {
+  font-size: 21px; font-weight: 600; letter-spacing: -.6px; color: var(--fg);
+}
+#usage-page .usage-wrap .usage-sec-meta {
+  font-size: 10.5px; letter-spacing: .6px;
+  padding: 3px 9px; border-radius: 999px;
+  background: var(--layer-2); border: 1px solid var(--line);
+}
+
+/* ④ 右栏：没有卡片，只有读数栈 */
+.usage-side { justify-content: flex-start; }
+.usage-main .usage-insight {
+  display: flex; flex-direction: column; gap: 0;
+  align-content: stretch;
+}
+.usage-insight-card {
+  display: block;
+  background: none; border: 0; border-radius: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 16px 0; min-height: 0;
+}
+.usage-insight-card:first-child { padding-top: 2px; }
+.usage-insight-card:last-child { border-bottom: 0; }
+.uic-readout { display: flex; align-items: baseline; gap: 14px; }
+.uic-big {
+  flex: 0 0 auto;
+  font-family: var(--mono); font-size: clamp(36px, 4.2vw, 54px);
+  font-weight: 600; line-height: 1; letter-spacing: -2.5px;
+  color: var(--fg); font-variant-numeric: tabular-nums;
+}
+.uic-pct { font-size: .4em; letter-spacing: 0; color: var(--fg-dim); margin-left: 3px; }
+.uic-readout-side { flex: 1; min-width: 0; }
+.uic-readout-side .uic-title { font-size: 12px; font-weight: 500; color: var(--fg-dim); }
+.uic-track {
+  height: 3px; border-radius: 2px; overflow: hidden;
+  background: var(--layer-2); margin-top: 10px;
+}
+.uic-track i { display: block; height: 100%; border-radius: 2px; background: var(--accent); }
+.usage-insight-card.warn .uic-track i { background: var(--orange); }
+/* 主次层次：第二张往后的读数降一档，不再三张等权 */
+.usage-insight-card:nth-child(n+2) .uic-big { font-size: 25px; letter-spacing: -1px; }
+.usage-insight-card:nth-child(n+2) .uic-readout { gap: 10px; }
+.usage-insight-card .uic-kvs { margin-top: 12px; gap: 0; }
+.usage-insight-card .uic-kv {
+  padding: 5px 0;
+  border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+}
+.usage-insight-card .uic-kv:first-child { border-top: 0; }
+.uic-foot { margin-top: 8px; }
+
+/* ⑤ 说明：不再是灰底卡片，是右栏顶端的一段注解（左竖线引出）。
+   R223：去掉 margin-top:auto —— 它把整坨读数推到底部，左栏一变高（按插件 11 项）
+   右栏就跟着漂。现在右栏从顶端按固定节奏排，与左栏标题同一水平线起排。 */
+.usage-view-note { margin-top: 0; padding-top: 0; border-top: 0; }
+.usage-view-note::before {
+  content: '当前视图'; display: none;
+  font-size: 10.5px; letter-spacing: 1.2px; color: var(--fg-mute); margin: 0 0 8px;
+}
+.usage-view-note:has(.usage-sec-sum:not(:empty))::before { display: block; }
+.usage-view-note .usage-sec-sum {
+  display: none !important;
+  margin: 0; padding: 2px 0 2px 12px;
+  background: none; border: 0; border-left: 2px solid var(--accent); border-radius: 0;
+  font-size: 12px; line-height: 1.7; color: var(--fg-dim);
+}
+
+/* ⑥ 左栏页脚：与右栏注解共用同一条贯穿的水平线 */
+#usage-page .usage-wrap .usage-details {
+  border-top: 1px solid var(--line); padding-top: 12px;
+}
+.usage-details > summary { font-size: 11px; color: var(--fg-mute); }
+
+/* ⑦ 峰值下引线提亮成「光柱」，是这块唯一的视觉钩子（不加发光/渐变） */
+.uc-peak-guide { stroke-width: 2; stroke-dasharray: 2 5; opacity: .55; }
+.uc-area { fill: color-mix(in srgb, var(--accent) 18%, transparent); }
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   R223（2026-11-14）：右栏读数与左栏内容高度解耦
+   用户反馈「切到按插件时这一坨位置又变了」。按插件视图 11 个插件 + 1 条对照行，
+   左栏把外框撑到约 485px；右栏 .usage-side 原本被 grid 拉伸到同一高度，
+   .usage-view-note 的 margin-top:auto 把整坨读数推到底部 —— 右栏内容明明与
+   左栏行数无关，却跟着一起下移约 90px。
+   做法：右栏固定为基准高度、从顶部按固定节奏排，不再贴底。
+     · min-height = --usage-panel-h - 46（外框上下 padding 44 + 边框 2），
+       四个视图右栏同一基准；内容更多时自然增高，绝不裁切；
+     · align-self:start 阻止 grid 把右栏拉伸到左栏高度；
+     · 去掉右栏页脚线，避免外框变高时它与左栏数值表那条线错位。
+   代价：按插件外框仍高于基准，多出的空间落在右栏下方，是画布留白而非内容漂移；
+        左栏全部 11 项仍可见，不引入局部滚动条、不改任何 JS。
+   ══════════════════════════════════════════════════════════════════════════ */
+.usage-side {
+  align-self: start;
+  min-height: calc(var(--usage-panel-h) - 46px);
+  justify-content: flex-start;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   R224（2026-11-14）：底下数据台补上与 Hero 同节奏的入场动画
+   用户：切页时 Hero 有动画、底下没有。
+   诊断：Hero 的 sparkline 描线（hsDraw / hsFade）绑在元素上，DOM 每次重建都播；
+        底下容器的 usageRise 却只在 data-fresh="1"（首次）播一次，折线线条与
+        右栏读数压根没有动画，外框又已从 .usage-card-panel 换成 .usage-main。
+   做法：不把整页改成「每次切页都浮现」（那会被感知为慢，见上方注释），
+        只给**数据图形**补元素级动画 —— 与 Hero sparkline 同一机制、同一时长：
+        折线描线 1.05s / 面积淡入 .8s / 大数字 .5s / 进度条 .65s。
+        切页、切维度、切指标时元素重建即播；轮询 sig 不变不重建，不会反复闪。
+        所有动画只动 opacity / transform / stroke-dashoffset，不触发布局。
+   ══════════════════════════════════════════════════════════════════════════ */
+@keyframes ucNumIn {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes ucTrackIn {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+@keyframes ucFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* 折线：复用 Hero 的 hsDraw / hsFade，节奏完全一致 */
+.uc-area { animation: hsFade .8s ease-out both; }
+.uc-line {
+  stroke-dasharray: 1; stroke-dashoffset: 1;
+  animation: hsDraw 1.05s cubic-bezier(.25, 1, .5, 1) .08s forwards;
+}
+/* 点在线描到一半时渐显，避免先于曲线浮在空处 */
+.usage-line .uc-dot { animation: ucFadeIn .42s ease-out .5s both; }
+.usage-line .uc-peak-guide { animation: ucFadeIn .5s ease-out .35s both; }
+
+/* 右栏读数：与 Hero 的大数 / 环 / 底线同一批入场 */
+.uic-big { animation: ucNumIn .5s cubic-bezier(.2, .8, .2, 1) .06s both; }
+.uic-track i {
+  transform-origin: left center;
+  animation: ucTrackIn .65s cubic-bezier(.22, .85, .28, 1) .16s both;
+  /* R228：诊断卡改按键调和后，占比条只改 inline width —— 交给 transition
+     平滑过渡到新占比，不再靠重建元素重播 scaleX 入场动画。 */
+  transition: width .55s var(--ease-out-quart);
+}
+.uic-kvs, .uic-foot { animation: ucFadeIn .45s ease-out .24s both; }
+.usage-view-note { animation: ucFadeIn .5s ease-out .16s both; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   R226（2026-11-14）：切换时间范围不再闪骨架屏
+   旧行为：切「今日/近 7 天/近 30 天/全部」→ 整页换骨架 → 数据回来重播入场动画，
+   用户看到"内容消失→骨架→内容闪现"。新行为：旧内容保留、轻微降透明度示意
+   "切换中"，数据一到整体换新。只动 opacity 且带 transition，是淡示不是闪烁。
+   骨架屏只在首次进入页面（没有任何可保留的内容）时出现。
+   ══════════════════════════════════════════════════════════════════════════ */
+.usage-hero, .usage-main, .usage-attrib { transition: opacity .18s ease; }
+#usage-page.usage-switching .usage-hero,
+#usage-page.usage-switching .usage-main,
+#usage-page.usage-switching .usage-attrib { opacity: .72; }

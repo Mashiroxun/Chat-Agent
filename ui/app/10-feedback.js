@@ -382,7 +382,10 @@ function renderUpdateDot() {
 
 async function runUpdateCheck({ manual = false } = {}) {
   try {
-    const data = await api('/api/update-check');
+    // 手动检查带 ?fresh=1：更新源（jsDelivr @main）有约 12 小时 CDN 缓存，
+    // 不带这个参数的话，发版后半天内点「检查更新」都只会看到"已是最新"。
+    // 自动检查（启动 + 每小时）不带：走缓存更快，也避免频繁回源。
+    const data = await api(manual ? '/api/update-check?fresh=1' : '/api/update-check');
     if (!data?.ok) return data;   // 网络/服务器错误原样返回，手动检查要显示原因
     updateLatest = data;
     updateAvailable = !!data.hasUpdate;

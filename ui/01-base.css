@@ -54,7 +54,10 @@
   --line-str: rgba(255, 255, 255, .15);  /* 控件描边（要更清楚） */
   --fg: #e9eaec;
   --fg-dim: #9aa0aa;
-  --fg-mute: #6f757f;
+  /* 2026-11-13：原 #6f757f 在 --page-bg(#1b1c20) 上仅约 3.5:1、卡片(#24252b) 上更低，
+     低于 WCAG AA 正文 4.5:1。提到 #8a919d：page-bg 5.2:1 / card 4.8:1，
+     色相仍是中性蓝灰，与 --fg-dim(#9aa0aa) 保持「更暗一档」的层级关系。 */
+  --fg-mute: #8a919d;
   --field-bg: #1d1e23;     /* 输入框底 */
   --bubble-me: #2f3a4d;
   --bubble-bot: #26272e;

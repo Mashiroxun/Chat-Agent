@@ -878,7 +878,7 @@ async function enablePluginInline(pluginId, btn, afterEnable) {
   } catch (e) {
     btn.disabled = false;
     btn.textContent = orig;
-    qaAlert(`启用失败：${e.message}\n\n如果 ${pluginId} 没装，请去「下载 → 插件下载」装好再回来。`);
+    qaAlert(`启用失败：${e.message}\n\n如果 ${pluginId} 没装，请去「扩展 → 插件下载」装好再回来。`);
   }
 }
 
@@ -1044,7 +1044,7 @@ function renderDoctorSubBody() {
 function renderSelfDoctorOff() {
   return `<div class="empty-hint">「系统自检」插件当前未启用。</div>
     <div class="hint" style="margin-top:10px">
-      去 <b>下载 → 已安装 → 插件</b> 找到 <code>self-doctor</code> 并启用它，或者直接点下面的按钮当场启用。
+      去 <b>扩展 → 已安装 → 插件</b> 找到 <code>self-doctor</code> 并启用它，或者直接点下面的按钮当场启用。
     </div>
     <div style="display:flex;gap:8px;margin-top:12px">
       <!-- r107：harness 各模块的"插件未启用"占位里加一个当场启用的按钮，避免
@@ -2720,7 +2720,7 @@ function renderForgeModule() {
     return `<div class="usage-wrap" style="padding:0">
       <div class="empty-hint">「扩展锻造台」插件当前未启用。</div>
       <div class="hint" style="margin-top:10px">
-        去 <b>下载 → 已安装 → 插件</b> 找到 <code>extension-forge</code> 并启用它，或者直接点下面的按钮当场启用。<br />
+        去 <b>扩展 → 已安装 → 插件</b> 找到 <code>extension-forge</code> 并启用它，或者直接点下面的按钮当场启用。<br />
         它<b>默认关闭</b>是有意的 —— 这个模块会让模型生成并在本机执行 JavaScript，
         应当由你显式决定是否开启。
       </div>
@@ -2764,7 +2764,7 @@ function renderForgeModule() {
     const offHint = it.autoDisabled
       ? `<div class="fd-off">
            ⏸ <b>已装载，但还没启用</b> —— 按设计它不会自己开始工作。
-           去「下载 → 已安装 → ${esc(kindLabel)}」找到 <code>${esc(it.id || it.dir || '')}</code> 点开启，它才会生效。
+           去「扩展 → 已安装 → ${esc(kindLabel)}」找到 <code>${esc(it.id || it.dir || '')}</code> 点开启，它才会生效。
          </div>`
       : '';
     const idLine = it.id && it.id !== it.dir
@@ -2951,7 +2951,7 @@ function renderForgeImportArea() {
     <div class="forge-drop${forgeBusy() ? ' is-busy' : ''}" id="forge-drop">
       <div class="fdrop-icon">📦</div>
       <div class="fdrop-main">${forgeBusy() ? '⏳ 正在忙，请等当前操作完成' : '把 .zip 拖到这里'}</div>
-      <div class="fdrop-sub">或在<b>下载 → 已安装 → 插件</b>页用「本地导入」装 —— 但那条路是"装上就跑"，不会经过这里的闸门与适配。</div>
+      <div class="fdrop-sub">或在<b>扩展 → 已安装 → 插件</b>页用「本地导入」装 —— 但那条路是"装上就跑"，不会经过这里的闸门与适配。</div>
       <label class="btn btn-small fdrop-btn">
         选择 zip 文件
         <input type="file" id="forge-file" accept=".zip,application/zip" hidden />
@@ -3200,7 +3200,7 @@ function renderForgeResult() {
       🔐 点「我已核对，覆盖更新」= 你本人签一张 <b>10 分钟内有效、一次性的</b>确认票据，
       绑定当前这份代码；这期间代码若有任何改动，票据自动失效，需要你重新核对。
     </div>` : `<div class="forge-install-warn">
-      ⏸ 装好后它是<b>关闭状态</b>，不会自己开始工作 —— 去「下载 → 已安装 → ${esc(g.kind === 'plugin' ? '插件' : '技能')}」里点开启才会生效。<br />
+      ⏸ 装好后它是<b>关闭状态</b>，不会自己开始工作 —— 去「扩展 → 已安装 → ${esc(g.kind === 'plugin' ? '插件' : '技能')}」里点开启才会生效。<br />
       🔐 点「我已核对，确认安装」= 你本人签一张 <b>10 分钟内有效、一次性的</b>确认票据，
       绑定当前这份代码；这期间代码若有任何改动，票据自动失效，需要你重新核对。
     </div>`) : ''}`
@@ -3287,7 +3287,7 @@ function renderUpgradeModule() {
   if (doctorState.forge.available === false) {
     return `<div class="usage-wrap" style="padding:0">
       <div class="empty-hint">「扩展锻造台」插件当前未启用 —— 升级扩展由它提供能力。</div>
-      <div class="hint" style="margin-top:10px">去 <b>下载 → 已安装 → 插件</b> 找到 <code>extension-forge</code> 并启用它，然后回到这一页。</div>
+      <div class="hint" style="margin-top:10px">去 <b>扩展 → 已安装 → 插件</b> 找到 <code>extension-forge</code> 并启用它，然后回到这一页。</div>
     </div>`;
   }
 
@@ -5042,7 +5042,7 @@ async function loadDevOrdersSnapshot() {
     const d = await api(`/api/dev/snapshot${q}`, { timeoutMs: 15000 });
     if (d.available === false) {
       o.snapshot = null;
-      o.error = d.error || '「开发工单」插件未启用（下载 → 已安装 → 插件 → dev-orders）';
+      o.error = d.error || '「开发工单」插件未启用（扩展 → 已安装 → 插件 → dev-orders）';
     } else if (d.ok === false) {
       o.error = d.error || '加载失败';
     } else {

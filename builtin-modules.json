@@ -9,7 +9,7 @@
       "entry": "index.js",
       "files": {
         "index.js": "b0acbbef96015aae",
-        "plugin.json": "75d526dd6156bc57"
+        "plugin.json": "789de031ef5038ec"
       }
     },
     {
@@ -28,7 +28,7 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "index.js": "f05a9633b45f9688",
+        "index.js": "319c174534486914",
         "plugin.json": "7c68c2da72766749"
       }
     },
@@ -38,25 +38,25 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "docs/human-like-memory.html": "9e9e2945b823c854",
+        "docs/human-like-memory.html": "2e92580070a5633c",
         "index.js": "601918753b2ca94a",
         "lib/archive.js": "c2624125c80fd642",
         "lib/budget.js": "e5a0b81efa94ae50",
         "lib/cards.js": "05020b8cdea7e6a0",
-        "lib/conflict.js": "fe22fe4654e8e60e",
-        "lib/consolidate.js": "52a9d9e629c87557",
+        "lib/conflict.js": "5f36c69bf3fc3976",
+        "lib/consolidate.js": "303706e74755e1f0",
         "lib/crossturn.js": "8d935389ea61f224",
         "lib/env.js": "4f84553caf87c6ac",
-        "lib/gist.js": "2cc0ea5b58eb964b",
+        "lib/gist.js": "9cf50f13819ce8df",
         "lib/inject.js": "ad4932c4a906e95f",
         "lib/peek.js": "41d55a805056f4a3",
         "lib/pending.js": "998e5e2d0c8258c3",
         "lib/recall.js": "6a76f256c75dfdd7",
         "lib/stats.js": "b7831ac14538ebb6",
-        "lib/store.js": "e8651f5caaabb28f",
-        "lib/util.js": "14be37b2a6694893",
-        "plugin.json": "b262840db6ab352f",
-        "README.md": "8ad43a8d2d6fad2e",
+        "lib/store.js": "59dddae75f2cb4ff",
+        "lib/util.js": "322a49653ec977a6",
+        "plugin.json": "ebaaf92ab8c60699",
+        "README.md": "8e91a4cff50522d7",
         "tools/bench-soak.mjs": "007daefdfb9b72f4",
         "tools/bench-tokens.mjs": "c901bfdd71dfa79d",
         "tools/bench-unindex.mjs": "cc14456a480cd6bf",
@@ -125,8 +125,8 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "dialects.js": "bc2ca06a0257bc83",
-        "index.js": "7b4b7a7a59c0541b",
+        "dialects.js": "d22022c3b843b18a",
+        "index.js": "f86f2c375b645eb4",
         "plugin.json": "854664e0d1849918"
       }
     },
@@ -182,8 +182,8 @@
       "kind": "skill",
       "entry": "index.js",
       "files": {
-        "index.js": "16f7f54b2c1dbcc8",
-        "skill.json": "fa14b53bfa732a7c"
+        "index.js": "fcc47e4775808dc2",
+        "skill.json": "7ceef31e5c53767d"
       }
     },
     {
@@ -228,7 +228,7 @@
         "filters.js": "74077af51d655770",
         "index.js": "d8d97f8fb9bade4e",
         "pixiv.js": "7ba194ee4fb490d9",
-        "setu.js": "e21da4af60d7569c",
+        "setu.js": "3c1d8fdbed385ead",
         "skill.json": "0cc082eeed97508f"
       }
     },
@@ -248,10 +248,10 @@
       "kind": "plugin",
       "entry": "index.js",
       "files": {
-        "index.js": "5d6cc61b4aaf479d",
+        "index.js": "93031695e38540bd",
         "lib/model-store.js": "548967a9d7ff45d0",
         "lib/service.js": "ab7702bdd26e4a3f",
-        "plugin.json": "bea60b1d254ca78b",
+        "plugin.json": "07e21678763fa765",
         "README.md": "fd4c65468ae19fcb"
       }
     }
