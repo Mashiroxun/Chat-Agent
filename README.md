@@ -259,8 +259,11 @@ QQ 9.9.x 用的是腾讯自研的 **HummerSetup** 安装器，**不支持静默�
   --exclude=*.lnk --exclude=*.log --exclude=.update-* \
   --exclude=.git --exclude=.workbuddy --exclude=docs \
   --exclude=plugin-data --exclude=*.bak-* --exclude=*.orig \
-  --exclude=^dist/ .
+  --exclude=^dist/ --exclude=^resources/app/dist/ .
 ```
+
+两个 `dist` 都要排：顶层 `dist/` 是打包输出目录，`resources/app/dist/` 是
+`check:package` 用 `--report` 时写报告的地方（默认不落盘，但不排除的话一旦写过就会进包）。
 
 打完必须过一遍 `npm run check:package -- --zip dist/<版本>.zip`：它解 zip（自动还原 GBK 中文条目名）、
 按每个依赖的 `main` / `module` / `exports` 逐个断言入口文件存在、从 `main` 入口走一遍本地 import 图，

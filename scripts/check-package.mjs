@@ -37,8 +37,6 @@ import { fileURLToPath } from 'node:url';
 // ---------------------------------------------------------------------------
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-// 默认报告落在仓库根的 dist/（.gitignore 已忽略），避免污染 scripts/ 目录。
-const DEFAULT_REPORT = path.join(path.dirname(SCRIPT_DIR), 'dist', 'package-report.json');
 const APP_PACKAGE_SUFFIX = 'resources/app/package.json';
 const EXE_BASENAME = 'qq agent.exe';
 const VERSION_BASENAME = 'version.json';
@@ -1081,7 +1079,7 @@ function printSummary(r, reportPath) {
   }
   console.log(line);
   console.log(`结论      : ${r.ok ? 'PASS  发布包启动完整性检查通过' : 'FAIL  发布包存在启动完整性缺陷'}`);
-  console.log(`报告      : ${redactUserPath(reportPath)}`);
+  console.log(`报告      : ${reportPath ? redactUserPath(reportPath) : '未写文件（加 --report <path> 保存）'}`);
   console.log(`退出码    : ${r.exitCode}`);
   console.log('');
 }
@@ -1099,7 +1097,7 @@ function usage() {
     '',
     '  --zip   指向发布 zip（自动还原 GBK 中文条目名）',
     '  --dir   指向已解包的安装根目录',
-    '  --report  报告输出路径，默认 <仓库根>/dist/package-report.json',
+    '  --report  可选，把 JSON 报告写到该路径；不传则只打印、不落盘',
     '',
     '退出码: 0 = 全部通过；1 = 存在缺陷或输入错误',
   ].join('\n');
@@ -1107,7 +1105,7 @@ function usage() {
 
 /** 解析 argv，支持 --key value 与 --key=value。 */
 function parseArgs(argv) {
-  const opts = { zip: '', dir: '', report: DEFAULT_REPORT, help: false };
+  const opts = { zip: '', dir: '', report: '', help: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--help' || arg === '-h') { opts.help = true; continue; }
@@ -1123,7 +1121,7 @@ function parseArgs(argv) {
     }
     if (key === '--zip') opts.zip = value;
     else if (key === '--dir') opts.dir = value;
-    else if (key === '--report') opts.report = value || DEFAULT_REPORT;
+    else if (key === '--report') opts.report = value || '';
     else throw new Error(`未知参数: ${arg}`);
   }
   return opts;
@@ -1161,7 +1159,6 @@ function main() {
     opts = parseArgs(process.argv.slice(2));
   } catch (err) {
     console.error(`[错误] ${err.message}\n\n${usage()}`);
-    writeReport(DEFAULT_REPORT, errorReport(err.message, 'unknown', ''));
     process.exitCode = 1;
     return;
   }
@@ -1176,7 +1173,7 @@ function main() {
   if (hasZip === hasDir) {
     const msg = '必须且只能指定 --zip 或 --dir 其中之一';
     console.error(`[错误] ${msg}\n\n${usage()}`);
-    writeReport(opts.report, errorReport(msg, 'unknown', opts.zip || opts.dir));
+    if (opts.report) writeReport(opts.report, errorReport(msg, 'unknown', opts.zip || opts.dir));
     process.exitCode = 1;
     return;
   }
@@ -1208,7 +1205,7 @@ function main() {
     }
   } catch (err) {
     console.error(`[错误] ${redact(err.message)}`);
-    writeReport(opts.report, errorReport(err.message, mode, inputPath));
+    if (opts.report) writeReport(opts.report, errorReport(err.message, mode, inputPath));
     process.exitCode = 1;
     return;
   }
@@ -1222,7 +1219,7 @@ function main() {
   }
 
   printSummary(report, opts.report);
-  writeReport(opts.report, report);
+  if (opts.report) writeReport(opts.report, report);
   process.exitCode = report.exitCode;
 }
 
