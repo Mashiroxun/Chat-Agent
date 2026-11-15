@@ -43,7 +43,14 @@
 - 扩展页（原「下载」）更名与全站指引文案；窗口最小宽度 960→900；暗色次级文字对比度 3.5→5.2:1、最小字号 10→11px；图表切换连贯动画；群聊持久名册；会话切换与刷新失败的界面修复。
 - `.gitignore` 补 `data.removed*/`：原规则 `data-*/` 匹配不到 `data.removed-*`，该目录含 `config.json`（API Key）却处于未跟踪状态，一次 `git add -A` 就会推上公开仓库。
 
-全量测试 668/668 通过。
+### 修复 · 发布包完整性（2026-11-15 补充，并入本版，不单独立版）
+
+- **排除规则误伤运行时文件（两处，均导致装完打不开）**：裸目录名在 bsdtar 里按**任意层级 basename** 匹配 —— `--exclude=dist` 排掉了 `node_modules/js-yaml/dist/*`（`exports.import` 指向它，`src/providers.js` 直接 import）；`--exclude=data-*` 排掉了 `src/data-dir.js`（`src/server.js:8` 静态 import）与 `node_modules/undici/lib/web/fetch/data-url.js`（被 `fetch/index.js`、`body.js`、`response.js`、`websocket.js` 等十余处 require）。改为 `^dist/` / `^data-*/` 锚定顶层；`data.*` 必须保持任意层级（用来排含 API Key 的 `data.removed-*`）。
+- **新增 `scripts/check-package.mjs`（`npm run check:package`）**：对发布 zip 或解包目录断言每个依赖的 `main`/`module`/`exports` 运行时入口、从 `main` 入口走本地 import 图（先剥注释与字符串）、校验版本一致与关键文件非空；GBK 中文条目名自动还原。故障注入验证过：删掉 `js-yaml/dist/js-yaml.mjs` 会准确报错。
+- **启动自检补依赖入口检查**：`electron/startup-selfcheck.js` 原判据只看 `node_modules/<dep>/package.json` 是否存在，缺 dist 仍返回 `ok:true`（本次事故的假阳性来源）。现在追加「依赖自己声明的入口文件必须存在」（problem type `dep-entry`）；类型声明、`..` 逃逸、无法解析的 target 一律跳过，宁可漏报不误报。
+- **下载与项目主页入口指向社区版 GitHub**：「去下载」静态 href、`/api/update-check` 的兜底 url、预览假数据统一到 `github.com/Mashiroxun/Chat-Agent/releases/latest`；「打开网站」改名「项目主页」，指向仓库首页。`kondius.cn/qq-agent` 是官方版官网，社区版不该把用户送去下不配套的安装包。
+
+全量测试 670/670 通过。
 
 ---
 

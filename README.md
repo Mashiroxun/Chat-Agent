@@ -228,9 +228,12 @@ QQ 9.9.x 用的是腾讯自研的 **HummerSetup** 安装器，**不支持静默�
 
    # ② 线上更新源
    curl -s "https://fastly.jsdelivr.net/gh/Mashiroxun/Chat-Agent@main/version.json" | head -3
+
+   # ③ 包完整性（依赖入口 / 本地 import 图 / 关键文件 / 版本一致）
+   npm run check:package -- --zip dist/<版本>.zip
    ```
 
-   - **必须满足**：`isDraft` 为 `false`，且 assets 里含 `<版本>.zip`。
+   - **必须满足**：`isDraft` 为 `false`，assets 里含 `<版本>.zip`，且 ③ 退出码为 `0`。
    - **条件项**：`patch-<版本>.zip` 与 `patch-<版本>.zip.sha256` —— 仅当流水线 summary 里出现「补丁基线 = X」（说明本次确实产出了补丁）时才要求；若 summary 写的是「本版需发全量包（补丁不适用）」，那么**没有**补丁资产是正常的，不要因此判失败。
    - ②的期望是 `"version": "<版本>"`。若仍是旧版，通常是 jsDelivr 的 `@main` 缓存（约 12 小时），不是发版失败 —— 可用 `https://cdn.jsdelivr.net/gh/Mashiroxun/Chat-Agent@main/version.json?t=<任意值>` 绕过缓存自查。
 
@@ -238,6 +241,37 @@ QQ 9.9.x 用的是腾讯自研的 **HummerSetup** 安装器，**不支持静默�
 
 补丁只覆盖相邻版本（`manifest.base` 必须等于用户当前版本）；跨版本用户要走"自动回退全量包"，前提是该 Release 里**确实已上传**全量包 —— 没有全量包时回退不成立，用户拿到的是硬错误，所以第 6 步的顺序不能反；
 `package.json` 的 `dependencies` / `main` / `type` / `engines` 有变动时补丁不适用，只能发全量。
+
+### 打全量包：排除规则必须锚定顶层
+
+`dist`、`data-*` 这类**裸目录名**在 bsdtar 里是「任意层级 basename 匹配」：
+`--exclude=dist` 会把 `node_modules/js-yaml/dist` 一起排掉，
+`--exclude=data-*` 会排掉 `src/data-dir.js` 和 `undici/lib/web/fetch/data-url.js`。
+0.4.9.4 连续两次「装完双击没反应」都是这么来的，而当时的校验收全都过得去 ——
+因为包内文件数、关键文件、`package.json` 都在，缺的正是依赖自己的入口文件。
+
+所以顶层目录一律用 `^` 锚定，输出目录显式排除：
+
+```bash
+"C:/Windows/System32/tar.exe" -a -c -f "G:/QQagent/dist/<版本>.zip" -C "G:/QQagent" \
+  --exclude=data --exclude=^data-*/ --exclude=data.* \
+  --exclude=backup --exclude=dev-sandbox --exclude=debug.log \
+  --exclude=*.lnk --exclude=*.log --exclude=.update-* \
+  --exclude=.git --exclude=.workbuddy --exclude=docs \
+  --exclude=plugin-data --exclude=*.bak-* --exclude=*.orig \
+  --exclude=^dist/ .
+```
+
+打完必须过一遍 `npm run check:package -- --zip dist/<版本>.zip`：它解 zip（自动还原 GBK 中文条目名）、
+按每个依赖的 `main` / `module` / `exports` 逐个断言入口文件存在、从 `main` 入口走一遍本地 import 图，
+再校验版本一致与关键文件非空。**文件数对得上不等于运行时需要的文件都在。**
+
+注意两个例外，别一起改成锚定：
+
+- `--exclude=data.*` **必须保持任意层级**：它用来排 `resources/app/data.removed-*/`
+  这类含 API Key 的旧数据备份，锚定顶层反而会把它们打进包；
+- `--exclude=docs` 保持裸名也无害：它顺带排掉 `node_modules/undici/docs`、`plugins/*/docs`
+  这些纯文档，不影响运行。
 
 ### 分发前脱敏
 分享自己的部署副本前，直接删除 `data/` 目录即可 —— 里面是 API Key、群白名单、聊天存档、

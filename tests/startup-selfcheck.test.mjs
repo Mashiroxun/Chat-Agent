@@ -121,3 +121,51 @@ test('package.json 坏 → 报告 pkg', () => {
   assert.ok(r.problems.some((p) => p.type === 'pkg'));
   cleanup(dir);
 });
+
+// 0.4.9.4 事故回归：js-yaml/package.json 在，但 exports 指向的 dist/js-yaml.mjs
+// 被 --exclude=dist 排掉了。旧判据只看 package.json，全绿放过，装完双击即崩。
+test('依赖声明了入口但入口文件缺失 → 报告 dep-entry', () => {
+  const dir = makeAppDir((d) => {
+    writePkg(d);
+    const dep = path.join(d, 'node_modules', 'js-yaml');
+    fs.mkdirSync(path.join(dep, 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(dep, 'package.json'), JSON.stringify({
+      name: 'js-yaml',
+      version: '5.4.1',
+      main: './dist/js-yaml.cjs.js',
+      exports: { '.': { import: './dist/js-yaml.mjs', require: './dist/js-yaml.cjs.js' } },
+    }));
+    fs.writeFileSync(path.join(dep, 'dist', 'js-yaml.cjs.js'), '// ok\n');
+    // 故意不写 dist/js-yaml.mjs
+    for (const f of CRITICAL) writeFile(d, f);
+  });
+  const r = runStartupSelfCheck(dir);
+  assert.equal(r.ok, false);
+  assert.ok(r.problems.some((p) => p.type === 'dep-entry' && p.detail.includes('js-yaml.mjs')));
+  cleanup(dir);
+});
+
+test('依赖入口齐全、类型声明缺失 → 不误报', () => {
+  const dir = makeAppDir((d) => {
+    writePkg(d);
+    const dep = path.join(d, 'node_modules', 'js-yaml');
+    fs.mkdirSync(path.join(dep, 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(dep, 'package.json'), JSON.stringify({
+      name: 'js-yaml',
+      version: '5.4.1',
+      main: './dist/js-yaml.cjs.js',
+      exports: {
+        '.': { types: './dist/js-yaml.d.ts', import: './dist/js-yaml.mjs', require: './dist/js-yaml.cjs.js' },
+      },
+    }));
+    for (const f of ['dist/js-yaml.cjs.js', 'dist/js-yaml.mjs']) {
+      fs.writeFileSync(path.join(dep, f), '// ok\n');
+    }
+    // 故意不写 .d.ts —— 类型声明运行时不加载，不应被检查
+    for (const f of CRITICAL) writeFile(d, f);
+  });
+  const r = runStartupSelfCheck(dir);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.problems, []);
+  cleanup(dir);
+});

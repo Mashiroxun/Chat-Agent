@@ -38,9 +38,17 @@ export function runStartupSelfCheck(appDir) {
   }
   if (pkg && pkg.dependencies) {
     for (const dep of Object.keys(pkg.dependencies)) {
-      const marker = path.join(appDir, 'node_modules', dep, 'package.json');
+      const depDir = path.join(appDir, 'node_modules', dep);
+      const marker = path.join(depDir, 'package.json');
       if (!exists(marker)) {
         problems.push({ type: 'dep', detail: `依赖缺失：${dep}（node_modules/${dep} 不存在）` });
+        continue;
+      }
+      // 只看 package.json 在不在是不够的：0.4.9.4 的包 js-yaml/package.json 在，
+      // 但 exports 指向的 dist/js-yaml.mjs 没进包，旧判据全绿、装完双击即崩。
+      // 所以依赖自己声明的运行时入口也要逐个确认存在。
+      for (const target of missingEntryTargets(depDir, marker)) {
+        problems.push({ type: 'dep-entry', detail: `依赖入口缺失：${dep} → ${target}` });
       }
     }
   }
@@ -73,6 +81,51 @@ export function runStartupSelfCheck(appDir) {
   }
 
   return { ok: problems.length === 0, problems };
+}
+
+/**
+ * 依赖 package.json 里声明的运行时入口目标。
+ * 只取 main / module / exports 的字符串值：browser 字段是给打包器做条件替换的，
+ * 类型声明（.d.ts）运行时不加载，都跳过，避免误报。
+ */
+function declaredEntryTargets(depPkg) {
+  const out = [];
+  const add = (v) => {
+    if (typeof v !== 'string') return;
+    const s = v.trim();
+    if (!s) return;
+    if (/^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(s)) return;   // URL / 绝对路径不归这里管
+    if (/\.d\.(?:ts|mts|cts)$/i.test(s)) return;         // 类型声明运行时不加载
+    if (!out.includes(s)) out.push(s);
+  };
+  add(depPkg.main);
+  add(depPkg.module);
+  const walk = (v) => {
+    if (typeof v === 'string') add(v);
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === 'object') {
+      for (const k of Object.keys(v)) walk(v[k]);
+    }
+  };
+  walk(depPkg.exports);
+  return out;
+}
+
+/** 依赖声明的入口里实际缺失的那些（读不到 package.json 就跳过，交给别的判据）。 */
+function missingEntryTargets(depDir, markerPath) {
+  let depPkg;
+  try {
+    depPkg = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+  } catch {
+    return [];
+  }
+  const missing = [];
+  for (const target of declaredEntryTargets(depPkg)) {
+    const rel = target.replace(/^\.\//, '');
+    if (rel.split('/').includes('..')) continue;   // 指向依赖外部，不归本次检查
+    if (!exists(path.join(depDir, rel))) missing.push(target);
+  }
+  return missing;
 }
 
 function exists(p) {

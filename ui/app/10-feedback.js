@@ -346,11 +346,13 @@ function openFeedbackModal() {
   });
 }
 
-// ── 打开网站 ──
+// ── 打开社区版项目主页 ──
+// 社区版（洛版）的发布与下载都在 GitHub；kondius.cn/qq-agent 是官方版官网，
+// 不能把用户导向那里，否则会下到不配套的官方版安装包。
 // Electron 里 window.open 会被 main.js 的 setWindowOpenHandler 转给系统默认浏览器；
 // 开发模式（纯浏览器）则正常开新标签页。
 function openSite() {
-  window.open('https://kondius.cn/qq-agent', '_blank', 'noopener');
+  window.open('https://github.com/Mashiroxun/Chat-Agent', '_blank', 'noopener');
 }
 
 // ── 自动检查更新 ──

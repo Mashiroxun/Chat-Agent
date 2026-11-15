@@ -851,7 +851,7 @@
         // 补两个后端真实存在、预览此前漏 mock 的 GET（routes.js:2944 / 2262）——
         // 漏了会落到 realFetch → 预览下 502：10-feedback.js 的更新检查、
         // 02-sse-sessions.js / 05-memory-settings.js 的视觉扫描结果。
-        if (u.startsWith('/api/update-check')) return Promise.resolve(jsonRes({ ok: true, current: PV_VERSION, latest: PV_VERSION, hasUpdate: false, url: 'https://kondius.cn/qq-agent', notes: '' }));
+        if (u.startsWith('/api/update-check')) return Promise.resolve(jsonRes({ ok: true, current: PV_VERSION, latest: PV_VERSION, hasUpdate: false, url: 'https://github.com/Mashiroxun/Chat-Agent/releases/latest', notes: '' }));
         // 自更新三条路由（2026-11-12）：预览下恒为"已就绪已退出"，保证设置页点按钮不报 404
         if (u.startsWith('/api/update-apply/status')) return Promise.resolve(jsonRes({ ok: true, state: 'idle', mode: null, stage: 'idle', message: '', received: 0, total: 0, latest: PV_VERSION, error: '', available: true, fullSupported: true, rootDir: '', isPackagedInstall: true }));
         if (u.startsWith('/api/update-apply')) return Promise.resolve(jsonRes({ ok: true, started: true }));

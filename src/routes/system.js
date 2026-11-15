@@ -211,7 +211,9 @@ export function systemRoutes(deps, shared) {
             staleHint: stale
               ? `更新源版本（${latest}）低于当前安装（${current}）：服务器上的 version.json 尚未推进，因此不会提示更新`
               : '',
-            url: String(info.url || 'https://kondius.cn/qq-agent'),
+            // 兜底也必须指向社区版 GitHub 发布页：kondius.cn/qq-agent 是官方版官网，
+            // 老 version.json 若没带 url，不能把用户送去下不配套的官方版安装包。
+            url: String(info.url || 'https://github.com/Mashiroxun/Chat-Agent/releases/latest'),
             notes: String(info.notes || '')
           });
         } catch (error) {

@@ -8,6 +8,7 @@
   "scripts": {
     "check": "node --test \"tests/*.test.mjs\"",
     "test": "npm run check",
+    "check:package": "node scripts/check-package.mjs",
     "baseline": "node scripts/refresh-builtin-baseline.mjs"
   },
   "engines": {
