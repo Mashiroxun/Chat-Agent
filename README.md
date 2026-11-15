@@ -257,7 +257,8 @@ QQ 9.9.x 用的是腾讯自研的 **HummerSetup** 安装器，**不支持静默�
   --exclude=data --exclude=^data-*/ --exclude=data.* \
   --exclude=backup --exclude=dev-sandbox --exclude=debug.log \
   --exclude=*.lnk --exclude=*.log --exclude=.update-* \
-  --exclude=.git --exclude=.workbuddy --exclude=docs \
+  --exclude=.git --exclude=.workbuddy \
+  --exclude=^docs/ --exclude=^resources/app/docs/ \
   --exclude=plugin-data --exclude=*.bak-* --exclude=*.orig \
   --exclude=^dist/ --exclude=^resources/app/dist/ .
 ```
@@ -269,12 +270,17 @@ QQ 9.9.x 用的是腾讯自研的 **HummerSetup** 安装器，**不支持静默�
 按每个依赖的 `main` / `module` / `exports` 逐个断言入口文件存在、从 `main` 入口走一遍本地 import 图，
 再校验版本一致与关键文件非空。**文件数对得上不等于运行时需要的文件都在。**
 
-注意两个例外，别一起改成锚定：
+**`docs` 只能锚定仓库文档，绝不能裸名排除。** `plugins/mem-layered/docs/human-like-memory.html`
+是内置插件的文件，而启动时 `plugin-loader` 会用随包的 `builtin-modules.json` 做**逐文件 sha1 核对**
+—— 少一个文件，整个 mem-layered 就会被判成「被替换过的插件」拒绝加载。日志里只是 INFO 级的
+「扩展加载失败」，界面上表现为记忆功能静默消失、工具集从 58 掉到 57，极难察觉。
+所以只排 `^docs/` 与 `^resources/app/docs/` 两个精确路径，`plugins/*/docs` 与
+`node_modules/undici/docs` 一律保留。
+
+注意一个例外，别改成锚定：
 
 - `--exclude=data.*` **必须保持任意层级**：它用来排 `resources/app/data.removed-*/`
-  这类含 API Key 的旧数据备份，锚定顶层反而会把它们打进包；
-- `--exclude=docs` 保持裸名也无害：它顺带排掉 `node_modules/undici/docs`、`plugins/*/docs`
-  这些纯文档，不影响运行。
+  这类含 API Key 的旧数据备份，锚定顶层反而会把它们打进包。
 
 ### 分发前脱敏
 分享自己的部署副本前，直接删除 `data/` 目录即可 —— 里面是 API Key、群白名单、聊天存档、
