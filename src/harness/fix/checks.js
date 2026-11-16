@@ -32,7 +32,8 @@ import { applyHunks } from './prompt.js';
 const DANGER_RULES = [
   { id: 'child-process', level: 'block', re: /\bchild_process\b|\bexecSync\b|\bspawnSync\b|\bexecFileSync\b/,
     title: 'shell 执行（child_process）', why: '修复不应引入系统命令调用 —— 这等于把整台机器交给改动的代码。' },
-  { id: 'process-exit', level: 'block', re: /\bprocess\.exit\s*\(|\bprocess\.abort\s*\(/,
+  // 点号前后允许空白/换行（与 gate.js 同步）：`process\n.exit(` 是合法 JS，字面点号会漏判。
+  { id: 'process-exit', level: 'block', re: /\bprocess\s*\.\s*exit\s*\(|\bprocess\s*\.\s*abort\s*\(/,
     title: '终止进程（process.exit）', why: '会直接杀掉整个应用。要表达"这次调用失败"请 return { isError: true }。' },
   // 凭据：必须覆盖**真实存放凭据的文件名**。
   // 教训（与 gate.js:52 同源）：原规则只认 account.json，而 API Key 实际在
@@ -53,7 +54,8 @@ const DANGER_RULES = [
     re: /(?:^|[^\w$])(?:import\s[\s\S]{0,80}?from\s*|\bexport\s[\s\S]{0,80}?from\s*|import\s*\(?\s*|require\s*\)?\s*\(\s*)['"](?:node:)?(?:fs(?:\/promises)?|child_process|cluster|dgram|net|tls|worker_threads|inspector|v8|vm|module)['"]/,
     title: '导入高危 Node 模块（fs / child_process / net / vm 等）',
     why: '修复不应直接读文件、起进程或开 socket —— 那会绕过整套权限体系，也正是凭据泄露与命令执行的入口。' },
-  { id: 'env-read', level: 'block', re: /\bprocess\.env\b/,
+  // 与 gate.js 同步：`process\n.env` 合法且确实访问 process.env，字面点号正则漏判。
+  { id: 'env-read', level: 'block', re: /\bprocess\s*\.\s*env\b/,
     title: '读取环境变量（process.env）', why: '环境变量里有 token / 密钥。与读 config.json 同等级。' },
   { id: 'path-escape', level: 'block', re: /\.\.\s*[\\/]/,
     title: '向上穿越路径', why: '改动引入了越出自身目录的路径访问。' },
@@ -66,6 +68,14 @@ const DANGER_RULES = [
   { id: 'console-log', level: 'notice', re: /\bconsole\.log\s*\(/,
     title: '残留调试输出', why: '生产代码请用 logger / api.log()。' }
 ];
+
+// 与 gate.js 同口径：全文级危险判定要支持跨行正则（[\s\S]{0,80}?），
+// 又不能被注释里的 "import fs" / "config.json" 误报。注释换成等长空格（保留换行）。
+function scrubComments(src) {
+  return String(src)
+    .replace(/\/\/[^\n]*/g, (m) => ' '.repeat(m.length))
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
+}
 
 /** 白名单验证器 —— 模型只能从这张表里选，不能提供任意命令。 */
 export const VERIFIERS = [
@@ -193,14 +203,21 @@ export function runProtocolGate(root, appRoot, dataRoot, rec, opts = {}) {
     if (/\.(js|mjs|cjs)$/i.test(c.path)) {
       const lines = after.split('\n');
       for (const rule of DANGER_RULES) {
+        // block 规则由**全文**判定（脱敏注释后 test），跨行写法不再从逐行缝隙里漏过；
+        // 逐行仅用于定位行号展示。confirm/notice 保持原逐行语义不变。
+        const useFullText = rule.level === 'block';
+        const fullHit = useFullText ? rule.re.test(scrubComments(after)) : false;
+        let lineNo = null;
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
           if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;
           if (!rule.re.test(line.replace(/\/\/.*$/, ''))) continue;
-          push('P6', rule.level === 'block' ? 'block' : (rule.level === 'confirm' ? 'warn' : 'info'),
-            `${rule.title}（${c.path}:${i + 1}）`, rule.why);
+          lineNo = i + 1;
           break;
         }
+        if (useFullText ? !fullHit : lineNo === null) continue;
+        push('P6', rule.level === 'block' ? 'block' : (rule.level === 'confirm' ? 'warn' : 'info'),
+          lineNo !== null ? `${rule.title}（${c.path}:${lineNo}）` : `${rule.title}（${c.path}）`, rule.why);
       }
     }
   }
@@ -216,7 +233,9 @@ export function runProtocolGate(root, appRoot, dataRoot, rec, opts = {}) {
     }
   }
   if (!plan.some((p) => p?.verifier === 'syntax') || !plan.some((p) => p?.verifier === 'protocol')) {
-    push('P9', 'warn', 'P9 缺少硬性验证器', 'syntax 与 protocol 是硬性项，建议始终包含。');
+    // 由 warn 升 block：硬性项缺失时，runVerifyPlan 的 passed 不再可信 ——
+    // 模型省略 syntax 即可让带 SyntaxError 的改动"通过自验"并落地（CHANGELOG:4142）。
+    push('P9', 'block', 'P9 缺少硬性验证器', 'syntax 与 protocol 是硬性项，必须始终包含（缺一即阻断，不可用 warn 放行）。');
   }
 
   // ── P7 可回滚义务（预检：落地时还会再强制一次）──
@@ -407,21 +426,29 @@ export function runVerifyPlan(root, appRoot, dataRoot, rec, ctx) {
     const meta = VERIFIERS.find((v) => v.id === vid) || { label: vid, hard: false };
     for (const r of rows) items.push({ verifier: vid, label: meta.label, hard: !!meta.hard, ...r });
   }
-  const hardIds = new Set(['syntax', 'protocol']);
+  const hardIds = new Set(VERIFIERS.filter((v) => v.hard).map((v) => v.id));
   const hardFailed = items.some((i) => i.status === 'fail' && hardIds.has(i.verifier));
   const anyFailed = items.some((i) => i.status === 'fail');
   // 「硬性验证项没跑成」必须和「通过」区分开：
   //   检查器起不来（环境问题）时我们**并不知道**代码是否合法，静默算通过是危险的。
   //   这里单独标出来，UI 上会显示"有硬性项未能运行"，让闸②的人工决断带上这层怀疑。
   const hardSkipped = items.some((i) => i.status === 'skip' && hardIds.has(i.verifier));
+  // ⚠️ 硬性项必须"确实在计划里 + 没有 skip/fail"才算通过（CHANGELOG:4142）：
+  //   缺失（模型在 verifyPlan 里省略 syntax）与 skip/fail 都算失败 —— 否则带 SyntaxError
+  //   的 JS 会被判 passed → status='verified' → 落进 src/，下次启动整机崩。
+  //   判"缺失"看 plan 而非 items：syntax 在没有 JS 改动时本就不产出 item，属合法空跑。
+  const hardMissing = [...hardIds].filter((id) => !plan.some((p) => String(p?.verifier) === id));
+  const hardBad = items.some((i) => hardIds.has(i.verifier) && i.status !== 'pass');
+  const hardOk = hardMissing.length === 0 && !hardBad;
   const failures = items.filter((i) => i.status === 'fail');
   return {
     at: Date.now(),
     plan,
     items,
-    passed: !anyFailed,
+    passed: !anyFailed && hardOk,
     hardFailed,
     hardSkipped,
+    hardMissing,
     // 收敛保护用：失败项指纹（集合没缩小就停）
     failureKey: failures.map((i) => `${i.verifier}:${i.file}`).sort().join('|'),
     failCount: failures.length,

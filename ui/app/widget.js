@@ -203,6 +203,29 @@
     m.classList.toggle('off', off);
     const hint = $('w-menu-hint');
     if (hint) hint.hidden = !off;
+    /* 2026-11-16 审查修复（问题9）：`.wmenu.off` 只靠 CSS 的
+       `pointer-events: none` 置灰 —— 那**只挡鼠标不挡键盘**：每行仍带
+       tabindex="0"、keydown 照样进 activateRow，而 applyWidget / widgetCommand
+       在无桥时静默 return。键盘用户 Tab 到菜单项按 Enter 毫无反应，分不清是
+       自己没按对还是应用坏了；读屏软件也不认为这些项被禁用（提示只写在
+       #w-menu-hint 里，与菜单项没有关联）。
+       现在把「禁用」同时写进 aria 状态 + 摘掉 Tab 停留点：
+       鼠标（pointer-events）、键盘（tabindex/-1）、读屏（aria-disabled）三路一致。 */
+    const setRowEnabled = (el, enabled) => {
+      if (!el) return;
+      if (enabled) {
+        el.removeAttribute('aria-disabled');
+        el.setAttribute('tabindex', '0');
+      } else {
+        el.setAttribute('aria-disabled', 'true');
+        el.setAttribute('tabindex', '-1');
+      }
+    };
+    m.querySelectorAll('[role="menuitem"]').forEach((el) => setRowEnabled(el, !off));
+    m.querySelectorAll('[data-size]').forEach((el) => setRowEnabled(el, !off));
+    // 不透明度滑条同样经桥落盘，桥不在时一并禁用（否则拖了也不会有任何变化）
+    const opaEl = $('w-menu-opa');
+    if (opaEl) opaEl.disabled = off;
     const setOn = (sel, on) => { const n = m.querySelector(sel); if (n) n.classList.toggle('on', !!on); };
     setOn('[data-toggle="alwaysOnTop"]', ws.alwaysOnTop !== false);
     setOn('[data-toggle="clickThrough"]', !!ws.clickThrough);
@@ -287,9 +310,30 @@
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
     // 鼠标移出小窗即收起：卡片太小，没有"点空白处关闭"的地方
     document.addEventListener('mouseleave', () => closeMenu());
-    m.addEventListener('click', (e) => {
-      const row = e.target && e.target.closest ? e.target.closest('.wrow') : null;
-      if (!row) return;
+    // 2026-11-16 审查修复：菜单项补键盘可达——click 与 Enter/Space 走同一逻辑。
+    /* 桥不可用时给**可见反馈**，不再静默 return（问题9）。
+       这是键盘（keydown）与鼠标（click）共用的唯一守卫 —— 不再依赖 CSS 的
+       pointer-events（那只挡鼠标）。反馈写到常驻提示行，并把这一行轻轻抖一下，
+       让"这次操作被吃掉了"有个明确的视觉证据。 */
+    const ensureBridge = (el) => {
+      if (bridge()) return true;
+      const hint = $('w-menu-hint');
+      if (hint) { hint.textContent = '菜单不可用：请重启 QQ Agent'; hint.hidden = false; }
+      try {
+        const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (!reduce && el && typeof el.animate === 'function') {
+          el.animate([
+            { transform: 'translateX(0)' },
+            { transform: 'translateX(-3px)' },
+            { transform: 'translateX(3px)' },
+            { transform: 'translateX(0)' }
+          ], { duration: 180, easing: 'ease-in-out' });
+        }
+      } catch { /* 不支持 WAAPI 时只靠提示文案 */ }
+      return false;
+    };
+    const activateRow = (row) => {
+      if (!ensureBridge(row)) return;
       const cmd = row.getAttribute('data-cmd');
       if (cmd === 'open-console') { widgetCommand('open-console'); closeMenu(); return; }
       if (cmd === 'close') { applyWidget({ enabled: false }); closeMenu(); return; }
@@ -299,6 +343,17 @@
         const cur = (t === 'alwaysOnTop' || t === 'edgeHide') ? ws[t] !== false : !!ws[t];
         applyWidget({ [t]: !cur });
       }
+    };
+    m.addEventListener('click', (e) => {
+      const row = e.target && e.target.closest ? e.target.closest('.wrow[role="menuitem"]') : null;
+      if (row) activateRow(row);
+    });
+    m.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+      const row = e.target && e.target.closest ? e.target.closest('.wrow[role="menuitem"]') : null;
+      if (!row) return;
+      e.preventDefault();
+      activateRow(row);
     });
     const opa = $('w-menu-opa');
     if (opa) {
@@ -307,10 +362,17 @@
         if (v) v.textContent = `${opa.value}%`;
       });
       // change（松手）才落盘：拖动过程中的 input 只更新数字，别每帧写配置
-      opa.addEventListener('change', () => applyWidget({ opacity: Number(opa.value) }));
+      opa.addEventListener('change', () => {
+        if (!ensureBridge(opa)) return;
+        applyWidget({ opacity: Number(opa.value) });
+      });
     }
+    // 尺寸「小 / 中 / 大」：真实可点的按钮，桥不在时同样给反馈而不是静默无功
     m.querySelectorAll('[data-size]').forEach((b) => {
-      b.addEventListener('click', () => applyWidget({ size: b.getAttribute('data-size') }));
+      b.addEventListener('click', () => {
+        if (!ensureBridge(b)) return;
+        applyWidget({ size: b.getAttribute('data-size') });
+      });
     });
   }
 

@@ -11,8 +11,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { routeThinking, escalateForTools, ROUTE_TIERS, DEFAULT_THRESHOLDS } = await import('../src/thinking-route.js');
+const {
+  routeThinking: rawRouteThinking,
+  escalateForTools,
+  ROUTE_TIERS,
+  DEFAULT_THRESHOLDS
+} = await import('../src/thinking-route.js');
 const adapters = await import('../plugins/thinking-adapters/index.js');
+
+// 2026-11-15 起产品默认关闭分流。判定逻辑的既有用例显式打开总开关；
+// 验证「默认关闭」本身的用例直接调 rawRouteThinking。
+const routeThinking = (args = {}) => rawRouteThinking({ enabled: true, ...args });
 
 const SN = { baseUrl: 'https://token.sensenova.cn/v1', model: 'sensenova-6.8-flash-lite' };
 const DS = { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash' };
@@ -34,7 +43,7 @@ const at = (o = {}) => ({ atMe: true, tierInfo: { tier: 1, count: 20, reason: '�
 
 test('拍一拍 → off（20/121 的历史会话，reasoning 白烧最多的一档）', () => {
   const r = routeThinking({
-    triggerEntries: [entry('[拍一拍] 某某(QQ:2674128) 拍了拍我', { isPoke: true, pokeSelf: true })],
+    triggerEntries: [entry('[拍一拍] 某某(QQ:1000000) 拍了拍我', { isPoke: true, pokeSelf: true })],
     tierInfo: { tier: 1, count: 20, reason: '拍了拍我' }
   });
   assert.equal(r.tier, ROUTE_TIERS.OFF);
@@ -51,7 +60,7 @@ test('纯表情 / 空文本 → off', () => {
 test('极短附和 → off；带 @ 或问号就不是附和', () => {
   assert.equal(routeThinking({ triggerEntries: [entry('666')] }).tier, ROUTE_TIERS.OFF);
   assert.equal(routeThinking({ triggerEntries: [entry('妈的')] }).tier, ROUTE_TIERS.OFF);
-  assert.equal(routeThinking(at({ triggerEntries: [entry('@测试用户(QQ:10001) 嗯')] })).tier,
+  assert.equal(routeThinking(at({ triggerEntries: [entry('@测试用户(QQ:10000) 嗯')] })).tier,
     ROUTE_TIERS.LIGHT);
   assert.equal(routeThinking({ triggerEntries: [entry('在吗？')] }).tier, ROUTE_TIERS.LIGHT);
 });
@@ -63,11 +72,11 @@ test('纯图片不判 off：看图要先决定要不要调取图工具', () => {
 });
 
 test('常规 @ / 单图 / 引用 / 主动机会 / 私聊 → light', () => {
-  assert.equal(routeThinking(at({ triggerEntries: [entry('@测试用户(QQ:10001) 锐评梁文峰')] })).tier,
+  assert.equal(routeThinking(at({ triggerEntries: [entry('@测试用户(QQ:10000) 锐评梁文峰')] })).tier,
     ROUTE_TIERS.LIGHT);
   assert.equal(routeThinking({ proactive: true, triggerEntries: [] }).tier, ROUTE_TIERS.LIGHT);
   assert.equal(routeThinking({ kind: 'private', triggerEntries: [entry('嗯')] }).tier, ROUTE_TIERS.LIGHT);
-  const quoted = routeThinking({ triggerEntries: [entry('[引用 测试用户(QQ:10001)：那你娶他吧]@测试用户(QQ:10001) 那你该叫我妈了')] });
+  const quoted = routeThinking({ triggerEntries: [entry('[引用 测试用户(QQ:10000)：那你娶他吧]@测试用户(QQ:10000) 那你该叫我妈了')] });
   assert.equal(quoted.tier, ROUTE_TIERS.LIGHT);
 });
 
@@ -86,15 +95,26 @@ test('复杂信号 → full（保持原行为，不冒降质风险）', () => {
 
 test('引用块里嵌套的 [AI] 不会让被引正文泄漏进实质文本', () => {
   const r = routeThinking({
-    triggerEntries: [entry('[引用 测试用户(QQ:10001)：那你娶他吧]@测试用户(QQ:10001) 嗯')]
+    triggerEntries: [entry('[引用 测试用户(QQ:10000)：那你娶他吧]@测试用户(QQ:10000) 嗯')]
   });
   assert.ok(!r.signals.plain.includes('那你娶他吧'));
   assert.equal(r.signals.plain.length <= DEFAULT_THRESHOLDS.shortChatter, true);
   // 但带 @ 仍不该判 off（明确召唤）
   assert.equal(routeThinking({
     atMe: true,
-    triggerEntries: [entry('[引用 测试用户(QQ:10001)：那你娶他吧]@测试用户(QQ:10001) 嗯')]
+    triggerEntries: [entry('[引用 测试用户(QQ:10000)：那你娶他吧]@测试用户(QQ:10000) 嗯')]
   }).tier, ROUTE_TIERS.LIGHT);
+});
+
+test('默认关闭：不传 enabled 不分流，显式 true 才启用', () => {
+  const args = { triggerEntries: [entry('帮我查一下这周哪个模型最便宜')] };
+  const off = rawRouteThinking(args);
+  assert.equal(off.tier, ROUTE_TIERS.PASSTHROUGH);
+  assert.equal(off.routed, false);
+  assert.match(off.reason, /分流开关关闭/);
+  const on = rawRouteThinking({ ...args, enabled: true });
+  assert.equal(on.tier, ROUTE_TIERS.FULL);
+  assert.equal(on.routed, true);
 });
 
 test('主设置显式 off/on、总开关 false → passthrough（一键回滚）', () => {

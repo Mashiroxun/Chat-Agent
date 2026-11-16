@@ -1,6 +1,31 @@
 // 〔页签切换 / 启动〕——M9 拆分第 12 段（末段）
 'use strict';
 
+/* ── 全局防连点（2026-11-16 审查修复，问题7）──────────────────────────────
+   2026-10-23 加的那道 400ms 全局点击守卫原本装在 bindSettingsEvents() 里，
+   而它只有 renderSettings() 才会被调用 —— 启动固定进「会话」页，用户从
+   自检 / 连接页直接打开「添加提供商」弹窗时那道守卫**根本不存在**，
+   连点「确定」会发出两次 POST /api/providers，创建出两条重复 provider。
+   现在挪到启动期**无条件**安装一次（本文件最后加载、解析即执行，早于任何点击）。
+   ⚠️ 幂等：window.__clickGuard 标记保证只装一次；同一按钮 400ms 内的第二次
+      点击直接吞掉（捕获阶段，先于业务处理器）。项目里没有依赖双击的交互。
+   ⚠️ 这只是兜底的第一层：创建型按钮自己还要 disabled + aria-busy
+      （见 08-modals.js 的 #pa-confirm），两层一起才安全。 */
+if (!window.__clickGuard) {
+  window.__clickGuard = true;
+  document.addEventListener('click', (e) => {
+    const b = e.target && e.target.closest ? e.target.closest('button') : null;
+    if (!b) return;
+    const now = Date.now();
+    if (b.__lastClick && now - b.__lastClick < 400) {
+      e.stopPropagation();
+      e.preventDefault();
+    } else {
+      b.__lastClick = now;
+    }
+  }, true);
+}
+
 /** R90：一次性清掉 R51「自由拖动排布」的遗留。
  *  12-layout.js 已整文件删除，但用户机器上可能还存着：
  *   ① config.ui.layout（列宽 / 页签顺序 / 浮层位置）

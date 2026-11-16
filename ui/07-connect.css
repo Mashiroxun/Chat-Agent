@@ -821,6 +821,34 @@ input.mig-input:focus-visible,
 .mkw-text p + p { margin-top: 3px; }
 .mkw-text b { color: var(--fg); }
 
+/* ── 人设市场提示条（2026-11-16 审查修复：风格统一）────────────────
+   此前 .pm-hint 在 CSS 里零定义 —— 人设市场标题栏下方那条「装上即换性格」
+   是裸 div（无边框/底色/内边距/圆角），与技能/插件市场的 .mk-warn 提示条
+   割裂。这里按同一套骨架补齐：相同的 padding / border-left-width / radius /
+   margin-bottom / 字号 / 行高 / 字色层级，视觉语言一致。
+   配色差异是刻意的：.mk-warn 是「装插件会涨 token」的警告，用暖色；
+   本条是「人设只改说话方式、不改能力」的说明，用中性信息色（line-str +
+   card-hi），避免把说明误读成警告。 */
+.pm-hint {
+  display: flex; align-items: flex-start;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line-str);
+  border-left-width: 4px;
+  border-radius: var(--r);
+  background: color-mix(in srgb, var(--card-hi) 55%, transparent);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.pm-hint b { color: var(--fg); }
+
+/* 「↩ 还原试用」与「↻ 刷新」同在头部操作区：用左箭头色相把它和常规刷新区分开，
+   让用户一眼认出这是「回退」而非「重新加载」。此前 .pm-undo 零定义，
+   两个按钮长得一模一样。 */
+.pm-undo { color: var(--accent-hi); border-color: color-mix(in srgb, var(--accent-hi) 45%, var(--line-str)); }
+.pm-undo:hover { color: var(--accent-hi); border-color: var(--accent-hi); background: color-mix(in srgb, var(--accent-hi) 10%, transparent); }
+
 /* ── 设置页顶部全局提示的「知道了 / 展开」（2026-10-18）──────────────
    长提示默认完整显示（新用户需要），点「知道了」后收成一行紧凑提示
    （.set-hint--mini），选择记在 localStorage，随时可点「展开」恢复。 */
@@ -884,13 +912,43 @@ input.mig-input:focus-visible,
 /* ── 就绪指示器：未就绪项补缩写（2026-10-18）──────────────────────────
    全绿时仍是四个点（最简洁）；某一项没就绪时，点旁边补一个红色缩写
    （⚠QQ / ⚠SL / ⚠OB / ⚠配置），OneBot 连接中是橙色 "OB…"。
-   缩写只占 1~2 个字，四项全异常也不会撑破账号卡；完整说明在 title 里。 */
+   缩写只占 1~2 个字，四项全异常也不会撑破账号卡；完整说明在 title 里。
+
+   ── 2026-11-16：可点性与热区（问题 5）────────────────────────────────
+   症状：.rdot-item 带 role=button + tabindex=0（index.html 里就是按钮语义），
+   但自己**没有任何 hover/active/focus 反馈**；反倒是整条 .readiness-dots
+   在鼠标移入时变亮 —— 而点击只绑在 .rdot-item 上。
+   于是"点圆点之间的空隙 → 胶囊亮了却没跳转"，反馈给错了对象。
+   修法：容器那条 hover 已删（见 02-shell.css 的注释），反馈与热区全部下沉到这里。
+
+   热区：圆点本体只有 8~10px，远低于 24px 的可点最小尺寸。
+   用透明 ::before 扩出命中区（伪元素参与命中测试，透明也照样吃指针事件），
+   元素自身盒子不动 —— 这样 hover 底色仍紧贴圆点，不会让相邻两项的底色黏在一起。
+   ⚠️ 没扩到 ±12px（24px 目标）：.readiness-dots 的 gap 只有 5~9px，
+      再扩就会让相邻两项的热区互相重叠，而重叠时**后者按 DOM 顺序吃掉前者**，
+      站在左边圆点上却跳到右边那一项——比热区小更难用。取 -5/-3（裸圆点约 16×20）。 */
 .rdot-item {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   cursor: pointer;
+  position: relative;
+  border-radius: 999px;
+  transition: background-color .15s ease;
 }
+/* 把可点区域向外扩一圈（裸圆点 10×10 → 约 16×20），布局占位不变 */
+.rdot-item::before {
+  content: '';
+  position: absolute;
+  inset: -5px -3px;
+  border-radius: 999px;
+}
+/* 反馈落在真正的可点单元上：8% 淡染 → 按下 14%，比"整条胶囊变亮"诚实得多。
+   用 --fg 混色而不是写死色值：深色主题得浅色高亮、浅色主题得深色高亮，两套都对。 */
+.rdot-item:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+.rdot-item:active { background: color-mix(in srgb, var(--fg) 14%, transparent); }
+/* 键盘焦点：这里不在蓝底上（状态卡 / 侧栏），沿用全站 --accent 环即可 */
+.rdot-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .rdot-t {
   display: none;
   font-size: 11px;

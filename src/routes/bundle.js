@@ -127,7 +127,8 @@ export function bundleRoutes(deps, shared) {
           });
           return json(res, r.ok ? 200 : 400, r);
         } catch (error) {
-          return json(res, 500, { ok: false, error: `读取失败：${String(error?.message ?? error)}` });
+          // 不回显 error.message —— 它可能带出磁盘绝对路径（2026-11-16 审计修）。
+          return json(res, 500, { ok: false, error: `读取失败（${error?.name || 'Error'}）` });
         }
       }
     },

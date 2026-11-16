@@ -17,6 +17,22 @@ function endSettingsGuard() {
   }
 }
 
+// ── 自动保存的互斥状态（2026-11-16 P1 修复）─────────────────────────────
+// 原先这三个是 bindSettingsEvents 的局部闭包变量，而切分区会 renderSettings
+// → 重建表单 + 新闭包：旧 POST 在途时新闭包 saving=false 又放行一条 POST，
+// 两次响应交错写回 state.config，后到的旧响应覆盖新改动。提到模块级后
+// 所有分区共用同一把锁、同一个防抖定时器、同一份失败计数。
+let saveTimer = null;
+let saving = false;
+// 连续自动保存失败计数（2026-10-17 N4）：成功清零，失败递增。
+// 用于"每连续失败 3 次弹一次提示"的节流，避免后端挂掉时弹窗轰炸。
+let saveFailures = 0;
+
+// 一键更新轮询的可取消状态（2026-11-16 P2 修复；同样必须是模块级——
+// 轮询进行中若发生 renderSettings，闭包会重建，取消标志必须跨闭包存活）。
+let qaUpdateCancel = false;
+let qaUpdateWake = null;
+
 // ── 离开设置页前的"挂起保存"清单 ───────────────────────────────────────
 // bindSettingsEvents 每次重渲染都重建闭包，外部（switchTab）拿不到最新的
 // flushSave —— 用模块级数组中转：渲染时登记、切页时逐个调用、
@@ -198,6 +214,42 @@ function bindUiCustomEvents() {
     const on = !!$('#cfg-widget-enabled')?.checked;
     opts.style.opacity = on ? '' : '.45';
     opts.style.pointerEvents = on ? '' : 'none';
+  });
+
+  // ── 控制台令牌（P1，2026-11-16）──────────────────────────────────────
+  $('#cfg-console-token-copy')?.addEventListener('click', async () => {
+    const input = $('#cfg-console-token');
+    const value = input?.value || '';
+    if (!value) return;
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(value);
+      else {
+        input.select();
+        document.execCommand('copy');
+      }
+      qaAlert('控制台令牌已复制到剪贴板。');
+    } catch (e) {
+      qaAlert(`复制失败：${e?.message || e}\n可手动选中输入框里的令牌复制。`);
+    }
+  });
+
+  $('#cfg-console-token-rotate')?.addEventListener('click', async () => {
+    const btn = $('#cfg-console-token-rotate');
+    if (btn) { btn.disabled = true; btn.textContent = '生成中…'; }
+    try {
+      const r = await api('/api/console-token/regenerate', { method: 'POST' });
+      const token = String(r?.token || '');
+      if (!token) throw new Error('后端没有返回新令牌');
+      const input = $('#cfg-console-token');
+      if (input) input.value = token;
+      state.config = state.config || {};
+      state.config.server = { ...(state.config.server || {}), token };
+      qaAlert('控制台令牌已重新生成，旧令牌立即失效。\n新令牌已写入 <数据目录>/console-token，并显示在上方输入框。');
+    } catch (e) {
+      qaAlert(`重新生成失败：${e?.message || e}`);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '重新生成'; }
+    }
   });
 
   /* ── 背景不透明度滑条：拖动时即时落盘 + 即时同步小窗（R140）────────────────
@@ -409,6 +461,12 @@ function bindUiCustomEvents() {
   // 外观恢复默认：清掉所有个性化字段并立即落盘 + 重渲染（让控件回到默认位）
   $('#cfg-uicustom-reset')?.addEventListener('click', async () => {
     const hint = $('#cfg-uicustom-hint');
+    // P2：恢复默认外观会清空全部个性化（含背景图）且不可撤销 → danger 确认
+    if (!await qaConfirm({
+      danger: true,
+      confirmText: '恢复默认',
+      message: '确定恢复默认外观？\n将清空你设置的所有个性化内容，包括强调色、界面底色、背景图、边框透明度等，且无法用「撤销」找回。'
+    })) return;
     try {
       if (window.qqaDesktop && typeof window.qqaDesktop.clearBgImage === 'function') {
         await window.qqaDesktop.clearBgImage();
@@ -445,12 +503,9 @@ function bindSettingsEvents(c) {
      原先还有一条"流动的浅黄色渐变带"（.dirty-glow）作为变动提示，已废弃：
      它是 rgba(255,213,79,.10~.22) 的半透明渐变 + background-position 无限动画，
      在透明分层窗口上会被逐帧 alpha 混合成一条黄色残影（用户反馈的"黄色的一坨"）。
-     style.css 里 .dirty-glow 样式已置空，这里也不再收集 dirtyEls。 */
-  let saveTimer = null;
-  let saving = false;
-  // 连续自动保存失败计数（2026-10-17 N4）：成功清零，失败递增。
-  // 用于"每连续失败 3 次弹一次提示"的节流，避免后端挂掉时弹窗轰炸。
-  let saveFailures = 0;
+     style.css 里 .dirty-glow 样式已置空，这里也不再收集 dirtyEls。
+     ⚠️ 保存互斥状态（saveTimer / saving / saveFailures）在文件顶部模块作用域，
+        不要在这里重建 —— 切分区时旧 POST 还在途，新闭包必须是同一把锁。 */
   // 撤销快照：进入本设置区块时拍一份配置；有改动后显示「撤销」按钮，
   // 点击 = 整份配置回滚到快照（设置是即时生效的，回滚与改动之间发生的一切不负责）。
   const sectionSnapshot = structuredClone(state.config || {});
@@ -577,20 +632,12 @@ function bindSettingsEvents(c) {
   // 背景：多个弹窗的保存/添加按钮没有 disabled 防护，连点会并发两次请求 ——
   // 配置类补丁幂等无妨，但「添加提供商 / 添加搜索服务」这类创建型端点可能落两条重复记录。
   // 用捕获阶段统一拦截，比逐处改 6 个弹窗可靠；项目里没有依赖双击的交互。
-  if (!window.__clickGuard) {
-    window.__clickGuard = true;
-    document.addEventListener('click', (e) => {
-      const b = e.target && e.target.closest ? e.target.closest('button') : null;
-      if (!b) return;
-      const now = Date.now();
-      if (b.__lastClick && now - b.__lastClick < 400) {
-        e.stopPropagation();
-        e.preventDefault();
-      } else {
-        b.__lastClick = now;
-      }
-    }, true);
-  }
+  // ⚠️ 2026-11-16 审查修复（问题7）：**这段实现已搬到 11-init.js 的启动期常驻安装** ——
+  //    它原先只在这里装，而 bindSettingsEvents() 只有 renderSettings() 才调，
+  //    用户从自检 / 连接页直接开「添加提供商」弹窗时守卫根本不存在。
+  //    此处不再重复安装（那里的 window.__clickGuard 标记已经置真）。
+  //    创建型按钮本身也补了 disabled + aria-busy（见 08-modals.js 的 #pa-confirm），
+  //    不依赖时间窗。
   const form = $('#settings-form');
   if (form && !form.__settingsBound) {
     form.__settingsBound = {
@@ -764,18 +811,29 @@ function bindSettingsEvents(c) {
   //    的话，flushSave 的兜底也轮不到）。批量开关影响面最大，必须当场落盘。
   //    saveConfig 的 tools 分支本来就是从 state.config.tools 读（08:2422 附近），
   //    所以这里只需要把 flush 补上，渲染顺序不用动。
+  // P2：批量操作影响面最大，做完在按钮下方写一行可见结果（renderSettings 会重建
+  // DOM，所以 hint 必须在 renderSettings 之后写，否则被模板覆盖）。
+  const setToolsHint = (text) => { const el = $('#tools-action-hint'); if (el) el.textContent = text; };
   $('#tools-enable-all')?.addEventListener('click', () => {
     state.config.tools = state.config.tools || {};
     state.config.tools.enabled = true;
     state.config.tools.overrides = {};
     state.config.tools.categories = {};
     renderSettings();
+    setToolsHint('已启用全部工具，机器人可以使用所有能力');
     try { flushSave(); } catch { /* 保存失败由 doSave 内部的重试与提示接管 */ }
   });
-  $('#tools-disable-all')?.addEventListener('click', () => {
+  $('#tools-disable-all')?.addEventListener('click', async () => {
+    // P2：一键禁用全部工具影响面最大 → danger 确认
+    if (!await qaConfirm({
+      danger: true,
+      confirmText: '全部禁用',
+      message: '确定禁用全部工具？\n机器人将停止使用全部能力（只看得到消息，不能执行任何操作），随时可以在这里重新启用。'
+    })) return;
     state.config.tools = state.config.tools || {};
     state.config.tools.enabled = false;
     renderSettings();
+    setToolsHint('已禁用全部工具，机器人当前不会使用任何能力');
     try { flushSave(); } catch { /* 同上 */ }
   });
   $('#tools-security')?.addEventListener('click', () => {
@@ -783,7 +841,13 @@ function bindSettingsEvents(c) {
     // （见 09-community.js 的 openSecurityModal）。
     if (typeof openSecurityModal === 'function') openSecurityModal();
   });
-  $('#tools-reset')?.addEventListener('click', () => {
+  $('#tools-reset')?.addEventListener('click', async () => {
+    // P2：恢复默认会覆盖用户自定义的开关 → danger 确认
+    if (!await qaConfirm({
+      danger: true,
+      confirmText: '恢复默认',
+      message: '确定恢复默认工具配置？\n所有工具与分类开关会回到默认状态，你自定义的开关设置将被覆盖。'
+    })) return;
     // 恢复默认：分类开关回到完整默认集（核心 6 类 + media/knowledge/utility 全开），
     // 而不是写空对象 {} —— 旧写法会清掉用户显式关闭过的分类、且漏掉 utility 键。
     state.config.tools = {
@@ -792,6 +856,7 @@ function bindSettingsEvents(c) {
       categories: { messaging: true, sticker: true, query: true, memory: true, web: true, system: true, media: true, knowledge: true, utility: true }
     };
     renderSettings();
+    setToolsHint('已恢复默认工具配置（全部能力开启）');
     try { flushSave(); } catch { /* 同上 */ }
   });
 
@@ -845,10 +910,12 @@ function bindSettingsEvents(c) {
   $('#open-add-search-provider-btn')?.addEventListener('click', () => openAddSearchProviderModal());
 
   $('#test-search-provider-btn')?.addEventListener('click', async () => {
+    const btn = $('#test-search-provider-btn');
     const hint = $('#search-provider-action-hint');
     const sel = $('#cfg-searchprovider');
     const v = sel?.value || '';
     if (!v.startsWith('custom:')) { if (hint) hint.textContent = '请先选择一个自定义搜索服务'; return; }
+    qaBtnBusy(btn, true);   // P2：立即给「测试中」视觉反馈，hint 只承载结果文本
     if (hint) hint.textContent = '测试中…';
     try {
       const r = await api('/api/search-providers/test', {
@@ -863,6 +930,8 @@ function bindSettingsEvents(c) {
       }
     } catch (e) {
       if (hint) hint.textContent = `测试失败：${e.message}`;
+    } finally {
+      qaBtnBusy(btn, false);
     }
   });
 
@@ -956,7 +1025,9 @@ function bindSettingsEvents(c) {
   // ── 远程价格表：状态展示 + 立即拉取 ──
   renderPriceFeedStatus();
   $('#price-feed-refresh-btn')?.addEventListener('click', async () => {
+    const btn = $('#price-feed-refresh-btn');
     const statusEl = $('#price-feed-status');
+    qaBtnBusy(btn, true);   // P2：立即反馈「拉取中」，状态行仍只承载结果文本
     if (statusEl) statusEl.textContent = '正在拉取官网价格表…';
     try {
       const r = await api('/api/model-prices/refresh', { method: 'POST', body: '{}' });
@@ -965,6 +1036,8 @@ function bindSettingsEvents(c) {
       refreshModelPriceCard();   // 价格可能变了，当前模型卡片跟着刷
     } catch (e) {
       if (statusEl) statusEl.textContent = `拉取失败：${e.message}`;
+    } finally {
+      qaBtnBusy(btn, false);
     }
   });
 
@@ -1349,9 +1422,31 @@ function bindSettingsEvents(c) {
   // （健康卡片的 test-api-btn 与「模型配置」弹窗里的测试按钮做的是同一件事）
   async function runConnectivityTest(btn, out, idleLabel) {
     if (!btn) return;
-    btn.disabled = true;
-    btn.textContent = '测试中…';
+    // 加载态走统一 helper（00-core.js 的 qaBtnBusy）：只加 spinner + .is-loading，
+    // **不改文案** —— 旧写法把文字换成「测试中…」再换回来，`.btn` 是 nowrap 自适应宽，
+    // 换字瞬间按钮与同行控件会横向跳一下。idleLabel 现在用不到了，但保留在签名里：
+    // 两个调用点仍在传它，删参数会连带改调用方。
+    qaBtnBusy(btn, true);
     if (out) out.textContent = '';
+    // 结果行着色 + 失败给出口（2026-11-16 审查修复，问题8）：
+    // 此前成功 / 失败都只是往 .muted 灰字里拼文案，扫一眼分不出性质，
+    // 失败也没有下一步。成功走 --green、失败走 --red，失败时把
+    // 「去配置模型」入口显出来（见 05-memory-settings.js 的 #test-api-fix）。
+    // ⚠️ 只设内联 color + 已有语义类，不新增任何 CSS 规则。
+    const setOut = (text, tone) => {
+      if (!out) return;
+      out.textContent = text;
+      out.classList.remove('muted');
+      out.classList.toggle('ok', tone === 'ok');
+      out.classList.toggle('err', tone === 'err');
+      out.style.color = tone === 'ok' ? 'var(--green)' : (tone === 'err' ? 'var(--red)' : '');
+    };
+    const showFix = (on) => {
+      // 入口按钮在「健康卡片」那一条里；其它入口（模型配置弹窗）没有它，静默跳过
+      const fix = out && out.parentElement ? out.parentElement.querySelector('#test-api-fix') : null;
+      if (fix) fix.classList.toggle('hidden', !on);
+    };
+    let tone = 'err';
     try {
       // 2026-09-18 模型配置改版后，设置页上只剩隐藏字段（cfg-baseurl-value），
       // 旧的 #cfg-baseurl / #cfg-apikey 输入框已搬进弹窗（mc-*）。这里按
@@ -1371,14 +1466,16 @@ function bindSettingsEvents(c) {
       // 思考方言由服务端 model.thinking-detect 能力给出，让用户提前知道这个模型
       // 会走哪套思考参数（避免"开了思考但实际没生效"的黑箱感）。
       const dialect = res.thinking?.label ? ` · 思考参数：${res.thinking.label}` : '';
-      if (out) out.textContent = res.ok
+      tone = res.ok ? 'ok' : 'err';
+      setOut(res.ok
         ? `✓ 测试通过（${res.latencyMs}ms）：${res.note || '请求成功'}${dialect}`
-        : `✗ 测试失败：${res.note || '未知错误'}`;
+        : `✗ 测试失败：${res.note || '未知错误'}`, tone);
     } catch (e) {
-      if (out) out.textContent = `测试失败：${e.message}`;
+      tone = 'err';
+      setOut(`✗ 测试失败：${e.message}`, tone);
     }
-    btn.disabled = false;
-    btn.textContent = idleLabel;
+    showFix(tone !== 'ok');
+    qaBtnBusy(btn, false);
   }
 
   // 健康卡片上的「测试一下」：此前 renderHealthCard 渲染后从未绑定事件
@@ -1602,11 +1699,24 @@ function bindSettingsEvents(c) {
   };
   // 事件委托到 #update-hint 容器上：容器本身不参与覆盖（只改它内部的文字 span），
   // 重渲染后重新绑定也只挂一次，不需要在每轮渲染里重新给按钮挂监听。
+  const cancelBtnEl = () => document.getElementById('cancel-update-btn');
+  const setCancelVisible = (on) => { const b = cancelBtnEl(); if (b) b.style.display = on ? '' : 'none'; };
   const updateHintBox = document.getElementById('update-hint');
   if (updateHintBox) {
     updateHintBox.addEventListener('click', (event) => {
       const target = event.target;
-      if (!target || target.id !== 'apply-update-btn') return;
+      if (!target) return;
+      // P2：轮询期间的「取消更新」入口 —— 置取消标志、唤醒 sleep、不再发 quit
+      if (target.id === 'cancel-update-btn') {
+        qaUpdateCancel = true;
+        if (qaUpdateWake) qaUpdateWake();
+        setCancelVisible(false);
+        showUpdateActions(true);
+        setApplyDisabled(false);
+        setHint('更新已取消，应用未关闭。可重试或改用「去下载」手动安装。');
+        return;
+      }
+      if (target.id !== 'apply-update-btn') return;
       runApplyUpdate({ applyBtn: target });
     });
   }
@@ -1648,6 +1758,19 @@ function bindSettingsEvents(c) {
   // ⚠️ setHint 是 textContent 写入（见上方的稳定结构说明），所以这里**不要**再套
   //    esc()：那会把引号之类转成实体、以字面量显示出来。
   async function runApplyUpdate({ applyBtn = null } = {}) {
+    // P2：一键更新会下载并在就绪后自动关闭应用重启，属不可逆操作 → 先 danger 确认。
+    // 取消走下面的「取消更新」按钮（轮询期间可见），确认框本身也提供反悔机会。
+    if (!await qaConfirm({
+      danger: true,
+      confirmText: '开始更新',
+      message: '确定现在更新？\n将下载最新版本、校验完成后自动关闭应用并重启以完成安装。\n过程中请勿强制关机，聊天数据不会丢失。'
+    })) return;
+    qaUpdateCancel = false;
+    // 可被取消的 sleep：取消时立即唤醒，不必干等满 1 秒才响应
+    const qaUpdateSleep = (ms) => new Promise((resolve) => {
+      const timer = setTimeout(() => { qaUpdateWake = null; resolve(); }, ms);
+      qaUpdateWake = () => { clearTimeout(timer); qaUpdateWake = null; resolve(); };
+    });
     // ⚠️ 按钮状态每次重新查节点（P3-5）：applyBtn 可能是重渲染前抓到的游离节点，
     //    写它的 disabled 用户看不见。轮询里也每轮压一次 —— 中途重渲染后按钮会变回可点。
     if (applyBtn) applyBtn.disabled = true;
@@ -1667,11 +1790,14 @@ function bindSettingsEvents(c) {
     // 轮询上限 40 分钟（全量包 147MB 慢网也要兜得住），到点放弃并把按钮还回来。
     const deadline = Date.now() + 40 * 60 * 1000;
     while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 1000));
+      if (qaUpdateCancel) return;   // P2：用户点了「取消更新」
+      await qaUpdateSleep(1000);
+      if (qaUpdateCancel) return;
       let st = null;
       try { st = await api('/api/update-apply/status', { timeoutMs: 8000 }); } catch { continue; }
       if (!st || !st.ok) continue;
       setApplyDisabled(true);   // 重渲染可能把按钮变回可点，每轮压一次
+      setCancelVisible(true);   // P2：重渲染可能重建取消按钮，每轮补一次显隐
       if (st.state === 'downloading') {
         const pct = st.total ? Math.round((st.received / st.total) * 100) : 0;
         const sizeTxt = st.total
@@ -1684,6 +1810,7 @@ function bindSettingsEvents(c) {
         // 服务端判定"已是最新"（常见于：检查更新走 version.json 缓存、apply 走
         // release API，两边版本短暂不同步）。没有这个分支 UI 会干等 40 分钟超时。
         setHint(st.message || '已是最新版本，无需更新');
+        setCancelVisible(false);
         setApplyDisabled(false);
         return;
       } else if (st.state === 'error') {
@@ -1691,9 +1818,19 @@ function bindSettingsEvents(c) {
         // 重渲染会把按钮/链接重置成隐藏，这里补一次"重新显示"——否则用户中途
         // 重渲染后既看不到重试按钮、也看不到「去下载」，只剩一行错误文字。
         showUpdateActions(true);
+        setCancelVisible(false);
         setApplyDisabled(false);
         return;
       } else if (st.state === 'ready') {
+        // P2：就绪后先给 3 秒倒计时，期间「取消更新」仍可点，点则中止退出
+        setHint('更新已就绪，3 秒后自动关闭应用并重启（点「取消更新」可中止）…');
+        await qaUpdateSleep(3000);
+        if (qaUpdateCancel) {
+          setCancelVisible(false);
+          setApplyDisabled(false);
+          setHint('更新已取消，应用未关闭。可重试或改用「去下载」手动安装。');
+          return;
+        }
         setHint(`更新已就绪（v${st.latest}），正在退出应用 —— 助手进程稍后会自动重启新版…`);
         try {
           const q = await api('/api/app/quit', { method: 'POST', timeoutMs: 8000, keepalive: true });
@@ -1704,6 +1841,7 @@ function bindSettingsEvents(c) {
     }
     setHint('更新超时（40 分钟未完成），请重试或改用「去下载」手动安装');
     showUpdateActions(true);
+    setCancelVisible(false);
     setApplyDisabled(false);
   }
 
@@ -1886,6 +2024,9 @@ function bindSettingsEvents(c) {
           : (r.ok ? '已启动 —— QQ 不会自动弹窗，到任务栏/托盘把窗口调出来登录' : `启动失败：${r.error}`);
       } catch (e) {
         if (hint) hint.textContent = `启动失败：${e.message}`;
+      } finally {
+        // P2：qbPaint 只改 display 不碰 disabled，这里不复位按钮会永久灰掉
+        btn.disabled = false;
       }
       qbRefresh();
     });

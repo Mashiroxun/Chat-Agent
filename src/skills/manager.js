@@ -78,6 +78,17 @@ function stablePrefixViolation(snap, messages) {
   return null;
 }
 
+/** 把稳定区还原到快照（撤销违规钩子对本轮已有字节的改写）。
+ *  只动 messages[0]/[1].content，不碰钩子追加的新消息 —— 那些是合法形态，
+ *  保留它们不会击穿缓存稳定区，也避免误伤同一轮里其它钩子的合法注入。 */
+function restoreStablePrefix(snap, messages) {
+  if (!snap || !Array.isArray(messages)) return;
+  try {
+    if (snap.sys !== null && messages[0]?.role === 'system') messages[0].content = snap.sys;
+    if (snap.firstUser !== null && messages[1]?.role === 'user') messages[1].content = snap.firstUser;
+  } catch { /* ignore */ }
+}
+
 /**
  * 天生允许**多个提供者**的能力。
  *
@@ -131,6 +142,33 @@ export class SkillManager {
     // 开发模式每次保存文件都会重载，Skill 在 activate 里建立的定时器/订阅
     // 就永久泄漏（累积幽灵行为：重复推送、重复发言、内存增长）。
     const prev = this.registry.get(id);
+
+    // 同名 id 冲突 = 真正拦截（安全审查项）：以前这里只 #warn 后照常覆盖，
+    // 于是一个第三方扩展只要把 manifest.id 写成别人的 id，就能静默顶替对方的实现。
+    // 现在拒绝覆盖、保留原技能并返回可读错误。只有两类"合法替换"放行：
+    //   ① 同一 relDir 的重复注册 = 正常热重载（开发期保存重放、内置模块每次重扫
+    //      都会重新登记；harness/index.js 没有 replace 标志，靠 relDir 区分）；
+    //   ② 内置模块（kind='core'）顶掉遗留的同名扩展副本 = 内置化迁移路径
+    //      （plugins/ 下的旧副本本就该被 src/harness/ 的新实现取代，拒绝等于让旧副本继续生效）。
+    // 其余一律视为冲突：扩展顶替内置模块、两个不同目录的扩展撞 id、两个内置模块撞 id。
+    if (prev) {
+      const prevCore = prev.kind === 'core' || prev.manifest?.kind === 'core';
+      const nextCore = skill?.kind === 'core' || skill?.manifest?.kind === 'core';
+      const prevDir = String(prev.relDir || '');
+      const nextDir = String(skill?.relDir || '');
+      const sameDir = !!prevDir && !!nextDir && prevDir === nextDir;
+      const allowedReplace = sameDir || (nextCore && !prevCore);
+      if (!allowedReplace) {
+        let how;
+        if (prevCore && !nextCore) how = '扩展试图顶替内置模块';
+        else if (prevCore && nextCore) how = '两个内置模块';
+        else how = `两个不同目录的扩展（${prevDir || '?'} → ${nextDir || '?'}）`;
+        const error = `技能 id「${id}」冲突：${how}用了同一个 id，已拒绝覆盖，保留原技能`;
+        this.#warn(id, error);
+        return { ok: false, id, error };
+      }
+    }
+
     // 同名覆盖必须留痕（2026-10-28 加）。
     // 真实事故：self-doctor / self-fix / extension-forge / dev-orders 内置化搬到
     // src/harness/ 之后，plugins/ 下的旧副本一直留着。启动顺序是
@@ -516,22 +554,32 @@ export class SkillManager {
    * 之后的全部前缀缓存击穿（实测一次 ≈5k tok 全价，且每轮重复付）。
    * 以前注入位置全靠插件自觉（mem-layered/knowledge-memes 做对了），第三方
    * 插件写错位置时没有任何提示，群友只会看到"装了就命中率暴跌"。现在逐个
-   * 钩子检测并点名 —— 只警告不拦截（警告说明问题，拦截可能让插件功能静默失效）。
+   * 钩子检测：检出注入不再只是警告，而是真正拦截 —— 撤销该钩子对稳定区的改写、
+   * 丢弃其返回值、并把该 Skill 标记为加载失败（isActive 立即为 false，后续轮次
+   * 不再执行），直到下次重扫加载了修好的版本才恢复。
    */
   async runHook(name, context = {}) {
     const results = [];
-    const guard = name === 'before-llm-messages' && Array.isArray(context?.messages)
-      ? stablePrefixSnapshot(context.messages) : null;
+    const guardActive = name === 'before-llm-messages' && Array.isArray(context?.messages);
     for (const skill of this.registry.list()) {
       const fn = skill.hooks?.[name];
       if (typeof fn !== 'function') continue;
       const st = this.isActive(skill.manifest.id, context);
       if (!st.active) continue;
+      // 每个钩子前单独取快照：只撤销**本钩子**的违规改写，保留此前钩子的合法注入。
+      const before = guardActive ? stablePrefixSnapshot(context.messages) : null;
       try {
         const out = await this.#withTimeout(fn(context, { skillId: skill.manifest.id }), skill.manifest.id);
-        if (guard) {
-          const v = stablePrefixViolation(guard, context.messages);
-          if (v) this.#warn(skill.manifest.id, `钩子${v} —— 击穿前缀缓存稳定区（注入应追加到消息末尾，不要插在中间或改写开头）`, null);
+        if (before) {
+          const v = stablePrefixViolation(before, context.messages);
+          if (v) {
+            restoreStablePrefix(before, context.messages);
+            const reason = `钩子${v}：改写/删除了前缀缓存稳定区，已拒绝其注入并停用该 Skill`
+              + `（合法注入应追加到消息末尾，不要改写开头）`;
+            skill.loadError = reason;   // 立即失效：isLoaded=false / isActive=false
+            this.#warn(skill.manifest.id, reason, null);
+            continue;                   // 不采纳该钩子的返回值
+          }
         }
         if (out !== undefined) results.push({ skillId: skill.manifest.id, value: out });
       } catch (error) {
@@ -642,7 +690,7 @@ export class SkillManager {
   }
 
   #warn(id, message, error) {
-    // error 可空：护栏一类的"只警告不拦截"场景没有异常对象可附，
+    // error 可空：护栏检出类场景没有异常对象可附（拦截动作本身在调用处完成），
     // 早先直接传 null 会让日志尾缀一个裸 "：null"（2026-10-19 修）。
     const detail = error?.message ?? error;
     const text = detail == null ? `[skill:${id}] ${message}` : `[skill:${id}] ${message}：${detail}`;

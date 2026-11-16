@@ -383,6 +383,7 @@ function bindMarketShell(kind) {
       const inp = root.querySelector(`#mk-q-${kind}`);
       if (inp) inp.value = '';
       clr.hidden = true;
+      clearTimeout(root.__mkQTimer);   // 取消在途防抖，避免清空后又被旧 timer 重画
       renderMarketList(kind);
       return;
     }
@@ -408,13 +409,17 @@ function bindMarketShell(kind) {
     }
   });
 
-  // 搜索：输入即筛（客户端过滤，无需防抖；126 条量级）
+  // 搜索：输入即筛（客户端过滤）。
+  // 2026-11-16 审查修复：加 140ms 尾随防抖 —— 市场条目实测可到三四百条，
+  // renderMarketList 是 box.innerHTML = list.map(...) 全量重建，连续键入时
+  // 每次按键都重排数百张卡。清空按钮（×）的显隐保持即时，不进防抖。
   root.addEventListener('input', (e) => {
     if (e.target?.id !== `mk-q-${kind}`) return;
     marketState[kind].q = e.target.value;
     const clr = root.querySelector(`[data-mk-qclear="${kind}"]`);
     if (clr) clr.hidden = !e.target.value;
-    renderMarketList(kind);
+    clearTimeout(root.__mkQTimer);   // 与「清空」按钮共用同一个 timer 句柄
+    root.__mkQTimer = setTimeout(() => renderMarketList(kind), 140);
   });
 }
 

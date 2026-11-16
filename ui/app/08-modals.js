@@ -69,6 +69,11 @@ function unlockBodyScroll(overlay) {
   } else if (!overlay) {
     // 无 overlay 参数 = 强制全量解锁（异常兜底）
     __modalScrollLocks = 0;
+  } else {
+    // 该 overlay 已解锁却再次走到这里（叠层弹窗 × / 遮罩 → closeModelModal
+    // 与 09-dialogs 的 qa-close → done() 两条路径重复关同一张确认框）：
+    // 绝不能再次递减全局计数，否则底层弹窗还开着就把背景滚动锁解掉了（P2）。
+    return;
   }
   if (__modalScrollLocks > 0) __modalScrollLocks -= 1;
   if (__modalScrollLocks === 0) {
@@ -93,8 +98,11 @@ let __trapInstalled = false;
 // 命令会被 Chromium 静默吞掉（无 paste 事件、无反馈）—— 2026-10-18 修
 // 「人设界面 Ctrl+V 时灵时不灵」：Tab 循环与 focusin 兜底都不该把焦点
 // 往只读框上拽。
+// 2026-11-16：补上 iframe —— 插件面板弹层（.plugin-panel-overlay）的正身就是
+// 一个 iframe；不给它一个位置的话，焦点陷阱会把 Tab 永远锁在右上角那颗 ✕ 上，
+// 键盘用户再也进不去插件页内容（陷阱把"可达"变成了"不可达"）。
 const __FOCUSABLE = 'a[href], button:not([disabled]), input:not([type=hidden]):not([readonly]):not([disabled]),' +
-  ' select:not([disabled]), textarea:not([readonly]):not([disabled]), [tabindex]:not([tabindex="-1"])';
+  ' select:not([disabled]), textarea:not([readonly]):not([disabled]), iframe, [tabindex]:not([tabindex="-1"])';
 
 // 「可编辑」焦点目标：接受 Ctrl+V/Ctrl+C/Ctrl+X/Ctrl+A 等原生编辑命令的控件。
 // 2026-10-18 修「Ctrl+V 时灵时不灵」一族问题的统一口径 —— 焦点停在 readonly
@@ -129,10 +137,48 @@ function focusFirstEditableAfter(anchor) {
   return next || null;
 }
 
-/** 当前最上层的弹窗遮罩（按 DOM 顺序取最后一个「未在退场」的）。 */
-function __topModalOverlay() {
-  const all = document.querySelectorAll('.model-modal-overlay:not(.closing)');
-  return all.length ? all[all.length - 1] : null;
+/* ⚠️ 2026-11-16 审查修复（**本轮最重要的系统性根因**）──
+   此前 `__topModalOverlay()` 只查 `.model-modal-overlay`，而 `registerFocusTrap()`
+   登记进 `__focusTraps` 的东西**全文件没有任何地方读过**。于是 4 处手搓
+   `.modal-overlay`（白名单选择器 / 页头「?」/ 技能设置 / 群发）即使调了
+   registerFocusTrap 也完全没有焦点管理：打开弹窗后连按 Tab，焦点照样跑到背后
+   顶栏的最小化 / 关闭按钮上，回车可能误触。群发弹窗连登记都没有。
+   ⇒ 现在把「登记表」与「.model-modal-overlay 查询」合并成**单一真相来源**。 */
+
+/** 遮罩是否还"活着"（仍在文档里、没在淡出、且真的占位）。
+ *  ⚠️ 不能用 `offsetParent !== null` 判可见：遮罩是 position:fixed，其
+ *     offsetParent 按规范**恒为 null** —— 那样会把所有遮罩自己过滤掉。
+ *     用 getClientRects()（display:none / 无盒 时为空）。 */
+function __overlayAlive(el) {
+  if (!el || el.nodeType !== 1 || !el.isConnected) return false;
+  if (el.classList.contains('closing')) return false;   // 正在淡出退场，不该再抢焦点
+  try { return el.getClientRects().length > 0; } catch { return true; }
+}
+
+/** 当前最上层的弹窗遮罩（合并登记表与 .model-modal-overlay，取 DOM 顺序最后一个）。
+ *  @param {Element} [except] 排除某个遮罩（正在关闭的那一层不算"关掉它之后的新顶层"）。 */
+function __topModalOverlay(except) {
+  const list = [];
+  // ① 登记表 __focusTraps：顺手剔除已从文档移除的节点。
+  //    否则登记表只增不减，而且"取最后一个"会取到已经死掉的节点。
+  //    （Set 允许在 for...of 迭代中 delete 当前元素，规范保证行为确定。）
+  for (const el of __focusTraps) {
+    if (!el || !el.isConnected) { __focusTraps.delete(el); continue; }
+    if (el === except || !__overlayAlive(el)) continue;
+    list.push(el);
+  }
+  // ② 兜底查询：登记表万一被清空 / 老路径没登记，.model-modal-overlay 仍照旧生效。
+  //    **不要删掉这一层**，两层都要覆盖。
+  for (const el of document.querySelectorAll('.model-modal-overlay:not(.closing)')) {
+    if (el !== except && list.indexOf(el) < 0 && __overlayAlive(el)) list.push(el);
+  }
+  if (!list.length) return null;
+  // ③ 按 DOM 顺序取向后的那个 —— 后进 DOM 的遮罩就是视觉上最上层那个。
+  let top = list[0];
+  for (let i = 1; i < list.length; i += 1) {
+    if (top.compareDocumentPosition(list[i]) & Node.DOCUMENT_POSITION_FOLLOWING) top = list[i];
+  }
+  return top;
 }
 /** overlay 内可见且可聚焦的元素（tabindex="-1" 与隐藏节点排除）。 */
 function __focusablesIn(overlay) {
@@ -148,28 +194,33 @@ function registerFocusTrap(overlay) {
 function unregisterFocusTrap(overlay) {
   if (overlay) __focusTraps.delete(overlay);
 }
+/* 哪些元素算「弹窗遮罩」：正规外壳 .model-modal-overlay + 全项目手搓的 .modal-overlay。
+   两类的焦点管理要求完全一样，登记口径必须统一，否则就是"这处有、那处没有"。 */
+function __isOverlayNode(n) {
+  if (!n || n.nodeType !== 1 || !n.classList) return false;
+  return n.classList.contains('model-modal-overlay') || n.classList.contains('modal-overlay');
+}
 function installModalFocusTrap() {
   if (__trapInstalled) return;
   __trapInstalled = true;
 
-  /* ③ 自动登记：任何进入 DOM 的 .model-modal-overlay 都纳入陷阱约束，
+  /* ③ 自动登记：任何进入 DOM 的遮罩都纳入陷阱约束，
         不必要求创建方记得调用 registerFocusTrap。
         ⚠️ 这是"兜底中的兜底"：modelModalShell 是正规入口，但全项目存在
            （且将来可能新增）直接手搓遮罩的路径 —— 焦点陷阱属于**安全/可达性
            底线**，不该因为某条路径忘了登记就整体失效。
-        观察 body 的直接子节点增删即可（遮罩都是挂 body 下的一层）。 */
+        观察 body 的直接子节点增删即可（遮罩都是挂 body 下的一层）。
+        2026-11-16：登记范围从 .model-modal-overlay 扩到 .modal-overlay —— 手搓
+        遮罩里还有几处（如 04 的用量页「?」、06 的插件页面弹层）没显式登记，
+        自动登记是它们唯一的覆盖路径。移除时同步剔除，避免登记表无限增长。 */
   try {
     new MutationObserver((muts) => {
       for (const m of muts) {
         for (const n of m.addedNodes) {
-          if (n.nodeType === 1 && n.classList && n.classList.contains('model-modal-overlay')) {
-            __focusTraps.add(n);
-          }
+          if (__isOverlayNode(n)) __focusTraps.add(n);
         }
         for (const n of m.removedNodes) {
-          if (n.nodeType === 1 && n.classList && n.classList.contains('model-modal-overlay')) {
-            __focusTraps.delete(n);
-          }
+          if (__isOverlayNode(n)) __focusTraps.delete(n);
         }
       }
     }).observe(document.body, { childList: true });
@@ -185,11 +236,19 @@ function installModalFocusTrap() {
     if (!overlay) return;
     const items = __focusablesIn(overlay);
     const cur = document.activeElement;
-    if (!items.length) { e.preventDefault(); return; }
+    if (!items.length) {
+      // 弹窗里一个可聚焦项都没有（纯说明页）：别放焦点跑到背景去
+      e.preventDefault();
+      try { overlay.focus?.({ preventScroll: true }); } catch { /* 无 tabindex 时忽略 */ }
+      return;
+    }
     const first = items[0];
     const last = items[items.length - 1];
-    // 焦点跑到弹窗外（或落在弹窗容器自身）→ 拉回对应边界
-    if (!overlay.contains(cur)) {
+    // 焦点跑到弹窗外 —— **或停在遮罩容器自身**（手搓遮罩普遍写了
+    // `overlay.setAttribute('tabindex','-1'); overlay.focus()` 做开场聚焦，
+    // 此时 contains(cur) 为真、cur 又不是 first/last，不拦的话浏览器的默认
+    // Tab 顺序会从容器继续往**背景**里走）→ 拉回对应边界。
+    if (!overlay.contains(cur) || cur === overlay) {
       e.preventDefault();
       (e.shiftKey ? last : first).focus({ preventScroll: true });
       return;
@@ -214,6 +273,14 @@ function installModalFocusTrap() {
 // ── 模型选择/添加/删除 模态框 ──
 function closeModelModal(overlay) {
   if (!overlay) return;
+  // 幂等守卫（2026-11-16 修 P2）：同一张弹窗可能被多条路径重复关闭 ——
+  //   底层编辑弹窗点 × → requestClose → closeModelModal，它派发的 qa-close
+  //   又会触发 09-dialogs.js qaConfirm 的 done() → 再调一次 closeModelModal。
+  //   第二次进来若继续执行，unlockBodyScroll 会把全局滚动锁多减一次，
+  //   导致底层弹窗还开着、背景却能滚。标记后直接返回，保证"一张弹窗只关一次"。
+  //   可复用重开的弹窗在 modelModalShell 打开时把标记重置（见 _closingDone 赋值处）。
+  if (overlay._closingDone) return;
+  overlay._closingDone = true;
   // R73：所有关闭路径（点遮罩 / 右上角 × / Esc / 自己的按钮）都在这里汇合 ——
   //   统一派发 qa-close，让 09-dialogs.js 的 Promise 型对话框知道"我被关掉了"。
   //   此前 Esc / × / 点遮罩三条路径只移除 DOM、不通知调用方 ——
@@ -228,6 +295,12 @@ function closeModelModal(overlay) {
   }
   // 焦点陷阱：从全局登记表里摘掉（真逻辑与监听器由 installModalFocusTrap 统一持有）
   unregisterFocusTrap(overlay);
+  /* 2026-11-16：**先**挂 .closing 再还焦点。
+     否则这笔 focus() 会让 focusin 兜底立刻把焦点拽回这张正在消失的弹窗
+     （__topModalOverlay 对"还在文档里、还没 .closing"的遮罩仍算最上层）——
+     表现就是"关掉弹窗后焦点没回到那颗按钮"。.closing 是纯动画类，
+     提前到这儿挂与原来同一 tick、视觉上完全等价。 */
+  overlay.classList.add('closing');
   // ── body 滚动锁（2026-10-10 r86 修 P2）──
   // 弹窗打开时锁住背后的页面滚动，关闭时还原。
   // ⚠️ 用**计数器**而不是布尔量：弹窗会叠（模型选择 → 添加模型 → 人设选择），
@@ -254,8 +327,9 @@ function closeModelModal(overlay) {
     // back 不可用（是 body、或已随页面重渲染被移除）→ 焦点不能留在 body 上
     // （留在 body = 之后所有原生编辑命令静默失效）。落到"关掉本弹窗后的新
     // 最上层"；没有叠层则还给设置页表单第一个可编辑控件。
-    const nextTop = Array.from(document.querySelectorAll('.model-modal-overlay:not(.closing)'))
-      .filter((o) => o !== overlay).pop();
+    // 2026-11-16：改走 __topModalOverlay（含手搓 .modal-overlay），否则从模型弹窗
+    // 关掉时压在下面的手搓弹窗会被当成"没有叠层"，焦点被丢回设置页表单。
+    const nextTop = __topModalOverlay(overlay);
     if (nextTop) {
       if (!focusFirstEditableIn(nextTop)) {
         const btn = nextTop.querySelector('.model-modal-foot button:not([disabled])') || nextTop.querySelector('.model-modal-close');
@@ -266,8 +340,8 @@ function closeModelModal(overlay) {
     }
   }
   /* 平滑退场：遮罩淡出 + 面板下沉缩小，动画结束后再移除 DOM。
-     与入场 popIn 对称，避免"砰"地消失。 */
-  overlay.classList.add('closing');
+     与入场 popIn 对称，避免"砰"地消失。
+     （.closing 已在上面还焦点之前挂好，见那段注释。） */
   const modal = overlay.querySelector('.model-modal');
   let done = false;
   const finish = () => { if (!done) { done = true; overlay.remove(); } };
@@ -317,6 +391,8 @@ function modelModalShell({ head, body, foot = '', danger = false, closeOnBackdro
   // 锁住背后页面滚动（r86 修 P2），与 closeModelModal 的 unlockBodyScroll 成对
   lockBodyScroll();
   overlay._scrollLocked = true;
+  // 可复用重开的弹窗在打开时重置关闭幂等标记（closeModelModal 里 _closingDone）
+  overlay._closingDone = false;
   // ── 未保存改动守卫（2026-10-17）──
   // 群友反馈"管理员附加规则没法自动保存"：人设类弹窗是"改完点保存"的显式保存
   // 模型（不能混进表单自动保存链，原因见 06-settings-render.js saveToMap 注释），
@@ -351,7 +427,7 @@ function modelModalShell({ head, body, foot = '', danger = false, closeOnBackdro
   }
   const __isDirty = () => (typeof overlay.__dirtyGuard === 'function') ? overlay.__dirtyGuard() : __userEdited;
   const requestClose = async (force = false) => {
-    if (__closing || !overlay.isConnected) return;
+    if (__closing || !overlay.isConnected) return false;
     // 确认框的开合会把焦点带走：点遮罩触发时 activeElement 已是 body（遮罩不可
     // 聚焦，先 blur 了文本框），按 × 触发时是 × 按钮本身。「继续编辑」后焦点若
     // 落在 body / 按钮上，弹窗里随后所有 Ctrl+V 都会静默失效（没有可编辑焦点
@@ -373,12 +449,15 @@ function modelModalShell({ head, body, foot = '', danger = false, closeOnBackdro
           ? focusBack
           : (focusFirstEditableIn(overlay) || overlay.querySelector('.model-modal-close'));
         try { t?.focus({ preventScroll: true }); } catch { /* ignore */ }
-        return;
+        return false;   // 用户选「继续编辑」→ 未关闭，调用方（如跳转模型管理）据此放弃后续动作
       }
     }
     __closing = true;
     closeModelModal(overlay);
+    return true;        // 已关闭
   };
+  // 暴露给「跳转模型管理」等外部流程：复用同一套脏数据守卫，不再绕过它直接 closeModelModal
+  overlay.__requestClose = requestClose;
   // 点遮罩关闭（编辑型弹窗会显式关掉这个行为，见 closeOnBackdrop 的注释）
   if (closeOnBackdrop) {
     overlay.addEventListener('click', (e) => {
@@ -487,18 +566,30 @@ let pendingOpenModelManage = false;
  *    新的在下面" —— 核实过：样式表与 JS 里都没有这条覆盖链，层号始终相同。
  *    真实理由是上面的同层重叠，不必据此推断层叠关系。
  */
-function scheduleOpenModelManage() {
-  pendingOpenModelManage = true;
+async function scheduleOpenModelManage() {
   const opens = [...document.querySelectorAll('.model-modal-overlay:not(.closing)')];
   const top = opens[opens.length - 1];
-  if (top) closeModelModal(top);
+  let closed = false;
+  if (top) {
+    // 跳转前走与 × / Esc / 遮罩完全相同的脏数据守卫（P2）：
+    // 此前这里直接 closeModelModal(top) 绕过 requestClose 的 __dirtyGuard，
+    // 用户在弹窗里未保存的 Base URL / Key 被静默丢弃。
+    if (typeof top.__requestClose === 'function') {
+      closed = await top.__requestClose();   // false = 用户选「继续编辑」→ 放弃跳转
+      if (!closed) return;
+    } else {
+      closeModelModal(top);                  // 兜底：非标准弹窗无守卫可走
+      closed = true;
+    }
+  }
+  pendingOpenModelManage = true;
   // 等退场动画走完（closeModelModal 是淡出 400ms 后移除 DOM）。
   // 提前开会叠成两个遮罩：新的在下面、旧的淡出后还要再点一次。
   setTimeout(() => {
     if (!pendingOpenModelManage) return;
     pendingOpenModelManage = false;
     openModelManageModal();
-  }, top ? 420 : 0);
+  }, closed ? 420 : 0);
 }
 
 function openToolBreakdown() {
@@ -1031,8 +1122,9 @@ function openModelConfigModal() {
       if (await qaConfirm('还没有提供商，无法拉取模型。\n\n现在去「模型管理」添加提供商吗？')) scheduleOpenModelManage();
       return;
     }
-    btn.disabled = true;
-    btn.textContent = '拉取中…';
+    // 加载态统一走 qaBtnBusy：只加 spinner + .is-loading，不改文案
+    // （旧写法把文字换成「拉取中…」再换回硬编码的「⟳ 拉取模型」，换字瞬间会横向跳）
+    qaBtnBusy(btn, true);
     try {
       const r = await api('/api/providers/fetch-models', {
         method: 'POST',
@@ -1046,8 +1138,7 @@ function openModelConfigModal() {
     } catch (e) {
       qaAlert(`拉取失败：${e.message}`);
     } finally {
-      btn.disabled = false;
-      btn.textContent = '⟳ 拉取模型';
+      qaBtnBusy(btn, false);
     }
   });
 
@@ -1177,11 +1268,13 @@ function openModelConfigModal() {
   });
 
   // 连通性测试：与主页面 runConnectivityTest 同款逻辑（读弹窗里的表单值）
+  // ⚠️ 加载态同样走 qaBtnBusy：健康卡片的「测试一下」（07-settings-events.js）
+  //    已经换成 spinner 方案，这两处是同一件事的两个入口，必须一起改，
+  //    否则同一个动作在两个入口一个跳字、一个不跳。
   overlay.querySelector('#mc-test-btn').addEventListener('click', async () => {
     const btn = overlay.querySelector('#mc-test-btn');
     const out = overlay.querySelector('#mc-test-result');
-    btn.disabled = true;
-    btn.textContent = '测试中…';
+    qaBtnBusy(btn, true);
     if (out) out.textContent = '';
     try {
       const picked = overlay.querySelector('#mc-picked').value;
@@ -1211,8 +1304,7 @@ function openModelConfigModal() {
     } catch (e) {
       if (out) out.textContent = `测试失败：${e.message}`;
     }
-    btn.disabled = false;
-    btn.textContent = '测试连通性';
+    qaBtnBusy(btn, false);
   });
 
   overlay.querySelector('#mc-cancel').addEventListener('click', () => closeModelModal(overlay));
@@ -1984,9 +2076,9 @@ function openModelManageModal() {
       const saved = (state.providers || []).find((x) => x.id === p.id)?.apiProtocol || 'openai';
       if (want === saved) { paintTip('已是当前值', 'var(--muted)'); return; }
       protocolBusy = true;
-      protocolSaveBtn.disabled = true;
-      const oldText = protocolSaveBtn.textContent;
-      protocolSaveBtn.textContent = '保存中…';
+      // 加载态走 qaBtnBusy（只加 spinner，不换文案）：这颗按钮紧挨着「接口协议」
+      // 下拉框，旧写法把它撑成「保存中…」会让同行控件横向跳一下。
+      qaBtnBusy(protocolSaveBtn, true);
       let done = false;
       try {
         await api('/api/providers/protocol', {
@@ -2012,10 +2104,7 @@ function openModelManageModal() {
       } finally {
         protocolBusy = false;
         // 没被 renderRight 换掉才需要复位（换掉了就是另一个新按钮，别去动旧节点）
-        if (protocolSaveBtn.isConnected) {
-          protocolSaveBtn.disabled = false;
-          protocolSaveBtn.textContent = oldText;
-        }
+        if (protocolSaveBtn.isConnected) qaBtnBusy(protocolSaveBtn, false);
       }
       // 保存期间用户又改了下拉 → 再提交一次，否则界面显示的和存下来的不一致
       if (done && protocolSel.isConnected && protocolSel.value !== want) commitProtocol();
@@ -2025,8 +2114,8 @@ function openModelManageModal() {
     // 拉取模型：从该提供商的端点拉（Key 用后端保存的）
     right.querySelector('#mg-fetch-models').addEventListener('click', async () => {
       const btn = right.querySelector('#mg-fetch-models');
-      btn.disabled = true;
-      btn.textContent = '拉取中…';
+      // 只加 spinner，不改文案（换字会让同行控件横向跳动）
+      qaBtnBusy(btn, true);
       try {
         const r = await api('/api/providers/fetch-models', {
           method: 'POST',
@@ -2037,8 +2126,7 @@ function openModelManageModal() {
       } catch (e) {
         qaAlert(`拉取失败：${e.message}`);
       } finally {
-        btn.disabled = false;
-        btn.textContent = '拉取模型列表';
+        qaBtnBusy(btn, false);
       }
     });
     // 删除模型：删当前选中的单选模型
@@ -2233,8 +2321,8 @@ function openProviderAddModal(onDone) {
     const apiProtocol = overlay.querySelector('#pa-protocol').value;
     if (!baseUrl) { qaAlert('请先填写 Base URL，再拉取模型列表'); return; }
     if (!apiKey) { qaAlert('请先填写 API Key（拉取模型列表需要密钥鉴权）'); return; }
-    btn.disabled = true;
-    btn.textContent = '拉取中…';
+    // 只加 spinner，不改文案（换字会让同一行的输入框/按钮横向跳动）
+    qaBtnBusy(btn, true);
     try {
       // Key 口径：本弹窗是"新建"场景、提供商还不存在 → 显式带明文 Key
       // （后端 fetch-models 的 Key 解析顺序就是 显式明文 > providerId 已存 > 顶层）。
@@ -2251,8 +2339,7 @@ function openProviderAddModal(onDone) {
     } catch (e) {
       qaAlert(`拉取失败：${e.message}`);
     } finally {
-      btn.disabled = false;
-      btn.textContent = '⟳ 拉取模型';
+      qaBtnBusy(btn, false);
     }
   });
   const rowsBox = overlay.querySelector('#pa-model-rows');
@@ -2277,7 +2364,18 @@ function openProviderAddModal(onDone) {
   renderRows();
   overlay.querySelector('#pa-add-row').addEventListener('click', () => { rows.push({ id: '', name: '' }); renderRows(); });
   overlay.querySelector('#pa-cancel').addEventListener('click', () => closeModelModal(overlay));
-  overlay.querySelector('#pa-confirm').addEventListener('click', async () => {
+  overlay.querySelector('#pa-confirm').addEventListener('click', async (ev) => {
+    // ── 防连点（2026-11-16 审查修复）──
+    // 这条异步链是 POST /api/providers → refreshProvidersState → loadSettings →
+    // onDone → autoPickMainModelIfNeeded，全程几百毫秒；期间按钮一点不可见变化，
+    // 用户"点一下没反应"就再点一下 → **创建出两条重复 provider**。
+    // 此前唯一的防线是 07-settings-events.js 里那个 400ms 全局点击守卫，但它装在
+    // bindSettingsEvents() 里、只有 renderSettings() 才会调 —— 启动固定进会话页，
+    // 用户从自检 / 连接页直接打开本弹窗时那道守卫根本不存在。
+    // 现在本按钮自己负责：立刻 qaBtnBusy(btn,true)（spinner + .is-loading + disabled），finally 复位。
+    const btn = ev?.currentTarget || overlay.querySelector('#pa-confirm');
+    if (btn && btn.disabled) return;          // 双保险：disabled 前的极短窗口
+    qaBtnBusy(btn, true);                     // 统一走项目加载态契约（与「拉取模型」按钮一致，可见 spinner）
     const baseUrl = overlay.querySelector('#pa-baseurl').value.trim();
     const apiKey = overlay.querySelector('#pa-apikey').value.trim();
     const apiProtocol = overlay.querySelector('#pa-protocol').value;
@@ -2287,8 +2385,8 @@ function openProviderAddModal(onDone) {
       ...fetched.filter((m) => m.checked).map((m) => ({ id: m.id, name: m.name || m.id })),
       ...rows.map((r) => ({ id: r.id.trim(), name: (r.name || r.id).trim() })).filter((m) => m.id)
     ].filter((m) => !seen.has(m.id) && seen.add(m.id));
-    if (!baseUrl) { qaAlert('请填写 Base URL'); return; }
-    if (!apiKey) { qaAlert('请填写 API Key（提供商必须带密钥才能测试连通性）'); return; }
+    if (!baseUrl) { qaBtnBusy(btn, false); qaAlert('请填写 Base URL'); return; }
+    if (!apiKey) { qaBtnBusy(btn, false); qaAlert('请填写 API Key（提供商必须带密钥才能测试连通性）'); return; }
     // ⚠️ 这里曾经强制要求至少填一个模型 id，与上面标签写的「可先留空」自相矛盾，
     //    更致命的是它构成了死循环：「拉取模型列表」按钮只在**已存在的提供商**里，
     //    于是新用户没有模型 id 就建不了提供商 → 永远点不到拉取按钮。
@@ -2315,6 +2413,10 @@ function openProviderAddModal(onDone) {
       await autoPickMainModelIfNeeded();
     } catch (e) {
       qaAlert(`添加失败：${e.message}`);
+    } finally {
+      // 成功路径上 overlay 已被 closeModelModal 移除，此时 btn 已离线 ——
+      // 复位只为"失败 / 校验失败 / 中途抛错"这几种还留在屏幕上的情况。
+      qaBtnBusy(btn, false);
     }
   });
 }
@@ -2378,10 +2480,22 @@ async function openWhitelistPicker(kind) {
   // 这个弹窗用的是 .modal-overlay，此前 Tab 能跑出弹窗到背后的设置页。
   // 同时补 Esc 关闭（此前键盘用户打开后只能鼠标点「取消」）。
   registerFocusTrap(overlay);
+  // 2026-11-16 审查修复（问题1 的收尾）：焦点要"进得去、回得来"。
+  // · 进去：打开后把焦点放到第一条勾选项（不放在 readonly 输入框上，见 __FOCUSABLE 注释）；
+  // · 回来：关闭（确定 / 取消 / Esc）后还给打开它的那颗「选择群 / 选择好友」按钮 ——
+  //   此前 closePicker 只摘节点，焦点掉到 body，键盘用户当场失去位置。
+  const prevFocus = document.activeElement;
+  try {
+    const firstPick = overlay.querySelector('input[type=checkbox]');
+    (firstPick || $('#pick-apply', overlay))?.focus?.({ preventScroll: true });
+  } catch { /* ignore */ }
   const closePicker = () => {
     document.removeEventListener('keydown', onPickerEsc, true);
     unregisterFocusTrap(overlay);
     overlay.parentNode?.removeChild(overlay);
+    if (prevFocus && typeof prevFocus.focus === 'function' && prevFocus.isConnected) {
+      try { prevFocus.focus({ preventScroll: true }); } catch { /* ignore */ }
+    }
   };
   const onPickerEsc = (e) => {
     if (e.key !== 'Escape') return;

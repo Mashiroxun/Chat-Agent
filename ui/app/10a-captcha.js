@@ -78,6 +78,15 @@
       const btn = document.createElement('button');
       btn.id = 'captcha-trigger';
       btn.type = 'button';
+      // 2026-11-16 审查修复（问题10）：这颗按钮是 SDK 的「隐形触发点」，靠
+      // left:-9999px 挪到屏幕外 —— 但它此前仍是一个**正常的可聚焦 <button>**：
+      // Tab 顺序里会停一下（看不见、按下去也不知道发生了什么），而且首次验证后
+      // 它永久留在 DOM 里，成为持续的键盘陷阱点。SDK 只要求元素存在、能被
+      // click() 触发，**不要求它可聚焦**，所以摘掉它的 Tab 停留点即可。
+      // ⚠️ 不选"验证完从 DOM 移除节点"：SDK 内部持有这个 button 的引用并会复用，
+      //    删掉有可能让下一次 verify() 静默失效（比留一个不可聚焦的死节点更糟）。
+      btn.tabIndex = -1;
+      btn.setAttribute('aria-hidden', 'true');
       btn.style.cssText = 'position:fixed;left:-9999px;top:0';
       document.body.appendChild(btn);
     }

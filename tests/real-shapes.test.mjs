@@ -81,7 +81,7 @@ const REAL_HONOR = {
   strong_newbie_list: []
 };
 // get_group_signed_list → Array<{ user_id, nick, time, rank }>（不是 { data: [] }）
-const REAL_SIGNED = [{ user_id: 10000, nick: '测试用户', time: 1794326916, rank: 1 }];
+const REAL_SIGNED = [{ user_id: 1000000000, nick: '测试用例用户', time: 1794326916, rank: 1 }];
 
 function makeCtx(overrides = {}) {
   const calls = { forward: [] };
@@ -190,7 +190,7 @@ test('只看打卡时文案不能串成荣誉榜说法', async () => {
 test('真实存档条目 → 转发节点必须带 SnowLuma 认得的 uin', async () => {
   const { ctx, calls } = makeCtx({
     history: [
-      { self: false, senderId: '10000', senderName: '测试用户', text: '群友说的话' },
+      { self: false, senderId: '1000000000', senderName: '测试用例用户', text: '群友说的话' },
       { self: true, senderId: 'self', senderName: '我', text: '我回的一句' }
     ]
   });
@@ -199,10 +199,10 @@ test('真实存档条目 → 转发节点必须带 SnowLuma 认得的 uin', asyn
   assert.equal(body.count, 2);
   const nodes = calls.forward[0].nodes;
   // SnowLuma parseForwardNodes(): toPositiveInt(nodeData.user_id ?? nodeData.uin)
-  assert.equal(nodes[0].data.uin, '10000');
-  assert.equal(nodes[0].data.qq, '10000');
+  assert.equal(nodes[0].data.uin, '1000000000');
+  assert.equal(nodes[0].data.qq, '1000000000');
   assert.notEqual(nodes[0].data.uin, ctx.selfId);
-  assert.equal(nodes[0].data.name, '测试用户');
+  assert.equal(nodes[0].data.name, '测试用例用户');
   assert.equal(nodes[0].data.content[0].text, '群友说的话');
   assert.equal(nodes[1].data.uin, '100086');
   assert.equal(nodes[1].data.content[0].text, '我回的一句');

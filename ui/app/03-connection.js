@@ -48,6 +48,10 @@ let connProcCache = { status: null, logs: [] };
    单独缓存是因为这个接口要登录控制台再列进程（1~3 秒），不能塞进 /api/status
    那种每 15 秒刷一次的路径里。单卡（R128）只用它算"用户处境"。 */
 let connOnboardCache = null;
+/* 2026-11-16 P1 修复：loadConnectionPage 的异步代际号。
+   quiet 轮询与手动重检可能并发，旧响应回来时用户可能正在输入端点/令牌 ——
+   旧请求绝不能整块重绘把输入冲掉。 */
+let connLoadSeq = 0;
 
 /** 协议端进程状态 → 一句话 + 配色（徽标/按钮可用态都从这里取）。 */
 function connProcView(proc) {
@@ -120,6 +124,13 @@ function connVerdict(v) {
     title: '没检测到协议端在运行',
     sub: '先启动 SnowLuma / NapCat 并登录机器人 QQ；如果它开在别的端口，到「端点地址与令牌」里改。还没装过就按下面的步骤来。'
   };
+}
+
+/** P3：端口监听文案统一入口 —— 首屏与 quiet 刷新共用，避免三种口径并存。 */
+function connPortText(portOpen) {
+  return portOpen
+    ? '<span class="cx-ok">监听中</span>'
+    : '<span class="cx-dim">未监听</span>';
 }
 
 /** 结论块右上角的时间戳：这一页会被 SSE / 轮询悄悄刷新，不给个时间用户不知道是不是新的。 */
@@ -198,9 +209,11 @@ function connAutoStage(v, proc, ob) {
   const dir = String((proc && (proc.dir || proc.configuredDir)) || '');
   const running = Boolean(proc && proc.running) || Boolean(v.portOpen);
 
-  // ① 已经能用 —— 不管内部还残留什么阶段
+  // ① 已经能用 —— 只认 OneBot 真连上（与 connGuide 同口径）。
+  // 2026-11-16 P1：'ready' 只是"注入完成"，掉线后 stage 常仍停在 ready；
+  // 旧实现在这里返回 ok，卡片继续显示"已上线"+绿头像+在线时长。
   if (v.connected) return 'ok';
-  if (stage === 'ready') return 'ok';
+  if (stage === 'ready') return 'waiting';
 
   // ② 需要用户本人做点什么的，优先于"进程状态"（进程可能在跑，但就是卡在密码/同意上）
   if (stage === 'need-password' || stage === 'locked' || stage === 'need-totp'
@@ -221,6 +234,8 @@ function connAutoStage(v, proc, ob) {
     边缘发虚、大小不受控，和整套 UI 的细线条完全不搭。 */
 const AUTO_ICON_PATHS = {
   ok: '<path d="M20 6L9 17l-5-5"/>',
+  // 注入完成但机器人还没上线：同"正在启动"的旋转图标，橙色由 is-warn 提供
+  waiting: '<path d="M21 12a9 9 0 1 1-6.22-8.56"/>',
   'no-component': '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>',
   'not-running': '<path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><path d="M12 2v10"/>',
   starting: '<path d="M21 12a9 9 0 1 1-6.22-8.56"/>',
@@ -236,7 +251,7 @@ const AUTO_ICON_PATHS = {
 /** 图标渲染。stage 决定图形，cls 决定配色。 */
 function connIcon(stage, cls) {
   const path = AUTO_ICON_PATHS[stage] || AUTO_ICON_PATHS.alert;
-  const spin = stage === 'starting' ? ' is-spin' : '';
+  const spin = (stage === 'starting' || stage === 'waiting') ? ' is-spin' : '';
   return `<div class="auto-icon ${cls}${spin}" id="conn-auto-icon">`
     + `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" `
     + `stroke-linecap="round" stroke-linejoin="round">${path}</svg></div>`;
@@ -319,6 +334,12 @@ const CONN_AUTO_COPY = {
     sub: '协议端与 OneBot 都已就绪。群消息会实时进「会话」页，白名单群里 @ 它才会回复。',
     btn: ''
   },
+  waiting: {
+    emoji: '⏳', cls: 'is-warn',
+    title: '已注入，正在等机器人上线',
+    sub: '连接组件已经注入完成，机器人 QQ 还要几秒接入。要是长时间不动，检查协议端里登录的账号是不是你要用的那个。',
+    btn: ''
+  },
   'no-component': {
     emoji: '📦', cls: 'is-warn',
     title: '还差一个软件要装',
@@ -347,7 +368,7 @@ const CONN_AUTO_COPY = {
     emoji: '⏰', cls: 'is-warn',
     title: '试太多次，被暂时锁了',
     sub: '等 15 分钟再试。这期间别反复点 —— 越点锁得越久。',
-    btn: '好'
+    btn: '请稍后再试'
   },
   'need-totp': {
     emoji: '🔐', cls: 'is-warn',
@@ -486,6 +507,10 @@ function renderConnectionPage(v, appLogsData, procData) {
   const procDir = String((proc && (proc.dir || proc.configuredDir)) || '');
   const procAuto = Boolean(proc && proc.autoLaunch);
   const stage = connAutoStage(v, proc, connOnboardCache);
+  // 2026-11-16 P1：首帧就把 connLastStage / 连接态对齐，否则初值 '' 会让第一次
+  // quiet 刷新必然走整卡重绘（正在输入的端点/令牌被抹掉）。
+  connLastStage = stage;
+  connLastConnected = connected;
   const copy = CONN_AUTO_COPY[stage] || CONN_AUTO_COPY.error;
   const isOk = stage === 'ok';
   const uptime = isOk ? connUptime(connectedAt) : '';
@@ -555,7 +580,7 @@ function renderConnectionPage(v, appLogsData, procData) {
               </div>
               <div class="cx-metric">
                 <span class="cx-metric-k">WS 端口</span>
-                <span class="cx-metric-v" id="conn-port-state">${portOpen ? '<span class="cx-ok">监听中</span>' : '<span class="cx-dim">未监听</span>'}</span>
+                <span class="cx-metric-v" id="conn-port-state">${connPortText(portOpen)}</span>
               </div>
             </div>
           </div>
@@ -672,8 +697,9 @@ function renderConnectionPage(v, appLogsData, procData) {
       </div>`;
 }
 
-/** quiet 刷新：只改状态文字与日志，不碰输入框、不重建整页。 */
-function updateConnectionLive(v, appLogsData, procData) {
+/** quiet 刷新：只改状态文字与日志，不碰输入框、不重建整页。
+    preserveNote=true 时保留 #conn-check-note（15s 静默刷新不能抹掉刻意留下的失败原因）。 */
+function updateConnectionLive(v, appLogsData, procData, preserveNote = false) {
   const chip = $('#conn-chip');
   if (chip) chip.className = `sl-chip is-${v.overall}`;
   const chipText = $('#conn-chip-text');
@@ -687,18 +713,16 @@ function updateConnectionLive(v, appLogsData, procData) {
   if (verdictTitle) verdictTitle.textContent = verdict.title;
   const verdictSub = $('#conn-verdict-sub');
   if (verdictSub) verdictSub.textContent = verdict.sub;
-  // 手动检测的结论只活到下一次状态变化为止，避免留着一句过时的话
+  // 手动检测的结论只活到下一次状态变化为止，避免留着一句过时的话。
+  // P2：quiet/SSE 刷新传 preserveNote=true，跳过清空 —— 否则 15s 轮询会把
+  // connRecheck / autopilot 刻意留下的失败原因抹掉，用户回头以为什么都没发生。
   const note = $('#conn-check-note');
-  if (note) note.textContent = '';
+  if (note && !preserveNote) note.textContent = '';
 
   const meta = $('#conn-port-meta');
   if (meta) meta.textContent = connClock();
   const portState = $('#conn-port-state');
-  if (portState) {
-    portState.innerHTML = v.portOpen
-      ? '<span style="color:var(--green)">端口在监听</span>'
-      : '<span class="sl-adv-dim">端口未监听</span>';
-  }
+  if (portState) portState.innerHTML = connPortText(v.portOpen);
   const ws = $('#conn-ws');
   if (ws) ws.textContent = String(v.proto.wsUrl || '（未设置）');
   const http = $('#conn-http');
@@ -821,36 +845,23 @@ async function connRecheck(btn) {
     if (!s) { if (note) note.textContent = '读不到状态：后端没有应答。'; return; }
     let nv = connView(s);
 
-    // 2026-10-24：端口通了但仍没连上，最常见的不是"账号没登录"，而是**令牌没填**
-    // （SnowLuma 每个账号随机生成一对，两枚还不一样）。这一步先替用户去协议端的
-    // config/onebot_<QQ号>.json 里读一次 —— 读到了就连上了，省掉他去 WebUI 抄两串
-    // 43 位字符串。已经是通的、或端口没开都不试（避免无谓的 PowerShell 探测）。
-    let fillNote = '';
-    if (!nv.connected && nv.portOpen) {
-      const filled = await api('/api/protocol/autofill', {
-        method: 'POST',
-        body: JSON.stringify({})
-      }).catch(() => null);
-      if (filled && filled.applied) {
-        s = await api('/api/status').catch(() => s);
-        nv = connView(s);
-        fillNote = `✓ 已自动读取协议端配置（账号 ${filled.uin || '?'}）`;
-      } else if (filled && filled.found === false) {
-        fillNote = '没找到 SnowLuma 的配置文件';
-      } else if (filled && filled.found && !filled.applied) {
-        fillNote = filled.reason || '端点与令牌已是最新';
-      }
-    }
+    // P2：「重新检测」名字是"检测"，不该偷偷 POST /api/protocol/autofill 去覆盖
+    // 用户手改的端点/令牌并重连。这里把写操作分离出来：只在 note 里给出明确的
+    // 独立入口，由用户主动点击才执行（connAutoAutofill）。
+    const needAutofill = !nv.connected && nv.portOpen;
 
-    updateConnectionLive(nv, connLogsCache);
+    // P2：补第三参 procData —— 缺它时协议端徽标/启停按钮的 enabled 不会跟着刷新。
+    updateConnectionLive(nv, connLogsCache, connLastProcData || connProcCache);
     if (note) {
-      note.textContent = nv.connected
-        ? `${fillNote ? `${fillNote}，` : ''}✓ 已连上（${nv.nick || '机器人'}）`
-        : nv.portOpen
-          ? (fillNote
-            ? `${fillNote} —— 仍然没连上，检查机器人 QQ 是否已登录。`
-            : '端口通了，但仍没连上 —— 检查令牌，以及机器人 QQ 是否已登录。')
+      if (needAutofill) {
+        note.innerHTML = '端口通了但没连上，多半是令牌不一致 —— '
+          + '<button class="btn btn-mini" type="button" data-autofill-connect>检测到协议端端点，点此读取并连接</button>'
+          + '（会用协议端配置覆盖当前端点与令牌并重连）';
+      } else {
+        note.textContent = nv.connected
+          ? `✓ 已连上（${nv.nick || '机器人'}）`
           : '端口还是没监听 —— 确认协议端已经启动、端口没填错。';
+      }
     }
   } finally {
     btn.disabled = false;
@@ -858,7 +869,46 @@ async function connRecheck(btn) {
   }
 }
 
+/**
+ * P2：「重新检测」里分离出来的写操作 —— 用户在 note 里主动点入口才执行。
+ * 会用协议端配置覆盖当前端点/令牌并重连，所以必须是一次明确的点击，而不是
+ * 「检测」的副作用。note 里的按钮文案已写明会覆盖并重连，点击即视为确认，
+ * 这里不再二次弹窗。
+ */
+async function connAutoAutofill(btn) {
+  if (!btn || btn.disabled) return;
+  const note = $('#conn-check-note');
+  qaBtnBusy(btn, true);
+  try {
+    const filled = await api('/api/protocol/autofill', {
+      method: 'POST',
+      body: JSON.stringify({})
+    }).catch(() => null);
+    if (filled && filled.applied) {
+      const s = await api('/api/status').catch(() => null);
+      if (s) {
+        const nv = connView(s);
+        updateConnectionLive(nv, connLogsCache, connLastProcData || connProcCache);
+        if (note) note.textContent = `✓ 已用协议端配置覆盖端点与令牌（账号 ${filled.uin || '?'}）并重连`;
+      } else if (note) {
+        note.textContent = '配置已写入，但读不到最新状态 —— 点「重新检测」确认';
+      }
+      await connLoadOnboard({ quiet: true });
+      if (typeof refreshStatus === 'function') refreshStatus();
+    } else if (note) {
+      note.textContent = (filled && filled.found === false)
+        ? '没找到 SnowLuma 的配置文件'
+        : ((filled && filled.reason) || '端点与令牌已是最新，未做改动');
+    }
+  } finally {
+    qaBtnBusy(btn, false);
+  }
+}
+
 async function loadConnectionPage({ quiet = false } = {}) {
+  // 2026-11-16 P1：请求代际号。15 秒 quiet 轮询与手动重检会并发，
+  // 慢回来的旧响应不许再碰 DOM（否则整块重绘冲掉刚输入的端点/令牌）。
+  const seq = ++connLoadSeq;
   const boxEarly = $('#connection-page');
   if (!boxEarly) return;
 
@@ -879,6 +929,10 @@ async function loadConnectionPage({ quiet = false } = {}) {
     // 协议端进程（2026-10-27）：状态 + 最近日志。失败就当没这功能，不影响连接页本身。
     api('/api/protocol/process?limit=300').catch(() => null)
   ]);
+
+  // await 之后的所有写 DOM 分支（错误卡 / quiet 局部刷新 / full 整页重绘）
+  // 都必须在最新一代才执行；旧请求到此静默退出。
+  if (seq !== connLoadSeq) return;
 
   const box = $('#connection-page');
   if (!box) return;   // 页面已被切走
@@ -906,7 +960,7 @@ async function loadConnectionPage({ quiet = false } = {}) {
   if (procData) connLastProcData = procData;
 
   if (quiet && box.querySelector('.auto-page')) {
-    updateConnectionLive(v, appLogsData, procData);
+    updateConnectionLive(v, appLogsData, procData, true);
     return;
   }
 
@@ -1003,6 +1057,13 @@ function bindConnProc(procData) {
   }));
 
   $('#conn-proc-stop')?.addEventListener('click', (e) => run(e.currentTarget, '停止中…', async () => {
+    // 2026-11-16 P1：停止是不可逆的即时影响（群里立刻全部离线），
+    // 与删除/撤销同级，必须 danger 二次确认后才发请求。
+    if (!await qaConfirm({
+      danger: true,
+      confirmText: '停止协议端',
+      message: '确定停止协议端？机器人会立即在群里离线，所有群停止回复。'
+    })) return;
     hint('正在停止…');
     const r = await api('/api/protocol/process/stop', { method: 'POST', body: '{}' })
       .catch((err) => ({ ok: false, error: String(err?.message || err) }));
@@ -1012,33 +1073,49 @@ function bindConnProc(procData) {
   }));
 
   // 折叠区里那枚「停止协议端」：与上面同一套动作（两个入口，避免用户为了停一下
-  // 还得先让页面回到"未启动"状态）
-  $('#conn-proc-stop2')?.addEventListener('click', async (e) => {
-    const btn = e.currentTarget;
-    if (btn.disabled) return;
-    const old = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = '停止中…';
-    try {
-      const r = await api('/api/protocol/process/stop', { method: 'POST', body: '{}' })
-        .catch((err) => ({ ok: false, error: String(err?.message || err) }));
-      if (!r || !r.ok) hint(`停止失败：${(r && r.error) || '未知原因'}`);
-    } finally {
-      btn.textContent = old;
-      await refresh();
-      connLoadOnboard({ quiet: true }).catch(() => {});
-    }
-  });
+  // 还得先让页面回到"未启动"状态）。
+  // ⚠️ 必须复用 run()：它的 finally 会**无条件** connApplyProc(connProcCache) ——
+  //    旧实现自己在 finally 里只 await refresh()，而 refresh() 在
+  //    GET /api/protocol/process 失败时返回 null 且不调 connApplyProc，
+  //    停止请求本身也失败（进程仍 running）时按钮就永久 disabled，再也重试不了。
+  $('#conn-proc-stop2')?.addEventListener('click', (e) => run(e.currentTarget, '停止中…', async () => {
+    // 同上：这是第二个停止入口（已就绪态的协议端卡），同样要先确认。
+    if (!await qaConfirm({
+      danger: true,
+      confirmText: '停止协议端',
+      message: '确定停止协议端？机器人会立即在群里离线，所有群停止回复。'
+    })) return;
+    const r = await api('/api/protocol/process/stop', { method: 'POST', body: '{}' })
+      .catch((err) => ({ ok: false, error: String(err?.message || err) }));
+    hint(r && r.ok ? '已停止（机器人会随之离线）' : `停止失败：${(r && r.error) || '未知原因'}`);
+    await refresh();
+    connLoadOnboard({ quiet: true }).catch(() => {});
+  }));
 
   $('#conn-proc-auto')?.addEventListener('change', async (e) => {
-    const on = Boolean(e.currentTarget.checked);
-    hint(on ? '下次启动 QQ Agent 时会自动拉起协议端' : '已关闭自动启动');
-    const r = await api('/api/protocol/process/config', {
-      method: 'POST',
-      body: JSON.stringify({ autoLaunch: on })
-    }).catch(() => null);
-    if (r && r.status) connApplyProc({ status: r.status, logs: connProcCache.logs });
-    else e.currentTarget.checked = !on;   // 保存失败就回弹，别让界面说谎
+    const cb = e.currentTarget;
+    const on = Boolean(cb.checked);
+    // P2：保存期间禁用开关并给出反馈，避免重复点击 / 点了像没反应。
+    cb.disabled = true;
+    hint('保存中…');
+    try {
+      const r = await api('/api/protocol/process/config', {
+        method: 'POST',
+        body: JSON.stringify({ autoLaunch: on })
+      }).catch(() => null);
+      // ⚠️ 提示必须写在**保存成功之后**：旧实现先喊「下次启动会自动拉起协议端」再发请求，
+      //    失败时只回弹 checkbox，hint 仍停在成功文案 —— 用户以为生效，下次启动行为
+      //    与承诺相反，且没有任何错误线索。
+      if (r && r.status) {
+        connApplyProc({ status: r.status, logs: connProcCache.logs });
+        hint(on ? '下次启动 QQ Agent 时会自动拉起协议端' : '已关闭自动启动');
+      } else {
+        cb.checked = !on;   // 保存失败就回弹，别让界面说谎
+        hint(`设置失败：${(r && r.error) || '服务端未确认'} —— 未保存，仍是${on ? '不自动启动' : '自动启动'}状态`);
+      }
+    } finally {
+      cb.disabled = false;
+    }
   });
 
   $('#conn-proc-refresh')?.addEventListener('click', (e) => run(e.currentTarget, '刷新中…', async () => {
@@ -1058,6 +1135,9 @@ let connLastV = null;
 let connLastAppLogs = null;
 let connLastProcData = null;
 let connLastStage = '';
+// 2026-11-16 P1：连接状态翻转也要整卡重绘 —— 只比 stage 的话，
+// stage 停在 ready 时掉线不会换掉绿点/头像/"已上线"文案。
+let connLastConnected = null;
 let connAutoPw = '';
 
 const connSleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1067,24 +1147,83 @@ function connAutoRepaint() {
   if (!connLastV) return;
   const page = document.querySelector('.auto-page');
   if (!page) return;
+  // 2026-11-16 P1：replaceWith 会把用户正在填的端点/令牌、滚动位置和输入焦点
+  // 一起抹掉（自动推进时阶段一变就重绘，正好赶上用户改令牌）。
+  // 重建前快照可编辑控件与滚动位置，重建后按同一渲染产出的 DOM 顺序还回去。
+  // text / password 视为同一类：令牌"显示"时 type 会被切换，不能因此跳过回填。
+  const typeKey = (t) => (t === 'text' || t === 'password' ? 'textish' : t);
+  const fields = [];
+  page.querySelectorAll('input, select, textarea').forEach((el) => {
+    const s = { id: el.id, name: el.name, type: el.type, focused: document.activeElement === el };
+    if (el.type === 'checkbox' || el.type === 'radio') s.checked = el.checked;
+    else {
+      s.value = el.value;
+      try { s.start = el.selectionStart; s.end = el.selectionEnd; } catch { /* 不支持选区的类型忽略 */ }
+    }
+    fields.push(s);
+  });
+  // 令牌显示按钮的开合态也要一起还原，否则输入框是明文、按钮却写着"显示"
+  const toggles = [];
+  for (const id of ['#conn-wstoken-toggle', '#conn-httptoken-toggle']) {
+    const b = $(id);
+    if (b) toggles.push({ id, on: b.dataset.on, text: b.textContent });
+  }
+  const scrolls = [];
+  for (const sel of ['#conn-logs-view', '#conn-proc-log', '.auto-page']) {
+    const el = sel === '.auto-page' ? page : page.querySelector(sel);
+    if (el && el.scrollTop) scrolls.push({ sel, top: el.scrollTop });
+  }
   const holder = document.createElement('div');
   holder.innerHTML = renderConnectionPage(connLastV, connLastAppLogs, connLastProcData);
   const fresh = holder.firstElementChild;
   if (!fresh) return;
   page.replaceWith(fresh);
   bindConnectionPage(fresh, connLastV, connLastAppLogs, connLastProcData);
+  // id / name 对不上就不填，宁可少还原一个字段也不把值写进错误的输入框。
+  const freshFields = fresh.querySelectorAll('input, select, textarea');
+  fields.forEach((s, i) => {
+    const el = freshFields[i];
+    if (!el || typeKey(el.type) !== typeKey(s.type) || (s.id && el.id !== s.id) || (s.name && el.name !== s.name)) return;
+    if (s.type === 'checkbox' || s.type === 'radio') el.checked = s.checked;
+    else {
+      if (typeKey(s.type) === 'textish' && el.type !== s.type) el.type = s.type;
+      if (s.value !== undefined && el.value !== s.value) el.value = s.value;
+    }
+    if (s.focused) {
+      el.focus({ preventScroll: true });
+      if (s.start != null) {
+        try { el.setSelectionRange(s.start, s.end ?? s.start); } catch { /* 不支持选区的类型忽略 */ }
+      }
+    }
+  });
+  for (const s of scrolls) {
+    const el = s.sel === '.auto-page' ? fresh : fresh.querySelector(s.sel);
+    if (el) el.scrollTop = s.top;
+  }
+  for (const t of toggles) {
+    const b = $(t.id);
+    if (!b) continue;
+    if (t.on) b.dataset.on = t.on;
+    else delete b.dataset.on;
+    b.textContent = t.text;
+  }
   const pw = $('#conn-onboard-pw');
   if (pw && connAutoPw) pw.value = connAutoPw;
+  // 重绘把整个 .auto-page 换掉、按钮是全新的（默认 enabled）—— 自动推进若还在跑，
+  // 必须立刻把新按钮置回忙态，否则用户这时再点「连接」就起了第二条 autopilot。
+  connAutoSyncBusy();
 }
 
 /** 阶段没变时只改文字，避免 15 秒一次的轮询把整页重绘（会闪）。 */
 function connAutoApply(v, procData) {
   if (!v) return;
+  const connectedFlipped = connLastConnected !== null && connLastConnected !== v.connected;
+  connLastConnected = v.connected;
   connLastV = v;
   if (procData) connLastProcData = procData;
   const proc = (connLastProcData && connLastProcData.status) || null;
   const stage = connAutoStage(v, proc, connOnboardCache);
-  if (stage !== connLastStage) {
+  if (stage !== connLastStage || connectedFlipped) {
     connLastStage = stage;
     connAutoRepaint();
     return;
@@ -1100,8 +1239,9 @@ function connAutoApply(v, procData) {
   // 会一直停在页面刚打开时的那个数
   const uptimeEl = $('#conn-auto-id i');
   if (uptimeEl) {
-    const next = connUptime(v.connectedAt);
-    if (next && uptimeEl.textContent !== next) uptimeEl.textContent = next;
+    // 2026-11-16 P1：掉线时也要能清空，否则绿点没了"已在线 N 小时"还挂着。
+    const next = connUptime(v.connectedAt) || '';
+    if (uptimeEl.textContent !== next) uptimeEl.textContent = next;
   }
 }
 
@@ -1130,30 +1270,97 @@ async function connOpenConsole() {
   }
 }
 
+/* ── 自动推进的互斥锁 ────────────────────────────────────────────────
+ * 为什么不能只靠「禁用 #conn-auto-btn」防重入：connAutoApply 在阶段一变就整块
+ * connAutoRepaint() 替换 .auto-page 并重建按钮（新按钮默认 enabled）。也就是说
+ * 流程跑到一半按钮就"自己解禁"了 —— 用户此时再点「连接」会起第二条 autopilot，
+ * 两条循环并发 POST launch/connect，互相覆盖 connOnboardCache / note / 按钮文案，
+ * 可能重复启动协议端进程或重复注入 QQ。connPickFolder / connFindDir / 卡内目录
+ * 变化也都会直接进 autopilot，所以锁必须加在**所有入口**上，而不是单按钮上。
+ */
+let connAutoRunning = false;
+// P2：一键连接的取消标志。与 connAutoRunning 锁配合：置位后循环自检收尾，
+// 锁在 connAutoExclusive 的 finally 里释放，按钮态随之恢复。
+let connAutoCancel = false;
+
+/** 把锁状态同步到界面：按钮 disabled + aria-busy（读屏也能知道正在处理）。 */
+function connAutoSyncBusy() {
+  const btn = $('#conn-auto-btn');
+  if (!btn) return;
+  btn.disabled = connAutoRunning;
+  if (connAutoRunning) btn.setAttribute('aria-busy', 'true');
+  else btn.removeAttribute('aria-busy');
+}
+
+/**
+ * 互斥执行器：已有流程在跑就直接返回（不排队 —— 排队同样会重放启动/注入动作）。
+ * 锁在 finally 里复位，异常路径也不会永久锁死。
+ */
+async function connAutoExclusive(fn) {
+  if (connAutoRunning) return;
+  connAutoRunning = true;
+  connAutoSyncBusy();
+  try {
+    return await fn();
+  } finally {
+    connAutoRunning = false;
+    connAutoSyncBusy();
+  }
+}
+
 /**
  * 自动推进：能自己做的做完，卡住就停。
+ * ⚠️ 内部实现（connAutopilotRun）不自带锁 —— 由调用方的 connAutoExclusive 保证互斥，
+ *    否则 connAutoGo 先提交密码再进 autopilot 时会被自己的锁挡掉。
  * @param {string} pw 用户刚填的控制台密码（没有就传空）
  */
-async function connAutopilot(pw = '') {
+async function connAutopilotRun(pw = '') {
   const btn = $('#conn-auto-btn');
   const oldText = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = '正在处理…'; }
-  const note = $('#conn-check-note');
+  // P2：进度 + 取消。note 会在整卡重绘时被替换，所以每次写都重新查询节点；
+  // 取消走全局标志 + 事件委托，不依赖某个具体的 DOM 节点。
+  let step = 0;
+  let lastMsg = '';
+  let canceled = false;
+  const say = (msg) => {
+    lastMsg = msg || '';
+    const n = $('#conn-check-note');
+    if (n) {
+      n.innerHTML = `${esc(step ? `第 ${step}/30 步 · ${lastMsg}` : lastMsg)}`
+        + ' <a href="#" class="auto-cancel" data-auto-cancel>取消</a>';
+    }
+  };
+  // 这次推进是否以「失败」收尾：失败原因要留在屏上供回看，不能 4 秒后自动消失
+  // （旧实现 finally 里无条件清 note，多步引导的关键失败原因一闪就没，
+  //  用户回头以为"什么都没发生"）。
+  let failed = false;
+  let reachedReady = false;
+  connAutoCancel = false;
   try {
     for (let i = 0; i < 30; i++) {
+      step = i + 1;
+      if (connAutoCancel) {
+        canceled = true;
+        const n = $('#conn-check-note');
+        if (n) n.textContent = '已取消，连接未继续推进';
+        break;
+      }
+      say('正在检查连接状态…');
       const s = await api('/api/protocol/onboard').catch(() => null);
-      if (!s || s.available === false) break;
+      if (!s || s.available === false) { say('读不到接入状态，后端没有应答'); failed = true; break; }
       connOnboardCache = s;
       connAutoApply(connLastV, connLastProcData);
 
-      if (s.stage === 'ready') break;
+      if (s.stage === 'ready') { reachedReady = true; break; }
 
       if (s.stage === 'stopped') {
-        if (note) note.textContent = '正在启动连接组件…';
+        say('正在启动连接组件…');
         const r = await api('/api/protocol/process/launch', { method: 'POST', body: JSON.stringify({}) })
           .catch(() => null);
         if (!r || !r.ok) {
-          if (note) note.textContent = `启动失败：${(r && r.error) || '未知原因'}`;
+          say(`启动失败：${(r && r.error) || '未知原因'}`);
+          failed = true;
           break;
         }
         await connSleep(1600);
@@ -1161,13 +1368,13 @@ async function connAutopilot(pw = '') {
       }
 
       if (s.stage === 'booting') {
-        if (note) note.textContent = '等它的控制台就绪…';
+        say('等它的控制台就绪…');
         await connSleep(1500);
         continue;
       }
 
       if (s.stage === 'can-inject' || s.stage === 'wrong-target') {
-        if (note) note.textContent = '正在把机器人接到 QQ 上…';
+        say('正在把机器人接到 QQ 上…');
         await api('/api/protocol/onboard/connect', {
           method: 'POST',
           body: JSON.stringify({ password: pw })
@@ -1177,18 +1384,40 @@ async function connAutopilot(pw = '') {
       }
 
       // 剩下的都是"必须用户本人"：密码 / 同意条款 / 改密码 / 登录 QQ / 选号
+      // 这些情况卡面自己会给出说明，note 不必留着过期的"正在…"。
       break;
     }
+    // 30 轮跑完还没 ready：给一句明确的收尾提示，别把最后那句"等它的控制台就绪…"
+    // 留在屏上（那种进行时文案停住会让人以为还在跑）。
+    if (!failed && !reachedReady && !canceled && /^(?:等它的控制台就绪|正在)/.test(lastMsg)) {
+      const n = $('#conn-check-note');
+      if (n) n.textContent = '连接组件还没就绪，可点「帮我找」或稍后重试';
+      failed = true;
+    }
   } finally {
+    connAutoCancel = false;   // 取消标志复位，下一轮连接不受影响
     if (btn) { btn.disabled = false; btn.textContent = oldText; }
     await connLoadOnboard({ quiet: true });
     if (typeof refreshStatus === 'function') refreshStatus();
-    if (note) setTimeout(() => { if (note.textContent) note.textContent = ''; }, 4000);
+    // 只在成功/正常收尾时清 note；失败原因保留到下次操作开始
+    if (!failed) setTimeout(() => {
+      const n = $('#conn-check-note');
+      if (n && n.textContent) n.textContent = '';
+    }, 4000);
   }
 }
 
-/** 主按钮：按当前处境分派。 */
+/** 对外入口：独立调用 autopilot 时（如卡内目录变化）自带互斥锁。 */
+async function connAutopilot(pw = '') {
+  return connAutoExclusive(() => connAutopilotRun(pw));
+}
+
+/** 主按钮：按当前处境分派。整体持锁，防止流程进行中被点出第二条。 */
 async function connAutoGo() {
+  return connAutoExclusive(() => connAutoGoRun());
+}
+
+async function connAutoGoRun() {
   const v = connLastV;
   const proc = (connLastProcData && connLastProcData.status) || null;
   const stage = connAutoStage(v, proc, connOnboardCache);
@@ -1215,7 +1444,7 @@ async function connAutoGo() {
       body: JSON.stringify({ password: pw })
     }).catch((err) => ({ ok: false, message: String(err?.message || err) }));
     if (r && r.ok === false && r.message) say(`密码没通过：${r.message}`);
-    await connAutopilot(pw);
+    await connAutopilotRun(pw);
     return;
   }
   if (stage === 'pick') {
@@ -1237,12 +1466,17 @@ async function connAutoGo() {
     return;
   }
   if (stage === 'need-qq' || stage === 'error' || stage === 'locked') {
+    // P3：locked 阶段不能只是静默刷新 —— 给明确说明，避免用户反复点反而延长锁定。
+    if (stage === 'locked') {
+      say('锁定期间无法加速 —— 等 15 分钟后再试，期间反复点只会延长锁定。');
+      return;
+    }
     await connLoadOnboard({ quiet: true });
     if (typeof refreshStatus === 'function') refreshStatus();
     return;
   }
   // not-running / can-connect / checking
-  await connAutopilot('');
+  await connAutopilotRun('');
 }
 
 /** SnowLuma 下载页（官方发行包）。放常量是为了 UI 里两处引用不会写岔。 */
@@ -1256,6 +1490,10 @@ const CONN_DOWNLOAD_URL = 'https://github.com/SnowLuma/SnowLuma/releases';
  * 而他根本不知道自己错在哪。点选文件夹把这件事变成"用鼠标点两下"。
  */
 async function connPickFolder(btn) {
+  return connAutoExclusive(() => connPickFolderRun(btn));
+}
+
+async function connPickFolderRun(btn) {
   const note = $('#conn-check-note');
   const say = (m) => { if (note) note.textContent = m || ''; };
   const bridge = window.qqaDesktop?.pickDirectory;
@@ -1272,7 +1510,7 @@ async function connPickFolder(btn) {
     // 报错文案是"这个目录里没有 index.mjs"，够他判断自己是不是选错层了。
     await api('/api/protocol/process/config', { method: 'POST', body: JSON.stringify({ dir: r.dir }) })
       .catch(() => null);
-    await connAutopilot('');
+    await connAutopilotRun('');
   } finally {
     btn.disabled = false;
     btn.textContent = old;
@@ -1281,6 +1519,10 @@ async function connPickFolder(btn) {
 
 /** 「帮我找」：先看正在跑的进程，再扫常见安装位置。 */
 async function connFindDir(btn) {
+  return connAutoExclusive(() => connFindDirRun(btn));
+}
+
+async function connFindDirRun(btn) {
   const note = $('#conn-check-note');
   const say = (m) => { if (note) note.textContent = m || ''; };
   const old = btn.textContent;
@@ -1292,7 +1534,7 @@ async function connFindDir(btn) {
       say(`找到了：${r.dir}`);
       await api('/api/protocol/process/config', { method: 'POST', body: JSON.stringify({ dir: r.dir }) })
         .catch(() => null);
-      await connAutopilot('');
+      await connAutopilotRun('');
       return;
     }
     say('没找到 —— 先按上面三步装好，再点一次');
@@ -1307,6 +1549,17 @@ function bindAutoCard() {
   const card = $('#conn-auto-card');
   if (!card) return;
   card.onclick = (e) => {
+    // P2：一键连接进行中的取消入口（内联在 note 里，整卡重绘后仍走这条委托）
+    if (e.target.closest('[data-auto-cancel]')) {
+      e.preventDefault();
+      connAutoCancel = true;
+      const n = $('#conn-check-note');
+      if (n) n.textContent = '正在取消…';
+      return;
+    }
+    // P2：重新检测分离出来的写操作 —— 用户主动点才读取并覆盖、重连
+    const autofillBtn = e.target.closest('[data-autofill-connect]');
+    if (autofillBtn) { connAutoAutofill(autofillBtn); return; }
     if (e.target.closest('[data-auto-go]')) { connAutoGo(); return; }
     if (e.target.closest('[data-auto-download]')) {
       window.open(CONN_DOWNLOAD_URL, '_blank', 'noopener');
@@ -1417,9 +1670,8 @@ function bindConnectionPage(box, v, appLogsData, procData) {
   const autofillBtn = $('#conn-autofill-btn');
   if (autofillBtn) autofillBtn.addEventListener('click', async () => {
     const hint = $('#conn-save-hint');
-    const oldText = autofillBtn.textContent;
-    autofillBtn.disabled = true;
-    autofillBtn.textContent = '读取中…';
+    // 加载态统一走 qaBtnBusy（只加 spinner，不改文案 —— 换字会让同行按钮横向跳动）
+    qaBtnBusy(autofillBtn, true);
     if (hint) hint.textContent = '';
     try {
       const r = await api('/api/protocol/autofill', {
@@ -1435,8 +1687,7 @@ function bindConnectionPage(box, v, appLogsData, procData) {
     } catch (e) {
       if (hint) hint.textContent = `读取失败：${e.message}`;
     } finally {
-      autofillBtn.disabled = false;
-      autofillBtn.textContent = oldText;
+      qaBtnBusy(autofillBtn, false);
     }
   });
 
@@ -1452,9 +1703,7 @@ function bindConnectionPage(box, v, appLogsData, procData) {
       if (hint) hint.textContent = '两个地址都要填（默认 ws://127.0.0.1:3001 与 http://127.0.0.1:3000）';
       return;
     }
-    saveBtn.disabled = true;
-    const oldText = saveBtn.textContent;
-    saveBtn.textContent = '保存中…';
+    qaBtnBusy(saveBtn, true);
     if (hint) hint.textContent = '';
     try {
       const r = await api('/api/protocol/apply', {
@@ -1474,8 +1723,7 @@ function bindConnectionPage(box, v, appLogsData, procData) {
     } catch (e) {
       if (hint) hint.textContent = `保存失败：${e.message}`;
     } finally {
-      saveBtn.disabled = false;
-      saveBtn.textContent = oldText;
+      qaBtnBusy(saveBtn, false);
     }
   });
 
@@ -1483,9 +1731,7 @@ function bindConnectionPage(box, v, appLogsData, procData) {
   const testBtn = $('#conn-test-btn');
   if (testBtn) testBtn.addEventListener('click', async () => {
     const hint = $('#conn-save-hint');
-    testBtn.disabled = true;
-    const oldText = testBtn.textContent;
-    testBtn.textContent = '测试中…';
+    qaBtnBusy(testBtn, true);
     try {
       const s = await api('/api/status').catch(() => null);
       if (!s) {
@@ -1502,8 +1748,7 @@ function bindConnectionPage(box, v, appLogsData, procData) {
         }
       }
     } finally {
-      testBtn.disabled = false;
-      testBtn.textContent = oldText;
+      qaBtnBusy(testBtn, false);
     }
   });
 
@@ -1513,20 +1758,40 @@ function bindConnectionPage(box, v, appLogsData, procData) {
     const inp = $(inputId);
     if (!btn || !inp) return;
     btn.addEventListener('click', async () => {
-      if (btn.dataset.on === '1') {
-        inp.value = '******';
-        btn.dataset.on = '0';
-        btn.textContent = '显示';
-        return;
-      }
+      // P3：请求期间锁按钮 —— 两次点击会并发读令牌、互相覆盖显示态。
+      qaBtnBusy(btn, true);
       try {
-        const r = await api(`/api/onebot-token?which=${which}`);
-        inp.value = String((r && r.token) || '');
-        btn.dataset.on = '1';
-        btn.textContent = '隐藏';
-      } catch (e) {
-        const hint = $('#conn-save-hint');
-        if (hint) hint.textContent = `读取令牌失败：${e.message}`;
+        if (btn.dataset.on === '1') {
+          // 2026-11-16 P1：旧实现无条件写 '******' —— 用户把令牌改成新的再点
+          // 「隐藏」，新值被掩码吞掉；后端又把 '******' 当"不修改"，新令牌静默丢失。
+          // 先取服务端明文，只有框里仍是原值才盖掩码；用户改过的值原样保留（只变回圆点）。
+          let real = null;
+          try {
+            const r = await api(`/api/onebot-token?which=${which}`);
+            real = String((r && r.token) || '');
+          } catch { /* 读不到明文也不能吞掉用户输入：只切类型 */ }
+          const current = inp.value || '';
+          inp.type = 'password';
+          if (real && current === real) inp.value = '******';
+          btn.dataset.on = '0';
+          btn.textContent = '显示';
+          return;
+        }
+        try {
+          const r = await api(`/api/onebot-token?which=${which}`);
+          const real = String((r && r.token) || '');
+          // 已经填了新明文就别用服务端旧令牌覆盖（"隐藏后再次显示"同样是这个场景）
+          const current = inp.value || '';
+          if (!current || current === '******') inp.value = real;
+          inp.type = 'text';
+          btn.dataset.on = '1';
+          btn.textContent = '隐藏';
+        } catch (e) {
+          const hint = $('#conn-save-hint');
+          if (hint) hint.textContent = `读取令牌失败：${e.message}`;
+        }
+      } finally {
+        qaBtnBusy(btn, false);
       }
     });
   };

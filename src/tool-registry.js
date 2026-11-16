@@ -24,6 +24,7 @@
 // 必然出现"UI 说能用、运行时空工具列表"的割裂。现在只有这一处口径。
 
 import { SKILL_ERROR, skillErrorText } from './skills/errors.js';
+import { logger } from './logger.js';
 // 默认用全局 SkillManager 单例：见下面 getToolAvailability 里的说明。
 // 无循环依赖 —— manager.js 只 import registry/capabilities/config/errors，不碰本文件。
 import { skillManager as defaultSkillManager } from './skills/manager.js';
@@ -204,7 +205,17 @@ export function getToolAvailability(toolId, context = {}) {
         if (r && typeof r === 'object' && r.ok === false) {
           return deny('skill-guard', String(r.reason || `${skillLabel(skills, skillId)}：运行时否决`));
         }
-      } catch { /* guard 异常不阻断工具，只在别处记日志 */ }
+      } catch (error) {
+        // 安全类 fail-closed：guard 抛异常时不能据此放行工具 —— 一个会抛错的 guard
+        // 等于没有 guard（第三方 Skill 故意让 guard 抛异常即可绕过否决）。
+        // 阻断该次工具调用，并留一条包含工具名 + 错误摘要的明确日志供排障。
+        // 注意只影响"本次可用性判定"，不改注册表、不注销工具，正常注册/调用不受影响。
+        const summary = String(error?.message || error || '未知错误').slice(0, 200);
+        try {
+          logger.error('tool-guard', `工具 ${def.id} 的 skill-guard 抛异常，已按 fail-closed 阻断本次调用：${summary}`);
+        } catch { /* 日志失败不影响拦截本身 */ }
+        return deny('skill-guard-error', `工具 ${def.id} 的安全 guard 异常，已阻断本次调用：${summary}`);
+      }
     }
   }
 

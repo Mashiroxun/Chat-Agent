@@ -4,6 +4,15 @@
 //   不含 QQ 号、群号、昵称、聊天内容、机器信息、IP（IP 只在服务器内存里做限流，不落库）。
 // 去重原理：服务器按 installId 覆盖式 upsert —— 同一客户端无论发多少次都只算一份，
 //   彻底避免"一个用户的客户端发送多份"。覆盖安装/重装系统后 data 目录还在 → installId 不变。
+//
+// 2026-11-15（拟并入 0.4.9.5）：修「下载多、遥测少」的触发时机缺陷。
+//   原先只有「启动 90 秒」+「之后每 6 小时」两次机会，而 telemetry-totals.json
+//   要等首次会话结束才落盘（sessions.js #bumpTodayUsage）。新装用户在 90 秒时
+//   几乎必然还没配好 API、没跑完首次对话 → 首报因 calls=0 直接 return，
+//   数据就绪后却要再等 6 小时才发；期间退出当天根本不进遥测。
+//   现在由 sessions.js 在首次写出 totals 后调用 reportOnFirstUsage() 立即补发一次，
+//   并把每次上报的结果写进 telemetry-last.json，避免以后再靠「日志里没有失败记录」
+//   去猜链路是否正常（成功时本来就不写日志）。
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -12,10 +21,12 @@ import { DATA_DIR, ROOT } from './config.js';
 const REPORT_URL = 'https://kondius.cn/qq-agent/api/telemetry';
 const INTERVAL_MS = 6 * 3600 * 1000;   // 之后每 6 小时一次
 const FIRST_DELAY_MS = 90 * 1000;      // 启动 90 秒后发第一次（避开启动高峰）
+const RETRY_DELAY_MS = 15 * 1000;      // 上次上报失败：启动 15 秒后尽快补一次
 
 const ID_FILE = path.join(DATA_DIR, 'telemetry.json');
 const TOTALS_FILE = path.join(DATA_DIR, 'telemetry-totals.json');
 const SESSIONS_DIR = path.join(DATA_DIR, 'sessions');
+const LAST_FILE = path.join(DATA_DIR, 'telemetry-last.json');
 
 /** 一个会话里的 LLM 调用次数（与用量页同口径：带 token 用量的 raw 条目数）。 */
 function countLlmCalls(s) {
@@ -25,6 +36,26 @@ function countLlmCalls(s) {
     if ((Number(ru.prompt_tokens) || 0) + (Number(ru.completion_tokens) || 0) > 0) n += 1;
   }
   return n;
+}
+
+/**
+ * 落盘「最近一次上报的结果」，供排障与 UI 自查。
+ * 只记时间、成功与否、原因、HTTP 状态、截断后的错误摘要；
+ * 不写 installId、不写路径、不写任何账号/聊天信息。
+ * 状态文件本身不是关键数据：写失败绝不能反过来影响上报主流程。
+ */
+function writeLast(state) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const tmp = `${LAST_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ at: new Date().toISOString(), ...state }), 'utf8');
+    fs.renameSync(tmp, LAST_FILE);
+  } catch { /* 状态落盘失败不影响使用 */ }
+}
+
+/** 读取最近一次上报结果；文件不存在/损坏时返回 null。 */
+export function lastReportState() {
+  try { return JSON.parse(fs.readFileSync(LAST_FILE, 'utf8')); } catch { return null; }
 }
 
 /**
@@ -119,9 +150,13 @@ function appVersion() {
   } catch { return ''; }
 }
 
-export async function report(log) {
+export async function report(log = () => {}) {
   const totals = loadTotals();   // 没有用量（含重建后仍为空）就不报
-  if (!totals || !Number(totals.calls)) return;
+  if (!totals || !Number(totals.calls)) {
+    // 不发请求，但把「为什么没报」记下来：排障时能区分「还没用」和「网络不通」。
+    writeLast({ ok: null, reason: 'no-usage' });
+    return;
+  }
   // 工具调用明细：只留 [a-z0-9_] 形态的键、整数次数，最多 50 个键
   const toolCounts = {};
   for (const [k, v] of Object.entries(totals.toolCounts || {})) {
@@ -144,21 +179,55 @@ export async function report(log) {
       }),
       signal: AbortSignal.timeout(8000)
     });
-    if (!res.ok) log(`[遥测] 上报返回 HTTP ${res.status}（不影响使用）`);
+    if (!res.ok) {
+      log(`[遥测] 上报返回 HTTP ${res.status}（不影响使用）`);
+      writeLast({ ok: false, reason: 'http', httpStatus: res.status });
+    } else {
+      writeLast({ ok: true });
+    }
   } catch (e) {
-    log(`[遥测] 上报失败（不影响使用）: ${e?.message ?? e}`);
+    const msg = String(e?.message ?? e).slice(0, 200);
+    log(`[遥测] 上报失败（不影响使用）: ${msg}`);
+    writeLast({ ok: false, reason: 'network', error: msg });
   }
+}
+
+let firstUsageReported = false;
+
+/**
+ * 用量数据首次就绪时立即上报一次，不再死等 6 小时定时器。
+ * 由 sessions.js 在 telemetry-totals.json 首次创建并写成功后调用。
+ *
+ * 进程内只触发一次：服务端按 installId 覆盖式 upsert，多发几次不会增加实例数，
+ * 但会话结束是高频事件，没必要跟着每个会话打一次网络请求。
+ * 本次失败也不在进程内重试 —— 6 小时循环会再试，下次启动若读到 ok:false
+ * 还会把首发提前到 15 秒；不重启也不会因为反复失败拖慢主流程。
+ * @returns {boolean} 是否真的触发了一次上报
+ */
+export async function reportOnFirstUsage(log = () => {}) {
+  if (firstUsageReported) return false;
+  firstUsageReported = true;
+  // 调用方是 void（不 await）的：这里必须自己兜住所有异常，
+  // 否则一次意外的 reject 会变成 unhandledRejection 直接掀掉主进程。
+  try { await report(log); } catch { /* 上报失败绝不能影响会话结束 */ }
+  return true;
 }
 
 let firstTimer = null;
 let loopTimer = null;
 
+/** 首发延迟：上次上报失败就尽快补一次，否则按常规避开启动高峰。单独导出便于测试。 */
+export function firstReportDelayMs() {
+  return lastReportState()?.ok === false ? RETRY_DELAY_MS : FIRST_DELAY_MS;
+}
+
 export function startTelemetryLoop(log = console.log) {
+  // 上次上报失败留下的状态 → 这次启动尽快补一次，别再等满 90 秒。
   const first = setTimeout(() => {
     report(log);
     loopTimer = setInterval(() => report(log), INTERVAL_MS);
     loopTimer.unref?.();
-  }, FIRST_DELAY_MS);
+  }, firstReportDelayMs());
   first.unref?.();
   firstTimer = first;
 }

@@ -4,6 +4,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>QQ Agent 开发工单</title>
+  <script>
+    /* 主题预置（与 /theme-boot.js 逐字一致）：本页与 /ui 同源、localStorage 共用，
+       在样式生效前定好 data-theme，避免浮窗永远白色与主窗口暗色割裂。 */
+    (function () {
+      try {
+        var saved = localStorage.getItem('qqa-theme') || '';
+        var sys = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        var theme = (saved === 'light' || saved === 'dark' || saved === '?') ? saved : (saved === 'system' ? sys : (saved || sys));
+        if (theme !== 'light' && theme !== 'dark' && theme !== '?') theme = 'dark';
+        document.documentElement.setAttribute('data-theme', theme);
+      } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+    })();
+  </script>
   <link rel="stylesheet" href="dev-chat.css">
 </head>
 <body>

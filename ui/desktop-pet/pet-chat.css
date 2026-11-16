@@ -1,7 +1,9 @@
 /* 桌宠「直接对话」窗口：420×540 透明圆角卡片。
    视觉与桌宠气泡 / 用量卡片 / 开发工单窗同一套（白底、圆角、淡阴影），
    消息区参照 QQ 单聊：自己靠右（实心蓝），对方靠左（带小头像的浅底气泡），
-   表情包按原图比例贴在气泡外侧，不裁切、不加背景。 */
+   表情包按原图比例贴在气泡外侧，不裁切、不加背景。
+   2026-11-16 UI 审查修复：辅助文字色统一提到 WCAG AA 正文 4.5:1（#69707a ≈5:1），
+   中文辅助文字最小 12px（10px 汉字笔画粘连）。 */
 * { box-sizing: border-box; }
 html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
 body { font: 13px/1.55 "Microsoft YaHei", "Segoe UI", sans-serif; color: #1a2a3a; }
@@ -22,9 +24,9 @@ body { font: 13px/1.55 "Microsoft YaHei", "Segoe UI", sans-serif; color: #1a2a3a
 /* 会话标签：明说这条会话只属于主人，别让用户以为在某个群里 */
 .hd-tag {
   flex: 0 0 auto; padding: 1px 7px; border-radius: 999px;
-  background: #eef6ff; border: 1px solid #cfe4fb; color: #185fa5; font-size: 10.5px;
+  background: #eef6ff; border: 1px solid #cfe4fb; color: #185fa5; font-size: 11px;
 }
-.hd-status { font-size: 11px; color: #7b93a6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hd-status { font-size: 12px; color: #69707a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ghost {
   margin-left: auto; padding: 3px 8px; border: 1px solid #d6e3ee; border-radius: 8px;
   background: #fff; color: #365e7e; font: 11px/1.4 inherit; cursor: pointer;
@@ -32,7 +34,7 @@ body { font: 13px/1.55 "Microsoft YaHei", "Segoe UI", sans-serif; color: #1a2a3a
 .ghost:hover { background: #f2f7fb; }
 .x {
   width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%;
-  background: transparent; color: #7b93a6; font: 17px/1 "Segoe UI", sans-serif; cursor: pointer;
+  background: transparent; color: #69707a; font: 17px/1 "Segoe UI", sans-serif; cursor: pointer;
 }
 .x:hover { background: #eef4f9; color: #365e7e; }
 
@@ -43,9 +45,9 @@ body { font: 13px/1.55 "Microsoft YaHei", "Segoe UI", sans-serif; color: #1a2a3a
 .list::-webkit-scrollbar { width: 8px; }
 .list::-webkit-scrollbar-thumb { background: #d6e3ee; border-radius: 8px; }
 
-.empty { margin: auto 10px; text-align: center; color: #7b93a6; }
+.empty { margin: auto 10px; text-align: center; color: #69707a; }
 .empty-title { margin: 0 0 6px; font-size: 13px; color: #365e7e; }
-.empty-desc { margin: 0; font-size: 11px; line-height: 1.75; }
+.empty-desc { margin: 0; font-size: 12px; line-height: 1.75; }
 
 /* ── 一条消息 ── */
 .row { display: flex; align-items: flex-end; gap: 6px; max-width: 100%; }
@@ -70,11 +72,11 @@ body { font: 13px/1.55 "Microsoft YaHei", "Segoe UI", sans-serif; color: #1a2a3a
 .att { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 4px; }
 .att-chip {
   padding: 2px 7px; border: 1px solid #cfe4fb; border-radius: 7px;
-  background: #f4f9ff; font-size: 10.5px; color: #185fa5;
+  background: #f4f9ff; font-size: 11px; color: #185fa5;
 }
 
 /* 这条会话里的其他人（理论上只有主人能进来，留着以防真有人从别处搭话） */
-.who { display: block; margin-bottom: 2px; font-size: 10px; color: #8aa0b2; }
+.who { display: block; margin-bottom: 2px; font-size: 12px; color: #69707a; }
 
 .sticker {
   display: block; max-width: 132px; max-height: 132px; border-radius: 10px;
@@ -82,7 +84,7 @@ body { font: 13px/1.55 "Microsoft YaHei", "Segoe UI", sans-serif; color: #1a2a3a
 }
 .sticker.missing {
   width: 96px; height: 96px; display: flex; align-items: center; justify-content: center;
-  border: 1px dashed #d6e3ee; color: #9aaebd; font-size: 11px; background: #fbfdff;
+  border: 1px dashed #d6e3ee; color: #69707a; font-size: 12px; background: #fbfdff;
 }
 
 /* 正在输入 */
@@ -92,7 +94,7 @@ body { font: 13px/1.55 "Microsoft YaHei", "Segoe UI", sans-serif; color: #1a2a3a
 .typing i:nth-child(3) { animation-delay: .36s; }
 @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
 
-.tip { align-self: center; font-size: 10.5px; color: #9aaebd; }
+.tip { align-self: center; font-size: 12px; color: #69707a; }
 .tip.err { color: #a32d2d; }
 
 /* ── 附件条（加号选的 / 拖进来的文件）── */
@@ -101,13 +103,13 @@ body { font: 13px/1.55 "Microsoft YaHei", "Segoe UI", sans-serif; color: #1a2a3a
 .chip {
   display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
   padding: 3px 6px 3px 8px; border: 1px solid #d6e3ee; border-radius: 8px;
-  background: #fbfdff; font-size: 11px; color: #365e7e;
+  background: #fbfdff; font-size: 12px; color: #365e7e;
 }
 .chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
-.chip-size { color: #9aaebd; font-size: 10px; white-space: nowrap; }
+.chip-size { color: #69707a; font-size: 12px; white-space: nowrap; }
 .chip-x {
   width: 15px; height: 15px; padding: 0; border: 0; border-radius: 50%;
-  background: transparent; color: #9aaebd; font: 12px/1 "Segoe UI", sans-serif; cursor: pointer; flex: 0 0 auto;
+  background: transparent; color: #69707a; font: 12px/1 "Segoe UI", sans-serif; cursor: pointer; flex: 0 0 auto;
 }
 .chip-x:hover { background: #eef4f9; color: #a32d2d; }
 
@@ -133,3 +135,46 @@ body { font: 13px/1.55 "Microsoft YaHei", "Segoe UI", sans-serif; color: #1a2a3a
 }
 .send:hover { background: #134e87; }
 .send:disabled { background: #b7c6d2; cursor: default; }
+
+/* ── 暗色主题（2026-11-16 审查修复）：与主窗口 data-theme 联动 ──
+   浮窗是透明窗 + 内缩卡片，只换卡片自身的表面/文字色，窗口底保持透明。 */
+[data-theme='dark'] body { color: #e9eaec; }
+[data-theme='dark'] .panel {
+  background: rgba(36, 37, 43, .97);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .5), 0 0 0 1px rgba(255, 255, 255, .12);
+}
+[data-theme='dark'] .hd,
+[data-theme='dark'] .attach,
+[data-theme='dark'] .composer { border-color: rgba(255, 255, 255, .09); }
+[data-theme='dark'] .hd-status,
+[data-theme='dark'] .empty,
+[data-theme='dark'] .who,
+[data-theme='dark'] .tip,
+[data-theme='dark'] .chip-size { color: #8a919d; }
+[data-theme='dark'] .hd-tag { background: rgba(61, 139, 253, .14); border-color: rgba(61, 139, 253, .3); color: #7fb0ff; }
+[data-theme='dark'] .ghost,
+[data-theme='dark'] .plus {
+  background: #2a2c33; border-color: rgba(255, 255, 255, .15); color: #b7c3d0;
+}
+[data-theme='dark'] .ghost:hover,
+[data-theme='dark'] .plus:hover { background: #343742; }
+[data-theme='dark'] .x { color: #8a919d; }
+[data-theme='dark'] .x:hover { background: #343742; }
+[data-theme='dark'] .empty-title { color: #7fb0ff; }
+[data-theme='dark'] .ava { background: rgba(61, 139, 253, .18); color: #7fb0ff; }
+[data-theme='dark'] .bubble.them { background: #2a2c33; color: #e9eaec; }
+[data-theme='dark'] .bubble.me { background: #3d8bfd; color: #fff; }
+[data-theme='dark'] .att-chip { background: rgba(61, 139, 253, .12); border-color: rgba(61, 139, 253, .3); color: #7fb0ff; }
+[data-theme='dark'] .sticker.missing { border-color: rgba(255, 255, 255, .15); color: #8a919d; background: #202127; }
+[data-theme='dark'] .tip.err { color: #ff6b6b; }
+[data-theme='dark'] .list::-webkit-scrollbar-thumb { background: #3f434d; }
+[data-theme='dark'] .chip { background: #202127; border-color: rgba(255, 255, 255, .15); color: #b7c3d0; }
+[data-theme='dark'] .chip-x { color: #8a919d; }
+[data-theme='dark'] .chip-x:hover { color: #ff6b6b; }
+[data-theme='dark'] .plus:disabled { background: #2a2c33; color: #5b5f68; }
+[data-theme='dark'] .composer { background: #202127; }
+[data-theme='dark'] .input { background: #1d1e23; border-color: rgba(255, 255, 255, .15); color: #e9eaec; }
+[data-theme='dark'] .input:focus { border-color: #3d8bfd; box-shadow: 0 0 0 3px rgba(61, 139, 253, .2); }
+[data-theme='dark'] .send { background: #3d8bfd; }
+[data-theme='dark'] .send:hover { background: #2f6fd0; }
+[data-theme='dark'] .send:disabled { background: #4a4d55; }

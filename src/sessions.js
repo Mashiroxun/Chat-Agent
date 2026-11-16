@@ -8,6 +8,7 @@ import { DATA_DIR } from './config.js';
 import { logger } from './logger.js';
 import { atomicWriteText } from './atomic-write.js';
 import { appendUsageLedger } from './usage-ledger.js';
+import { reportOnFirstUsage } from './telemetry.js';
 
 const SESSIONS_DIR = path.join(DATA_DIR, 'sessions');
 // 索引缓存：启动加速的关键。没有它时 #loadIndex 要逐个 readFileSync+JSON.parse
@@ -709,8 +710,12 @@ export class SessionRegistry {
     fs.renameSync(tmp, path.join(DATA_DIR, 'usage-today.json'));
 
     // 累计总量（匿名遥测的唯一数据源：调用次数 + 三档 token 数，无任何身份信息）
+    // 2026-11-15：本文件首次创建 = 该安装第一次产生真实用量。写成功后立刻上报一次，
+    // 否则要等 6 小时定时器，新装用户常在这之前就退出了（见 telemetry.js 文件头）。
+    let justCreatedTotals = false;
     try {
       const tPath = path.join(DATA_DIR, 'telemetry-totals.json');
+      const totalsFirstWrite = !fs.existsSync(tPath);
       let t = { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0, toolCounts: {} };
       try { t = { ...t, ...JSON.parse(fs.readFileSync(tPath, 'utf8')) }; } catch { /* 首次 */ }
       // ⚠️ calls 的口径是「LLM 调用次数」（与用量页一致：带 token 用量的 raw 条目数），
@@ -738,7 +743,11 @@ export class SessionRegistry {
       const tTmp = `${tPath}.${process.pid}.tmp`;
       fs.writeFileSync(tTmp, JSON.stringify(t), 'utf8');
       fs.renameSync(tTmp, tPath);
+      justCreatedTotals = totalsFirstWrite;
     } catch { /* 遥测记账失败不影响主流程 */ }
+    // 只在 totals 确实首次写成功时触发：写失败时 loadTotals() 读不到数据，发了也白发。
+    // reportOnFirstUsage 内部 fire-and-forget，绝不阻塞会话结束主流程。
+    if (justCreatedTotals) void reportOnFirstUsage();
   }
 
   /**

@@ -259,7 +259,7 @@
 }
 .uh-rate .uh-kl { font-size: 10.5px; }
 .uh-rate i {
-  font-style: normal; font-size: 10px; color: var(--fg-mute); text-align: center; max-width: 128px;
+  font-style: normal; font-size: 12px; color: var(--fg-mute); text-align: center; max-width: 128px;
   /* P1-05（2026-11-14）：「命中 X / 输入 Y」是命中率唯一的口径说明，曾经
      nowrap + ellipsis 把分母截掉（输入 69,397,309 只剩一半）。改为可换行。 */
   white-space: normal; line-height: 1.5; overflow-wrap: anywhere;
@@ -733,7 +733,7 @@
   border-color: var(--accent);
   color: var(--on-accent);
 }
-.ub-tabs .btn.btn-primary:hover { color: var(--on-accent); filter: brightness(1.1); }
+.ub-tabs .btn.btn-primary:hover:not(:disabled) { color: var(--on-accent); filter: brightness(1.1); }
 
 
 /* 用量页范围按钮：选中（btn-primary 叠加态）凹下，未选中凸起。
@@ -745,8 +745,8 @@
   border-color: var(--accent);
   color: var(--on-accent);
 }
-.usage-days .btn.btn-primary:hover,
-.usage-ctrl .btn.btn-primary:hover { color: var(--on-accent); filter: brightness(1.1); }
+.usage-days .btn.btn-primary:hover:not(:disabled),
+.usage-ctrl .btn.btn-primary:hover:not(:disabled) { color: var(--on-accent); filter: brightness(1.1); }
 
 /* ── 模型单价卡片 + 批量编辑 ── */
 .price-card {
@@ -884,11 +884,14 @@
 .icon-btn:hover { background: var(--hover); border-color: var(--accent); }
 .icon-btn:active { background: var(--active); }
 
-/* 键盘可达性：统一焦点环 */
+/* 键盘可达性：统一焦点环
+   ⚠️ 不要在这里写 border-radius。曾经写过 `border-radius: 6px`，于是本来就是
+   10px 圆角的窗口按钮 / 顶栏页签被聚焦时"变方"（outline 是跟随元素自身
+   border-radius 绘制的，不需要也不应该由焦点环强制指定）。
+   本规则只负责「形状无关」的三件事：颜色、粗细、偏移。 */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 6px;
 }
 
 /* 主题选择组（设置页）：凸起卡片，选中凹下 */
@@ -1294,6 +1297,11 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 6px; }
   background: var(--inset-bg); border: 1px solid var(--border); color: var(--text);
   border-radius: 6px; padding: 6px 8px; font-size: 14px; outline: none;
   box-shadow: var(--inset-edge);
+}
+/* R97：数字档位框 focus-visible 补视觉增量，特异性 (0,3,0) 盖过皮肤层 :focus */
+.tp-row .tp-num:focus-visible {
+  outline: none;
+  box-shadow: var(--inset-edge), 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
 }
 .tp-row .tp-hint { flex: 1; min-width: 0; font-size: 12px; color: var(--faint); }
 @media (max-width: 560px) {
@@ -1710,8 +1718,12 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 6px; }
 [data-theme='?'] .session-item:nth-child(odd):hover,  [data-theme='?'] .chat-item:nth-child(odd):hover  { transform: translateX(18px) rotate(1.6deg) scale(1.03); }
 [data-theme='?'] .session-item:nth-child(even):hover, [data-theme='?'] .chat-item:nth-child(even):hover { transform: translateX(12px) rotate(-1.6deg) scale(1.03); }
 
-/* ── 按钮：hover 抽帧摇摆；主按钮翻跟斗；按压压扁 ── */
-[data-theme='?'] .btn:hover, [data-theme='?'] .nav-btn:hover, [data-theme='?'] .icon-btn:hover {
+/* ── 按钮：hover 抽帧摇摆；主按钮翻跟斗；按压压扁 ──
+   2026-11-16：加 :not(:disabled) —— 禁用按钮跟着一起抽搐就把"点不了"这件事
+   彻底说反了（乱码主题再疯，禁用语义也不能丢）。 */
+[data-theme='?'] .btn:hover:not(:disabled),
+[data-theme='?'] .nav-btn:hover:not(:disabled),
+[data-theme='?'] .icon-btn:hover:not(:disabled) {
   animation: chaosBtnShake .45s steps(4) infinite;
 }
 @keyframes chaosBtnShake {
@@ -1721,7 +1733,7 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 6px; }
   75%      { transform: rotate(-4deg) scale(1.12); }
 }
 [data-theme='?'] .btn-primary { perspective: 600px; }
-[data-theme='?'] .btn-primary:hover { animation: chaosFlip .6s steps(7, end); }
+[data-theme='?'] .btn-primary:hover:not(:disabled) { animation: chaosFlip .6s steps(7, end); }
 @keyframes chaosFlip {
   0%   { transform: rotateX(0) scale(1.1); }
   100% { transform: rotateX(360deg) scale(1.1); }
@@ -1943,10 +1955,14 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 6px; }
   color: var(--muted);
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
-  transition: background-color var(--dur-fast) var(--ease-in-out), color var(--dur-fast) var(--ease-in-out);
+  transition: background-color var(--dur-fast) var(--ease-in-out), color var(--dur-fast) var(--ease-in-out),
+              transform var(--dur-fast) var(--ease-out-quart);
 }
 .mcard-gear svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .mcard-gear:hover { background: var(--accent); color: var(--on-accent); }
+/* 按下：齿轮/删除这类"卡片角上的小图标"没有文案变化可依靠，
+   唯一的确认信号就是手感的缩放（与 .btn 的 .955 同语言，30px 小目标略深一档）。 */
+.mcard-gear:active { transform: scale(.94); }
 
 /* 删除钮：固定在卡片**右下角**（用户要求）。脱离操作区绝对定位，
    hover 变红 —— 破坏性操作要一眼可辨。
@@ -1961,10 +1977,12 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 6px; }
   color: var(--muted);
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
-  transition: background-color var(--dur-fast) var(--ease-in-out), color var(--dur-fast) var(--ease-in-out);
+  transition: background-color var(--dur-fast) var(--ease-in-out), color var(--dur-fast) var(--ease-in-out),
+              transform var(--dur-fast) var(--ease-out-quart);
 }
 .mcard-del svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.mcard-del:hover { background: var(--red); color: var(--on-accent); }
+.mcard-del:hover:not(:disabled) { background: var(--red); color: var(--on-accent); }
+.mcard-del:active:not(:disabled) { transform: scale(.94); }
 .mcard-del:disabled { opacity: .45; cursor: not-allowed; }
 .mcard-del:disabled:hover { background: var(--layer-2); color: var(--muted); }
 /* 右下角按钮会压到最后一行的「目录」文本：给它留出右侧空间 */
@@ -2053,6 +2071,14 @@ input[type="color"]::-webkit-color-swatch { border: none; border-radius: 6px; }
 .ic-row.ok .ic-input { border-color: var(--green); }
 .ic-row.ok.dim .ic-input { opacity: .55; }
 .ic-row.bad .ic-input { border-color: var(--red); animation: icShake .3s var(--ease-in-out); }
+/* R97 遗留：键盘聚焦要有明确反馈。特异性 (0,3,0) 高于皮肤层
+   input[type='text']:focus (0,2,1)，且源顺序在状态色之后，不会被 checking/ok/bad
+   的 border-color 或 05-dialogs.css 的 :focus{box-shadow:none} 吃掉（这里只加 ring，
+   不动状态色，故三态照常显示）。 */
+.ic-row .ic-input:focus-visible {
+  outline: none;
+  box-shadow: var(--inset-edge), 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+}
 @keyframes icShake {
   0%, 100% { transform: translateX(0); }
   25% { transform: translateX(-3px); }

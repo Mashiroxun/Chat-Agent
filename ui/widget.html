@@ -244,6 +244,9 @@
       overflow: hidden;
     }
     .wrow:hover { background: rgba(127, 127, 127, 0.16); }
+    /* 2026-11-16 审查修复：可点击的菜单项给指针光标与键盘焦点环（尺寸/透明度行保持默认） */
+    .wrow[role='menuitem'] { cursor: pointer; }
+    .wrow[role='menuitem']:focus-visible { outline: 2px solid var(--accent, #3d8bfd); outline-offset: -2px; }
     .wrow .wtick {
       flex: none;
       width: 11px;
@@ -264,12 +267,30 @@
       border-radius: 4px;
       background: transparent;
       color: var(--dim);
-      cursor: default;
+      /* 2026-11-16 审查修复：这三颗是真实可点的按钮（绑了 click），
+         却一直是默认箭头光标、悬停无任何变化 —— 看起来像只读标签。
+         补上指针 + 悬停/按压/焦点反馈。桥不可用时整块 .wmenu.off 会
+         pointer-events:none，这些反馈自然失效（不会误导成"能点"）。 */
+      cursor: pointer;
+      transition:
+        background-color 120ms ease,
+        border-color 120ms ease,
+        color 120ms ease,
+        transform 80ms ease;
     }
+    .wseg button:hover { border-color: var(--fg); color: var(--fg); background: rgba(127, 127, 127, 0.16); }
+    .wseg button:active { transform: translateY(1px); }
+    .wseg button:focus-visible { outline: 2px solid var(--accent, #3d8bfd); outline-offset: 1px; }
     .wseg button.cur {
       background: var(--ok);
       border-color: transparent;
       color: var(--card-bg);
+    }
+    /* 当前档位再悬停时保持绿底（否则上面的 hover 会把"选中"信息盖掉） */
+    .wseg button.cur:hover { background: var(--ok); border-color: transparent; color: var(--card-bg); }
+    @media (prefers-reduced-motion: reduce) {
+      .wseg button { transition: none; }
+      .wseg button:active { transform: none; }
     }
     .wmenu input[type="range"] {
       flex: 1;
@@ -290,10 +311,10 @@
          桥不存在时整块置灰并给出提示（设置页/托盘菜单仍可调）。 -->
     <div class="wmenu" id="w-menu" hidden>
       <div class="whint" id="w-menu-hint" hidden>菜单不可用：请重启 QQ Agent</div>
-      <div class="wrow" data-cmd="open-console"><span class="wlab">打开主界面</span></div>
-      <div class="wrow" data-toggle="alwaysOnTop"><span class="wtick">✓</span><span class="wlab">总是置顶</span></div>
-      <div class="wrow" data-toggle="clickThrough"><span class="wtick">✓</span><span class="wlab">鼠标穿透</span></div>
-      <div class="wrow" data-toggle="edgeHide"><span class="wtick">✓</span><span class="wlab">贴边自动收起</span></div>
+      <div class="wrow" role="menuitem" tabindex="0" data-cmd="open-console"><span class="wlab">打开主界面</span></div>
+      <div class="wrow" role="menuitem" tabindex="0" data-toggle="alwaysOnTop"><span class="wtick">✓</span><span class="wlab">总是置顶</span></div>
+      <div class="wrow" role="menuitem" tabindex="0" data-toggle="clickThrough"><span class="wtick">✓</span><span class="wlab">鼠标穿透</span></div>
+      <div class="wrow" role="menuitem" tabindex="0" data-toggle="edgeHide"><span class="wtick">✓</span><span class="wlab">贴边自动收起</span></div>
       <div class="wrow">
         <span class="wlab" style="flex:none">尺寸</span>
         <span class="wseg">
@@ -307,7 +328,7 @@
         <input type="range" id="w-menu-opa" min="30" max="100" step="1" />
         <span class="wopaval" id="w-menu-opa-val">100%</span>
       </div>
-      <div class="wrow danger" data-cmd="close"><span class="wlab">关闭悬浮窗</span></div>
+      <div class="wrow danger" role="menuitem" tabindex="0" data-cmd="close"><span class="wlab">关闭悬浮窗</span></div>
     </div>
     <div class="whead">
       <span class="wdot" id="w-dot"></span>

@@ -19,15 +19,15 @@ function connectSSE() {
   // R112：把连接记进单例，供 reconnectSSE 关闭重建
   sseConn = es;
   es.addEventListener('session-start', () => {
-    loadSessions();
     scheduleStatusRefresh();
-    // 自动跟随新会话（等待中/运行中）
-    if (state.autoFollowRunning) {
-      loadSessions({ quiet: true }).then(() => {
-        const active = state.sessions.find((s) => s.status === 'waiting' || s.status === 'running');
-        if (active && active.id !== state.currentSessionId) selectSession(active.id);
-      }).catch(() => { /* 跟随失败不影响已有列表：下一次 SSE 事件会再试 */ });
-    }
+    // 组C（P2）：这里原来发两次请求（非 quiet loadSessions + quiet loadSessions），
+    // 再叠加 15s 轮询/切页并发，旧响应会覆盖新列表。现在只发一次，自动跟随基于
+    // **同一次结果**（用 loadSessions 返回的会话数组，而非可能已被改写的 state）。
+    loadSessions().then((next) => {
+      if (!next || !state.autoFollowRunning) return;
+      const active = next.find((s) => s.status === 'waiting' || s.status === 'running');
+      if (active && active.id !== state.currentSessionId) selectSession(active.id);
+    }).catch(() => { /* 跟随失败不影响已有列表：下一次 SSE 事件会再试 */ });
   });
   es.addEventListener('session-update', (ev) => {
     let data;
@@ -98,6 +98,14 @@ function connectSSE() {
       if (typeof window.refreshSetupPane === 'function') window.refreshSetupPane();
     } catch { /* 设置页未就绪不阻塞 */ }
     scheduleStatusRefresh();
+  });
+  // 2026-11-16 审查修复：壁纸实时跟随改用本单例 SSE（原 14-wallpaper.js 另开一条
+  // 无 token 的 EventSource，401 后无限重连）。回调在触发时执行，届时 14 已加载，
+  // window.wpPullState 可用；未就绪则跳过，无副作用。
+  es.addEventListener('wallpaper-changed', () => {
+    try {
+      if (typeof window.wpPullState === 'function') window.wpPullState();
+    } catch { /* 壁纸模块未就绪不阻塞 */ }
   });
   es.addEventListener('memory-update', (ev) => {
     let data = {};
@@ -255,10 +263,17 @@ function reconnectSSE() {
 }
 
 // ── 会话视图 ──
+// 组C（P2）：SSE session-start / session-end / 列表轮询 / 切页并发都会调 loadSessions。
+// 请求并发时旧响应迟到会把新列表、签名、选中会话一起冲掉。每轮入口自增、写状态前比对。
+let sessionsLoadSeq = 0;
 async function loadSessions({ quiet = false } = {}) {
+  const seq = ++sessionsLoadSeq;
   try {
     // 一次全取：后端上限 2^20（约等于不限），前端靠分页渲染（SESSION_PAGE）避免卡顿
     const data = await api('/api/sessions?limit=1048576');
+    // 代际保护：await 期间已有更新的 loadSessions 发出的，本轮响应直接丢弃，
+    // 不写 state.sessions / 签名，也不触发渲染、自动选中或详情刷新。
+    if (seq !== sessionsLoadSeq) return null;
     const next = data.sessions || [];
     // BUG-13（R77 同款移植）：轮询路径（quiet=true）在数据**一字未变**时直接跳过整轮渲染。
     // 之前每 refreshMs（默认 15s，设置页下限可调到 1s）都会把 state.sessions 重设一遍
@@ -266,7 +281,7 @@ async function loadSessions({ quiet = false } = {}) {
     // 等于"每隔十几秒把列表整块推倒重画"：视觉闪烁、滚动位置跳动、正在悬停/拖拽的
     // 行被抹掉、CPU 白烧。签名取完整 JSON，不会漏掉任何参与渲染的字段。
     const sig = JSON.stringify(next);
-    if (quiet && state.sessionsSig === sig) return;
+    if (quiet && state.sessionsSig === sig) return next;
     state.sessionsSig = sig;
     state.sessions = next;
     // 聊天花名册（2026-11-12）：会话滚动清理后仍要留在左栏的"历史群"。
@@ -285,7 +300,9 @@ async function loadSessions({ quiet = false } = {}) {
         loadSessionDetail(state.currentSessionId, { quiet: true });
       }
     }
-  } catch (e) { if (!quiet) console.error(e); }
+    // 返回本轮真正采用的数据，供 session-start 的自动跟随基于"同一次结果"
+    return next;
+  } catch (e) { if (!quiet) console.error(e); return null; }
 }
 
 // 会话列表定时刷新：只要停在会话页，就持续更新列表（运行中会话也会轮询详情）
@@ -460,6 +477,12 @@ function replyFreqChip(chatKey) {
   return `<span class="session-freq freq-${esc(f.level)}" title="${esc(f.tip)}">${esc(f.label)}</span>`;
 }
 
+// 2026-11-16 审查修复：SSE 高频推送时 renderSessionList 每 80ms 整表
+// box.innerHTML 重建（几百条会话时每帧解析布局数百行 DOM）。用「渲染出的 HTML
+// 本身」做指纹，内容一字未变就跳过 DOM 写入 —— 比手写字段签名更可靠，
+// 不会因新增模板字段而遗漏。唯一要归一化的是等待倒计时（由 startWaitTicker
+// 独立按 0.1s 更新，不参与重绘判定）。
+let lastSessionListHtml = null;
 function renderSessionList() {
   const box = $('#session-items');
   state.seenSessionIds = state.seenSessionIds || new Set();
@@ -475,7 +498,7 @@ function renderSessionList() {
   //    注意**不能提前 return** —— 函数末尾还要挂事件委托（bindSessionListDelegation），
   //    跳过它会导致"从空变有数据"时委托没挂上、整列点不动。
   const isEmpty = !shown.length;
-  box.innerHTML = isEmpty
+  const html = isEmpty
     ? '<div class="empty-hint">还没有会话记录。<br>有人 @ 机器人或发私聊后，这里会实时出现处理过程。</div>'
     : shown.map((s) => {
     const chatName = formatChatTitle(s.chatKey, chatNameOf(s.chatKey));
@@ -532,6 +555,13 @@ function renderSessionList() {
         ${statsText ? `<div class="session-stats">${statsText}</div>` : ''}
       </div>`;
   }).join('');
+  // 内容未变 → 不写 DOM（保住滚动位置、悬停/拖拽态，省去每 80ms 的整表解析布局）。
+  // 归一化等待倒计时文本：它由 startWaitTicker 独立按 0.1s 更新，不该触发重绘。
+  const fp = html.replace(/等待中 · [\d.]+s/g, '等待中 · #s');
+  if (fp !== lastSessionListHtml) {
+    box.innerHTML = html;
+    lastSessionListHtml = fp;
+  }
   // 底部提示：还有多少条没显示 / 已全部显示
   const more = $('#session-more');
   if (more) {
@@ -623,8 +653,9 @@ function getSessionListHandlers() {
     async onRetry(btn) {
       const id = btn.dataset.id;
       if (!id || btn.disabled) return;
-      btn.disabled = true;
-      btn.textContent = '重试中…';
+      // 加载态走 qaBtnBusy（00-core.js）：只加 spinner + .is-loading + disabled，
+      // **不改文案** —— 旧写法换成「重试中…」会让列表里的按钮宽度跳一下。
+      qaBtnBusy(btn, true);
       try {
         const r = await apiWithRetry(`/api/sessions/${encodeURIComponent(id)}/retry`, {
           method: 'POST', body: '{}'
@@ -636,7 +667,7 @@ function getSessionListHandlers() {
         qaAlert(`重试失败：${err.message}`);
         // ⚠️ 复位要防御：这次渲染出的 btn 可能已被下一帧 innerHTML 换掉（成了游离节点），
         //    对它写 disabled 无害但也没必要；真正在册的同 id 新按钮靠重绘恢复初始态。
-        if (btn.isConnected) { btn.disabled = false; btn.textContent = '重试'; }
+        if (btn.isConnected) qaBtnBusy(btn, false);
       }
     },
 
@@ -646,8 +677,7 @@ function getSessionListHandlers() {
     async onAbort(btn) {
       const id = btn.dataset.id;
       if (!id || btn.disabled) return;
-      btn.disabled = true;
-      btn.textContent = '中止中…';
+      qaBtnBusy(btn, true);
       try {
         const r = await apiWithRetry(`/api/sessions/${encodeURIComponent(id)}/abort`, {
           method: 'POST', body: '{}'
@@ -656,7 +686,7 @@ function getSessionListHandlers() {
         await loadSessions({ quiet: true });
       } catch (err) {
         qaAlert(`中止失败：${err.message}`);
-        if (btn.isConnected) { btn.disabled = false; btn.textContent = '中止'; }
+        if (btn.isConnected) qaBtnBusy(btn, false);
       }
     },
   };
@@ -672,18 +702,24 @@ let waitTicker = null;
 function startWaitTicker() {
   if (waitTicker) return;
   waitTicker = setInterval(() => {
+    // 组C（P3）：先查元素再判 document.hidden。原来隐藏时直接 return，
+    // 走不到下面的 clearInterval —— 会话切走/结束后等待节点消失，定时器却永久空转。
     const els = $$('.session-wait[data-until]');
     if (!els.length) {
       clearInterval(waitTicker);
       waitTicker = null;
       return;
     }
+    // 窗口隐藏时跳过 DOM 写入（其他轮询已做 document.hidden 判断），
+    // 且从 100ms 降到 250ms —— 显示一位小数时 100ms 更新收益有限，
+    // 每帧还要全局查询 + 逐个写 textContent。
+    if (document.hidden) return;
     for (const el of els) {
       const until = Number(el.dataset.until);
       const remain = until - Date.now();
       el.textContent = remain > 0 ? `等待中 · ${(remain / 1000).toFixed(1)}s` : '等待中 · 启动…';
     }
-  }, 100);
+  }, 250);
 }
 
 async function selectSession(id) {
@@ -738,6 +774,9 @@ async function selectSession(id) {
 
 // 上次渲染会话详情的指纹：内容没变就不重渲染（轮询期间避免闪烁与滚动重置）
 let lastDetailFp = null;
+// 组C（P2）：折叠面板展开态按稳定 key 恢复，需要记住上一次渲染的"会话 + 模式"。
+// 会话切换或 JSON 模式切换时快照作废（面板集合完全不同），避免把旧展开态套到新面板。
+let lastDetailRenderKey = null;
 
 // ══════════════════════════════════════════════════════════════════════════
 // r88 · 会话报错「说人话」
@@ -923,21 +962,21 @@ function renderSessionDetail(s) {
       error: s.error ?? null
     };
     html.push(`
-      <details class="collapsible" open>
+      <details class="collapsible" open data-key="json">
         <summary>JSON 模式（模型输入/输出的原始内容）</summary>
         <div class="coll-body" style="max-height:none">${esc(JSON.stringify(raw, null, 2))}</div>
       </details>`);
   } else {
     if (s.systemPrompt) {
       html.push(`
-        <details class="collapsible">
+        <details class="collapsible" data-key="system">
           <summary>系统提示（${s.systemPrompt.length} 字符，每次运行重发）</summary>
           <div class="coll-body">${esc(s.systemPrompt)}</div>
         </details>`);
     }
     if (s.userPrompt) {
       html.push(`
-        <details class="collapsible" open>
+        <details class="collapsible" open data-key="user">
           <summary>本次输入（${s.userPrompt.length} 字符 —— 零对话历史，全部来自 JSON 存档）</summary>
           <div class="coll-body">${esc(s.userPrompt)}</div>
         </details>`);
@@ -983,11 +1022,24 @@ function renderSessionDetail(s) {
   if (s.finishReason) html.push(`<div class="bubble bubble-user">finish：${esc(s.finishReason)}</div>`);
   html.push('</div>');
 
-  // 折叠面板的展开状态也要保留（否则每次刷新"系统提示"都被折回去）
+  // 组C（P2）：折叠面板展开态按稳定 key 恢复。原来"旧 DOM 第 i 个 details 的 open
+  // 套到新 DOM 第 i 个"，面板数量/顺序一变（如本次输入面板随内容有无而增减）就串位。
+  // 现在读 data-key（缺则从 summary 文本兜底），同一会话/同一模式内才恢复。
+  const renderKey = `${s.id}|${state.sessionJsonMode === s.id ? 'json' : 'ui'}`;
   const openStates = new Map();
-  detail.querySelectorAll('details.collapsible').forEach((d, i) => openStates.set(i, d.open));
+  if (lastDetailRenderKey === renderKey) {
+    const keyOf = (d) => d.dataset.key || d.querySelector('summary')?.textContent || '';
+    detail.querySelectorAll('details.collapsible').forEach((d) => {
+      const key = keyOf(d);
+      if (key) openStates.set(key, d.open);
+    });
+  }
+  lastDetailRenderKey = renderKey;
   detail.innerHTML = html.join('');
-  detail.querySelectorAll('details.collapsible').forEach((d, i) => { if (openStates.has(i)) d.open = openStates.get(i); });
+  detail.querySelectorAll('details.collapsible').forEach((d) => {
+    const key = d.dataset.key || d.querySelector('summary')?.textContent || '';
+    if (openStates.has(key)) d.open = openStates.get(key);
+  });
   bindSessionErrorFix();   // r88：错误卡片上的「去改设置」按钮（委托，幂等）
   const jsonBtn = $('#json-mode-btn');
   if (jsonBtn) jsonBtn.addEventListener('click', () => {

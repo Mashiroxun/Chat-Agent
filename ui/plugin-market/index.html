@@ -9,7 +9,9 @@
 <script src="/assets/theme.js" defer></script>
 <script src="/assets/qqagent-nav.js" defer></script>
 <style>
-:root{--ink:#17325a;--muted:#6682a5;--bg:#eef3f9;--panel:rgba(255,255,255,.78);--line:rgba(51,133,240,.16);--accent:#3385f0;--accent2:#1658ba;--hot:#ed8e2b;--shadow:0 18px 46px rgba(27,69,122,.12)}
+/* 2026-11-16 审查修复：--muted 原 #6682a5 在白/半透白卡上仅 3.96:1（正文 17px/13.5px 均不达标），
+   加深到 #526b8c：白底 5.47:1、卡片次面 #f5f7fa 5.09:1，均过 WCAG AA。 */
+:root{--ink:#17325a;--muted:#526b8c;--bg:#eef3f9;--panel:rgba(255,255,255,.78);--line:rgba(51,133,240,.16);--accent:#3385f0;--accent2:#1658ba;--hot:#ed8e2b;--shadow:0 18px 46px rgba(27,69,122,.12)}
 *{box-sizing:border-box}body{margin:0;color:var(--ink);font-family:"Microsoft YaHei","PingFang SC",sans-serif;background:transparent;line-height:1.6}
 html.no-theme body{background:radial-gradient(900px 500px at 7% -10%,#cfe4ff,transparent 68%),radial-gradient(760px 420px at 95% 2%,#ffe6c8,transparent 65%),var(--bg)}
 .wrap{max-width:1180px;margin:auto;padding:0 24px}

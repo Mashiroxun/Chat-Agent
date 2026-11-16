@@ -68,6 +68,31 @@
    #tabs 本身不豁免，于是标签之间的空隙、.nav-spacer 空白处仍可拖动窗口。 */
 #topbar button { -webkit-app-region: no-drag; app-region: no-drag; }
 
+/* ── 模态期间锁死顶栏导航（纯 CSS，无 JS 依赖）──
+   背景：弹窗遮罩是 `inset: var(--topbar-h) 0 0 0` —— 刻意不盖顶栏，
+   好让无边框窗口下仍能拖动/最小化/关闭（见 01-base.css 与 03-workspace.css 的注释）。
+   代价是弹窗期间顶栏导航依然亮白可点：点「用量/扩展」后弹窗停在原位、
+   背后内容已经换页，遮罩语义和焦点陷阱同时失效，看起来像弹窗卡死。
+
+   用 :has() 在「遮罩真的在 DOM 里」时把导航打成禁用态。
+   ⚠️ 两个遮罩类名都是 JS 手动 createElement 后 append 的（见 app/08-modals.js、
+      app/06-settings-render.js、app/10-feedback.js），关闭时从 DOM 移除 ——
+      所以 :has() 只在**真的打开期间**命中，不会因为常驻 DOM 而永久锁死。
+      :not(.closing) 跳过退场动画（那 ~200ms 里遮罩已 pointer-events:none）。
+   ⚠️ 只锁 #tabs 里的 .nav-item（切换页面这件事），**不碰 .win-controls /
+      .win-btn** —— 最小化/关闭窗口任何时候都必须可点。
+   ⚠️ #tabs 里没有 .tab（.tab-pool 是永不显示的隐藏身份锚点），故不写 .tab 选择器。
+   ⚠️ 刻意不含 #loading-overlay：它是启动遮罩、由 hideLoading() 移除，
+      万一某条失败路径没跑到，.nav-item 会被永久禁用 —— 风险大于收益。 */
+html:has(.modal-overlay:not(.closing)) #tabs .nav-item,
+html:has(.model-modal-overlay:not(.closing)) #tabs .nav-item {
+  pointer-events: none;
+  opacity: .55;
+  /* 只为 opacity 补过渡；pointer-events:none 已让 :hover 彻底失效，
+     不会出现"变淡了还能悬停高亮"的误导。 */
+  transition: opacity .15s var(--ease-in-out);
+}
+
 /* ── 窗口控制按钮组（最小化 / 最大化 / 关闭）── */
 /* 它落在网格第三列（1fr），默认 stretch 会让这组按钮贴在该列的**左**边，
    于是离窗口右缘还差半列宽 —— 必须显式靠右。 */
@@ -123,7 +148,9 @@
   box-shadow: var(--inset-edge);
   transition: box-shadow var(--dur-base) var(--ease-in-out);
 }
-.readiness-dots:hover { box-shadow: var(--inset-edge); }
+/* ⚠️ 这里原有一条 `.readiness-dots:hover { box-shadow: var(--inset-edge) }` —— 已删除
+   （2026-11-16）：基础规则的 box-shadow 就是 var(--inset-edge)，这条 hover 是空操作
+   死代码；而且它的语义（"整条胶囊一起亮"）本身就是问题 5 要修掉的假可点区。 */
 .rdot {
   width: 10px; height: 10px; border-radius: 50%;
   background: var(--bg-3);
@@ -465,7 +492,11 @@ tr.quote-selected td { background: color-mix(in srgb, var(--accent) 10%, transpa
    （浅色主题下更是白底白点），等于看不见。
    用 color-mix 跟随 --text 取色 → 暗色主题得浅点、浅色主题得深点，两套主题都不用单独写。 */
 .session-status .readiness-dots { background: var(--layer-2); padding: 3px 9px; }
-.session-status .readiness-dots:hover { background: var(--hover); }
+/* ⚠️ 这里原本有一条 `.session-status .readiness-dots:hover { background: var(--hover) }`
+   —— 已删除（2026-11-16）。它让"整条胶囊"在鼠标移到任意位置时变亮，
+   但点击事件只绑在 .rdot-item 上：点在圆点之间的空隙 → 胶囊亮了却没反应，
+   是典型的"假可点区"。反馈必须由真正的可点单元（.rdot-item）自己给，
+   见 07-connect.css 的 .rdot-item:hover / :active。 */
 /* ⚠️ 只给「未亮」的圆点补底色，必须带 :not(.on):not(.wait) ——
    否则本条与 `.rdot.on` 特异性相同，而它在文件里更靠后，
    会把「已就绪」的绿色、「等待中」的橙色一起盖掉，就绪指示直接失去意义。 */
@@ -534,12 +565,57 @@ tr.quote-selected td { background: color-mix(in srgb, var(--accent) 10%, transpa
   gap: 6px;
   min-height: 240px;
 }
+/* ── 空态图标（2026-11-16 重做）─────────────────────────────────────────
+   原来这里是个 44×44 的「纯色方框」：`border-radius:10px; box-shadow: var(--inset-edge)`。
+   而 --inset-edge 在 PCL 扁平主题下是 `0 0 0 0 transparent`（见 01-base.css）——
+   于是这个伪元素**什么都不画**，只在每一条 .empty-hint 上方留下一个 44px 的空洞
+   加 gap 腾出的一截留白（全站 30+ 处空态都顶着这个洞）。同时它还被
+   「加载中 / 加载失败 / 内容为空」三种语义共用，本来也表达不了任何东西。
+
+   现在换成线条图标：形状用 mask 抠出来，颜色取 var(--fg-mute) ——
+   SVG 里**不写任何色值**，因此深/浅主题自动跟随令牌
+   （写成 background-image + 硬编码 #8a919d 的话，浅色主题下会变成一坨看不清的灰）。
+   图形：等轴测空盒 = "这里现在还没有东西"，是空态里最少歧义的隐喻。
+
+   ⚠️ 用 mask 长写而不是 `mask:` 简写：简写一旦被浏览器判为非法，
+      background-color 会直接把 44×44 涂成实心方块 —— 比原来的"空洞"更难看。
+      长写每一行都独立生效，任何一行失配都只是少了个装饰，不会变方块。 */
 .empty-hint::before {
+  --ico-empty: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 8.4 12 3.8l9 4.6v7.2L12 20.2l-9-4.6z'/%3E%3Cpath d='M3 8.4 12 13l9-4.6M12 13v7.2'/%3E%3C/svg%3E");
   content: '';
   width: 44px; height: 44px;
-  border-radius: 10px;
-  box-shadow: var(--inset-edge);
+  flex: none;                 /* 别被 column flex 压扁 */
+  background-color: var(--fg-mute);
+  opacity: .6;                /* 空态是"没什么可看"，图标要退到文案后面 */
+  -webkit-mask-image: var(--ico-empty);
+  mask-image: var(--ico-empty);
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: 34px 34px;   /* 34 而不是 44：留一圈呼吸位，不然图标顶满显得笨重 */
+  mask-size: 34px 34px;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+/* 加载中：换环形 spinner（沿用 01-base.css 的 @keyframes spin）。
+   ⚠️ JS 侧暂时不会加这个 class —— 加了就生效，不加则维持上面的空盒图标，
+      即"默认态本身就好看"，不会退化成空框。 */
+.empty-hint.is-loading::before {
+  background-color: transparent;
+  border: 3px solid var(--line-str);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  opacity: 1;
+  -webkit-mask-image: none;
+  mask-image: none;
+  animation: spin .9s linear infinite;
+}
+/* 加载失败：换成红色感叹号（形状仍由 mask 提供，颜色走 --red 令牌） */
+.empty-hint.is-error::before {
+  --ico-error: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.7' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 7.4v5.6M12 16.6v.02'/%3E%3C/svg%3E");
+  background-color: var(--red);
   opacity: .8;
+  -webkit-mask-image: var(--ico-error);
+  mask-image: var(--ico-error);
 }
 
 /* ── 会话列表：条目平贴，选中项凹下（"按进列表里"表示当前位置）── */

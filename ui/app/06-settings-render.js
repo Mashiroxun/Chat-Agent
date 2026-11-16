@@ -597,6 +597,7 @@ const SETTINGS_SEARCH_INDEX = [
   { keys: ['思考', '思考强度', '推理', 'reasoning', '轮数', '工具轮数', '并发', '同时处理', '重试', '温度', 'temperature', '网图', '发图', '发网图', 'sikao', 'lunshu'], label: '发送与限速 · 思考强度 / 工具轮数 / 并发 / 发网图', desc: '决定回得多快多深；「允许机器人发网图」的执行总开关也在这里', section: 'allow', target: 'open-send-config-btn', w: 9 },
   { keys: ['缓存', '前缀缓存', '命中率', 'cache', 'huancun'], label: '前缀缓存', desc: '命中率与保活，直接关系到花多少钱', section: 'api', target: 'cfg-cachewarm', w: 6 },
   { keys: ['开机', '自启', '开机启动', '托盘', '最小化', '关闭窗口', 'kaiji', 'tuopan'], label: '开机自启 / 托盘', desc: '装完设一次就基本不动的两项', section: 'app', target: 'cfg-autostart', w: 7 },
+  { keys: ['控制台令牌', '控制台密码', 'server token', '访问令牌', 'token', 'lingpai'], label: '控制台访问令牌', desc: '本机脚本/浏览器调用控制台的凭据，在「界面与应用 → 桌面端」', section: 'app', target: 'cfg-console-token', w: 9 },
 
   /* 2026-11-04（R178）：跨页条目 —— 目标不在设置页里的功能。
      带 `goTab` 的条目由 ssGoto 走"先切页、再高亮"的分支（见 07-settings-events.js）。
@@ -1735,6 +1736,16 @@ function renderDesktopSection(c) {
     <div class="checkbox-row"><input type="checkbox" class="sw" id="cfg-closetray" ${c.server?.closeToTray !== false ? 'checked' : ''} />
       <label for="cfg-closetray">点关闭时最小化到托盘</label></div>
 
+    <!-- P1（2026-11-16）：控制台令牌首次启动自动生成并落盘，空 token 不再全放行。 -->
+    <div class="field" style="margin-top:10px"><label>控制台访问令牌</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input type="text" id="cfg-console-token" readonly value="${esc(c.server?.token || '')}" style="flex:1;min-width:240px;font-family:ui-monospace,Consolas,monospace" />
+        <button class="btn btn-small" id="cfg-console-token-copy" type="button">复制</button>
+        <button class="btn btn-small" id="cfg-console-token-rotate" type="button">重新生成</button>
+      </div>
+      <div class="hint">本机脚本调用写接口请在请求头带 <code>x-console-token: &lt;令牌&gt;</code>（或 GET 参数 <code>?token=</code>）；浏览器打开控制台用 <code>http://127.0.0.1:&lt;端口&gt;/?token=&lt;令牌&gt;</code>。令牌另存一份在 <code>&lt;数据目录&gt;/console-token</code>；点「重新生成」后旧令牌立即失效。</div>
+    </div>
+
     <!-- ── 桌面悬浮小窗（2026-10-20）──
          打开后桌面右下角（默认）出现一张无边框小卡片：今日调用 / 估算成本 /
          总 Token / 缓存命中率 + 机器人连接状态。数据走 /api/status 轮询，
@@ -1797,7 +1808,7 @@ function renderDesktopSection(c) {
     <div class="field"><label>当前版本 <b id="update-current">…</b><span id="update-status-text">${updateAvailable ? '<b style="color:var(--orange)">；发现新版本</b>' : '；检查线上是否有新版本'}</span></label>
       <div style="display:flex;gap:10px;align-items:center">
         <button class="btn btn-small" id="check-update-btn">检查更新</button>
-        <span class="hint" id="update-hint" style="margin:0"><span id="update-hint-text"></span><button class="btn btn-small" id="apply-update-btn" style="display:none;margin-left:6px">一键更新</button><a id="update-download-link" href="https://github.com/Mashiroxun/Chat-Agent/releases/latest" target="_blank" rel="noopener" style="display:none;margin-left:6px">去下载</a></span>
+        <span class="hint" id="update-hint" style="margin:0"><span id="update-hint-text"></span><button class="btn btn-small" id="apply-update-btn" style="display:none;margin-left:6px">一键更新</button><button class="btn btn-small" id="cancel-update-btn" style="display:none;margin-left:6px">取消更新</button><a id="update-download-link" href="https://github.com/Mashiroxun/Chat-Agent/releases/latest" target="_blank" rel="noopener" style="display:none;margin-left:6px">去下载</a></span>
       </div></div>`;
 }
 
@@ -1842,15 +1853,15 @@ function renderOnebotSection(c) {
           <input type="password" id="cfg-obtoken" value="${esc(proto.hasAccessToken ? '******' : '')}" placeholder="协议端没设令牌就留空" autocomplete="new-password" style="flex:1" />
           <button class="btn btn-small" id="cfg-obtoken-toggle" type="button">显示</button>
         </div>
-        <div class="hint" style="margin-top:4px">连接密码，防止别的程序连你的机器人。要和协议端里填的一致。</div></div>
+        <div class="hint" style="margin-top:4px">连接密码，防止别的程序连你的机器人。要和协议端里填的一致。<b>注意：令牌在此修改只会保存，不会立即重连；需到「工具 → 连接」页点「保存并重连」才生效。</b></div></div>
       <div class="field"><label>HTTP 令牌（与 WS 不同时才填）</label>
         <div style="display:flex;gap:8px">
           <input type="password" id="cfg-obhttptoken" value="${esc(proto.hasHttpAccessToken ? '******' : '')}" placeholder="留空 = 与 WS 令牌相同" autocomplete="new-password" style="flex:1" />
           <button class="btn btn-small" id="cfg-obhttptoken-toggle" type="button">显示</button>
         </div>
-        <div class="hint" style="margin-top:4px">同上；两个令牌相同就填一样的。</div></div>
+        <div class="hint" style="margin-top:4px">同上；两个令牌相同就填一样的。<b>注意：令牌在此修改只会保存，不会立即重连；需到「工具 → 连接」页点「保存并重连」才生效。</b></div></div>
     </div>
-    <div class="hint">改完保存后会自动用新地址重连，不用重启。换了端口、加了令牌、或者双开（端口带偏移）时才需要动这里。</div>`;
+    <div class="hint">地址与令牌在此修改都会自动保存；但令牌不会立即生效于连接 —— 需到「工具 → 连接」页点「保存并重连」才会用新令牌重连。换了端口、加了令牌、或者双开（端口带偏移）时才需要动这里。</div>`;
 }
 
 /**
@@ -2079,6 +2090,10 @@ function openPluginPanel(url, title) {
       </div>
     </div>
   </div>`;
+  // 记住打开它的那颗「插件界面」按钮：关闭后把焦点还回去。
+  // 2026-11-16 审查修复（问题1 收尾）：此前 close() 只摘节点，焦点掉回 body ——
+  // 而下面那层技能设置弹窗还开着，键盘用户得从头 Tab 一遍才能回到原处。
+  const prevFocus = document.activeElement;
   document.body.appendChild(layer);
 
   let closed = false;
@@ -2094,6 +2109,12 @@ function openPluginPanel(url, title) {
     // 平滑退场：遮罩淡出 + 面板下沉（与入场对称，避免"砰"地消失）。
     // 动画结束后再移除 DOM；400ms 兜底应对 reduce-motion 把动画压成 1ms 的情形。
     layer.classList.add('closing');
+    // 焦点归还 —— **必须在挂上 .closing 之后**：本层一旦进入退场就不再是
+    // "最上层遮罩"（__topModalOverlay 会跳过 .closing），否则刚 focus() 到下面那层
+    // 的按钮上，焦点陷阱会立刻把它拽回这张正在淡出的面板里。
+    if (prevFocus && typeof prevFocus.focus === 'function' && prevFocus.isConnected) {
+      try { prevFocus.focus({ preventScroll: true }); } catch { /* ignore */ }
+    }
     let done = false;
     const finish = () => { if (!done) { done = true; layer.remove(); } };
     layer.addEventListener('animationend', finish, { once: true });
@@ -2208,10 +2229,13 @@ function openHelpModalShell(title) {
     if (closed) return;
     closed = true;
     document.removeEventListener('keydown', onEsc, true);
+    // 2026-11-16：**先摘登记、再还焦点**。反过来的话这笔 focus() 会触发
+    // focusin 兜底，把焦点立刻拽回这张马上要消失的遮罩 —— 表现就是
+    // "关掉弹窗后焦点没回到打开它的按钮"。
+    unregisterFocusTrap(overlay);
     if (prevFocus && typeof prevFocus.focus === 'function' && prevFocus.isConnected) {
       try { prevFocus.focus({ preventScroll: true }); } catch { /* ignore */ }
     }
-    unregisterFocusTrap(overlay);
     overlay.remove();
   };
   // Esc 挂 document 捕获阶段：焦点一旦 Tab 出弹窗，挂 overlay 上就再也收不到。
@@ -2335,13 +2359,15 @@ function openSkillSettings(skillId) {
     if (closed) return;
     closed = true;
     document.removeEventListener('keydown', onEsc, true);
+    // 2026-11-16：先摘登记 + 挂 .closing，再还焦点 —— 顺序反了的话这笔 focus()
+    // 会被 focusin 兜底拽回这张正在退场的遮罩（它此刻还是"最上层"）。
+    unregisterFocusTrap(overlay);
+    overlay.classList.add('closing');
     if (prevFocus && typeof prevFocus.focus === 'function' && prevFocus.isConnected) {
       try { prevFocus.focus({ preventScroll: true }); } catch { /* ignore */ }
     }
-    unregisterFocusTrap(overlay);
     // 平滑退场：遮罩淡出 + 面板下沉（与入场 fadeIn/popIn 对称，避免"砰"地消失）。
     // 动画结束后再移除 DOM；400ms 兜底应对 reduce-motion 把动画压成 1ms 的情形。
-    overlay.classList.add('closing');
     let done = false;
     const finish = () => { if (!done) { done = true; overlay.remove(); } };
     overlay.addEventListener('animationend', finish, { once: true });
@@ -3503,8 +3529,12 @@ function bindModulePageEvents(kind, scopeEl, opts) {
   const toggleModule = async (id, next, busyEl) => {
     const cur = (state.skills || []).find((s) => s.id === id);
     if (!cur || !cur.loaded) return;   // 加载失败的条目切不动
+    // P2：在途保护 —— 400ms 模块级守卫只拦 button，checkbox 键盘 Space 连点拦不住。
+    // 必须用 disabled（dataset.pending 之前写了却没人读，形同虚设）。
+    if (busyEl.dataset.pending === '1') return;
+    busyEl.dataset.pending = '1';
+    busyEl.disabled = true;
     busyEl.style.pointerEvents = 'none';
-    if (busyEl instanceof HTMLInputElement) busyEl.dataset.pending = '1';
     try {
       const r = await api(`/api/skills/${encodeURIComponent(id)}`, {
         method: 'POST',
@@ -3517,8 +3547,12 @@ function bindModulePageEvents(kind, scopeEl, opts) {
       rerender();
     } catch (err) {
       qaAlert(`切换失败：${err.message}`);
+    } finally {
+      // 成功路径 rerender 会换掉 DOM，这里复位的是旧节点（无害）；
+      // 失败路径必须复位，否则这个开关永久 disabled。
+      delete busyEl.dataset.pending;
+      busyEl.disabled = false;
       busyEl.style.pointerEvents = '';
-      if (busyEl instanceof HTMLInputElement) delete busyEl.dataset.pending;
     }
   };
   scope.querySelectorAll('input[data-skill-toggle]').forEach((sw) => {
@@ -3681,11 +3715,12 @@ function renderToolsSection(c) {
             <span>启用工具系统（关闭后机器人只能看不能做任何操作）</span>
           </label>
         </div>
-        <div class="tool-actions" style="margin-bottom:12px;display:flex;gap:8px">
+        <div class="tool-actions" style="margin-bottom:6px;display:flex;gap:8px">
           <button class="btn btn-small" id="tools-enable-all">全部启用</button>
           <button class="btn btn-small" id="tools-disable-all">全部禁用</button>
           <button class="btn btn-small" id="tools-reset">恢复默认</button>
         </div>
+        <div class="hint" id="tools-action-hint" style="margin:0 0 12px"></div>
         <!-- 2026-11-04（R177）：安全开关从上面那排批量按钮里挪出来单独成块。
              它和「全部启用 / 全部禁用 / 恢复默认」不是一类东西 —— 那三个改的是
              "模型看得见哪些工具"，这里改的是"真正执行时放不放行"。挤在一起时

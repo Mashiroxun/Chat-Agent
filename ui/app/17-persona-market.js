@@ -41,7 +41,8 @@ const PERSONA_SORTS = [
   { key: 'length', label: '提示词长度' }
 ];
 
-/* 试用前的备份：{ id, title, roleText } —— 还原按钮靠它回滚。 */
+/* 试用前的备份：{ id, title, roleText } —— 还原按钮靠它回滚。
+   title 是**试用前**的那个人设名（没有自定义人设时为空），只用于文案。 */
 let personaTryBackup = null;
 /* 正文缓存：id → prompt 字符串。同一张卡反复点预览/应用不必每次回后端。 */
 const personaPromptCache = new Map();
@@ -304,12 +305,17 @@ function bindPersonaShell() {
     }
   });
 
+  // 2026-11-16 审查修复：与技能/插件市场一致，搜索加 140ms 尾随防抖。
+  // renderPersonaList 是整表 innerHTML 重建，连续键入时逐次重排浪费；
+  // 清空按钮显隐保持即时。
+  let qTimer = 0;
   root.addEventListener('input', (e) => {
     if (e.target?.id !== 'pm-q') return;
     personaState.q = e.target.value;
     const clr = root.querySelector('[data-pm-qclear]');
     if (clr) clr.hidden = !e.target.value;
-    renderPersonaList();
+    clearTimeout(qTimer);
+    qTimer = setTimeout(renderPersonaList, 140);
   });
 }
 
@@ -504,6 +510,54 @@ function personaPreviewEsc(e) {
 /* ══════════════════════════════════════════════════════════════
    试用 / 应用
    ══════════════════════════════════════════════════════════════ */
+
+/* ── 试用还原的**全局**入口（2026-11-16 审查修复，问题11）───────────────
+   原先「↩ 还原试用」只长在人设市场页的页头里。用户试用完切去「已安装 → 人设」
+   或设置页继续聊天时，toast 还在说"点左上角还原"，而那颗按钮已经随页面一起
+   消失 —— 退路位置不稳定，等于让人自己记住"要回到人设市场才能撤回"。
+   现在改成顶栏常驻按钮（#persona-trial-bar，插在 #tabs 末尾，与「确认金句」
+   同一套路）：试用期间在任何页面都看得到、一点就还原；还原 / 放弃后立即移除。
+
+   ⚠️ 为什么不"在 #topbar 下面加一条横条"：.app-shell 是
+      `grid-template-rows: auto auto 1fr` + grid-template-areas(topbar/banner/main)
+      的固定三行网格，新增的第 4 个 grid 子元素会被自动排到**隐式行**、把 main
+      挤矮一截（而 CSS 不归本文件改）。放进顶栏导航组零布局风险，且 .nav-btn
+      的 hover / :active / :focus-visible 样式都是现成的（02-shell.css、06-stage.css）。
+   ⚠️ 幂等：这里每次都先查 #persona-trial-bar 是否已存在，绝不重复插入。 */
+function syncPersonaTrialBar() {
+  const existing = document.getElementById('persona-trial-bar');
+  if (!personaTryBackup) {
+    if (existing) existing.remove();
+    return;
+  }
+  const trying = String(personaTryBackup.title || personaTryBackup.id || '试用中');
+  const label = `↩ 还原试用人设：${trying}`;
+  if (existing) {
+    if (existing.textContent !== label) existing.textContent = label;
+    return;
+  }
+  const nav = document.getElementById('tabs');
+  if (!nav) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.id = 'persona-trial-bar';
+  btn.className = 'nav-btn nav-btn-persona';
+  btn.textContent = label;
+  btn.title = '正在试用人设。点这里把当前人设换回试用前的那一张';
+  btn.setAttribute('aria-label', `还原试用人设：${trying}`);
+  // 长人设名不撑爆顶栏：单行省略，完整名字在 title / aria-label 里
+  btn.style.maxWidth = '260px';
+  btn.style.overflow = 'hidden';
+  btn.style.textOverflow = 'ellipsis';
+  btn.style.whiteSpace = 'nowrap';
+  btn.addEventListener('click', () => {
+    if (btn.disabled) return;
+    btn.disabled = true;                 // 还原要发一次 POST，防连点
+    Promise.resolve(personaUndoTry()).finally(() => { btn.disabled = false; });
+  });
+  nav.appendChild(btn);
+}
+
 async function personaApply(id, { applyNow = false } = {}, btn) {
   const pid = String(id || '');
   const meta = personaState.all.find((x) => x.id === pid);
@@ -511,6 +565,7 @@ async function personaApply(id, { applyNow = false } = {}, btn) {
   const label = applyNow ? '试用中' : '应用中';
 
   const old = btn?.textContent;
+  const bakBefore = personaTryBackup;   // 试用请求失败时要回滚（别留下指向"没成功的试用"的还原入口）
   if (btn) { btn.disabled = true; btn.textContent = `${label}…`; }
   try {
     // 试用会改 persona.roleText —— 先把当前值存下来当退路，
@@ -519,6 +574,8 @@ async function personaApply(id, { applyNow = false } = {}, btn) {
       const cfg = (typeof state !== 'undefined' && state.config) || {};
       personaTryBackup = {
         id: pid,
+        // title 记的是**这次试用的人设**名，只用于顶栏那条还原入口的文案
+        title: name,
         // 只存"试用前"的身份描述，不存试用的人设名 —— 还原提示要说的是
         // 换回了什么（试用前），不是换掉了什么（刚试用的那个）。
         roleText: String(cfg?.persona?.roleText || '')
@@ -538,11 +595,15 @@ async function personaApply(id, { applyNow = false } = {}, btn) {
       if (d && typeof d === 'object' && d.persona) state.config = d;
     } catch { /* 刷新失败不阻塞：本次操作本身已成功 */ }
     personaToast(
-      applyNow ? `已换成「${name}」—— 不满意点左上角还原` : `「${name}」已存进人设库`,
+      applyNow
+        // 2026-11-16：文案给出**具体位置**。还原入口现在是顶栏常驻按钮（见
+        // syncPersonaTrialBar），切到任何页面都还在，不再依赖"左上角"这个词。
+        ? `已换成「${name}」—— 想换回去就点顶栏右上角的「↩ 还原试用人设」`
+        : `「${name}」已存进人设库`,
       'ok'
     );
     if (btn) { btn.textContent = '已应用'; btn.classList.add('mk-btn-done'); }
-    // 试用后要把"还原"那颗钮补上 → 重画一次外壳。
+    // 试用后要把"还原"那颗钮补上 → 重画一次外壳，并同步顶栏的全局还原入口。
     // ⚠️ 2026-10-22：renderPersonaShell 是整页 innerHTML 重建，列表容器会换成
     // 新节点、scrollTop 归零（群友反馈"每次安装完都得重新划下去"是同一类问题）。
     // 存一份旧的 scrollTop，重画后写给**新**的 #pm-list。
@@ -552,7 +613,13 @@ async function personaApply(id, { applyNow = false } = {}, btn) {
     if (sub && personaState.loaded) renderPersonaShell();
     const newList = document.querySelector('#pm-list');
     if (newList && keepTop) newList.scrollTop = keepTop;
+    try { syncPersonaTrialBar(); } catch { /* 顶栏入口失败不影响应用本身 */ }
   } catch (e) {
+    // 试用没成功 → 把刚建的备份回滚掉，并同步移除顶栏那条还原入口
+    if (personaTryBackup !== bakBefore) {
+      personaTryBackup = bakBefore;
+      try { syncPersonaTrialBar(); } catch { /* 忽略 */ }
+    }
     personaToast(`${label}失败：${e?.message || e}`, 'err');
     if (btn) { btn.disabled = false; btn.textContent = old; }
   }
@@ -579,6 +646,7 @@ async function personaUndoTry() {
     personaTryBackup = null;
     personaToast(`已换回试用前的人设`, 'ok');
     renderPersonaShell();
+    try { syncPersonaTrialBar(); } catch { /* 顶栏入口失败不影响还原本身 */ }
   } catch (e) {
     personaToast(`还原失败：${e?.message || e}`, 'err');
   }

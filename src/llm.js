@@ -4,7 +4,7 @@ import { getConfig } from './config.js';
 import { dispatcherFor } from './proxy-agent.js';
 import { resolveModelPrice, priceAt } from './model-prices.js';
 import { skillManager } from './skills/manager.js';
-import { describeNetError, previewBody } from './providers.js';
+import { describeNetError } from './providers.js';
 import { annotateApiError } from './error-l10n.js';
 import { normalizeProtocol, buildProtocolRequest, parseProtocolResponse, protocolModelsRequest, parseProtocolModels } from './api-protocols.js';
 import { logger } from './logger.js';
@@ -786,6 +786,9 @@ export async function chatCompletionWithRetry(args, retries = 2, { onAttempt = n
     }
     // 该候选的所有重试都失败了：只有错误可重试才值得试下一个备选；
     // 4xx（密钥错/参数错）换模型通常也没用，但备选可能用不同提供商，仍继续尝试。
+    // 组E P1：上下文超限是"消息太长"，换模型救不了；别再逐个打 fallback，
+    // 交给 orchestrator 激进裁剪后重试一次（context_length_exceeded 自愈路径）。
+    if (lastError?.noFallback) break;
   }
   throw lastError ?? new Error('模型请求失败（主模型与全部备选均不可用）');
 }
@@ -1130,6 +1133,10 @@ export async function chatCompletion({ messages, tools = null, toolChoice = 'aut
         + '减少启用中的 Skill 提示词片段。原始错误：' + res.text.slice(0, 200)
       );
       e.code = 'context_length_exceeded';
+      // 组E P1：这类 400 的成因是"本次消息太长"，换任何模型都一样超。
+      // 标记后 chatCompletionWithRetry 不再逐个打 fallback 白烧请求；
+      // 由 orchestrator 做一次更激进的工具结果裁剪后自愈重试（见 orchestrator.js）。
+      e.noFallback = true;
       logFailure(e.message);
       throw e;
     }
@@ -1352,22 +1359,22 @@ export async function listModels() {
     throw new Error(describeNetError(error, url));
   }
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
     const hint = res.status === 401 || res.status === 403
       ? '\n· 密钥被拒：检查当前选中提供商的 Key'
       : res.status === 404
         ? '\n· 404：该端点可能没有 /models 接口，改用「模型管理」手动添加模型'
         : '';
-    throw new Error(`获取模型列表失败：HTTP ${res.status} ${res.statusText || ''}\n`
-      + `请求地址：${url}${text ? `\n服务端返回：${previewBody(text)}` : ''}${hint}`);
+    // 不再回显请求地址与服务端响应片段：中转端的错误页常带内网地址 / 凭据，
+    // 一旦被带进界面就是信息泄露（2026-11-16 审计修）。只保留状态码与可操作提示。
+    throw new Error(`获取模型列表失败：HTTP ${res.status} ${res.statusText || ''}${hint}`);
   }
   const raw = await res.text().catch(() => '');
   let data;
   try {
     data = JSON.parse(raw);
   } catch {
-    throw new Error('端点返回的不是 JSON（可能是反向代理页面或错误端口）：\n'
-      + `请求地址：${url}\n响应开头：${previewBody(raw, 160)}`);
+    // 同上：响应片段可能含内部地址/凭据，只报错误类型，不回显内容（2026-11-16）。
+    throw new Error('端点返回的不是合法 JSON（可能是反向代理页面或错误端口），响应内容已隐去以免泄露内部信息');
   }
   // 优先按协议解析（anthropic/google 形状不同）；解析不出再走 OpenAI 兼容兜底
   const byProto = parseProtocolModels(proto, data);

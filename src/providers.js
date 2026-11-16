@@ -11,6 +11,7 @@ import {
   normalizeProtocol, protocolLabel, isOpenAiFamily, PROTOCOL_DEFAULT_BASES,
   buildProtocolRequest, parseProtocolResponse, protocolModelsRequest, parseProtocolModels
 } from './api-protocols.js';
+import { validateFetchUrl, guardedFetch } from './safe-fetch.js';
 
 // DSH 未写 baseURL 的提供商，按官方默认端点补全（可在 UI 修改）。
 // 来源：
@@ -242,6 +243,34 @@ export function previewBody(text, max = 200) {
 }
 
 /**
+ * P1 SSRF 防护：服务商端点的 baseUrl 在发起请求前必须过这一闸。
+ * 与 sessions.js 的 /api/media-data 同源 —— 都走 safe-fetch 的 validateFetchUrl：
+ * 仅 http(s)、禁止 URL 内嵌凭据、域名 DNS 全记录检查，
+ * 拒绝环回 / 私网 / 链路本地(169.254.0.0/16) / 云元数据 / CGNAT 等内网地址。
+ *
+ * 权衡：**默认绝不使用 allowPrivate=true** —— 那会把整段内网连同 169.254.169.254
+ * 云元数据一起放行，等于把 SSRF 闸门拆了。本机服务走 security.allowLoopback
+ * （仅 127.x/::1/localhost）；LAN 中转站默认拦，只有显式打开
+ * server.allowLanProviders 才放行（2026-11-16 审计修）。
+ */
+function providerFetchGuard() {
+  const allowLan = getConfig().server?.allowLanProviders === true;
+  const allowLoopback = getConfig().security?.allowLoopback === true;
+  return {
+    browseLocked: false,                 // 服务商端点不受「网页浏览锁定」域名白名单约束
+    allowPrivate: allowLan,              // 默认 false；显式开启才允许 LAN 中转
+    allowLoopback: allowLoopback || allowLan
+  };
+}
+
+export async function validateProviderBaseUrl(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return; // 空值交由调用方给出「请先填写 Base URL」
+  const guard = providerFetchGuard();
+  await validateFetchUrl(s, { allowPrivate: guard.allowPrivate, allowLoopback: guard.allowLoopback });
+}
+
+/**
  * 用指定 baseUrl/key 获取模型列表（按 API 协议分端点）。
  * @param {string} [protocol='openai'] API 协议（anthropic/google 的 /models 形状不同）
  */
@@ -249,6 +278,8 @@ export async function fetchModelsFrom(baseUrl, apiKey, timeoutMs = 15000, protoc
   const proto = normalizeProtocol(protocol);
   const base = normalizeBaseUrl(baseUrl) || PROTOCOL_DEFAULT_BASES[proto] || '';
   if (!base) throw new Error('请先填写 Base URL');
+  // P1 SSRF：任何来源的 baseUrl（前端直传 / 已存 provider）在发请求前都先过安全闸
+  await validateProviderBaseUrl(base);
   // 提前挡住"填成完整接口地址"这类高频误填：拼出来的 URL 必然 404，
   // 但原始报错只说 HTTP 404，用户想不到是地址多写了后缀。
   // （仅 OpenAI 兼容家族适用；anthropic/google 的端点形状不同，不做此假设）
@@ -266,18 +297,20 @@ export async function fetchModelsFrom(baseUrl, apiKey, timeoutMs = 15000, protoc
   if (isOpenAiFamily(proto)) Object.assign(headers, opencodeHeaders(base));   // OpenCode Go 路由头（openai 家族需要）
   let res;
   try {
-    res = await fetch(url, {
+    // DNS rebinding 防护：裸 fetch 会二次解析域名（TOCTOU），改走 guardedFetch
+    // ——每次跳转前重新校验 DNS 并固定到已校验的地址（POST / body / 代理均保留）。
+    res = await guardedFetch(url, {
       headers,
       signal: AbortSignal.timeout(timeoutMs),
       dispatcher: dispatcherFor()   // 网络代理（2026-10-19）：与对话请求同一条通道
-    });
+    }, providerFetchGuard());
   } catch (error) {
     // 连请求都没发出去 / 没拿到响应
     throw new Error(describeNetError(error, url));
   }
   if (!res.ok) {
-    // 带上响应体：服务端通常会说清楚（invalid api key / model not found / 余额不足…）
-    const text = await res.text().catch(() => '');
+    // P1：不再回显服务端响应体与完整请求地址 —— 内网响应一旦被带上就算 SSRF 成功。
+    // 只保留 HTTP 状态码与可操作的通用提示。
     const hint = res.status === 401 || res.status === 403
       ? '\n· 密钥被拒：确认该提供商的 Key 已保存（模型管理里 Key 显示为 ****** 才是已存）'
       : res.status === 404
@@ -285,8 +318,7 @@ export async function fetchModelsFrom(baseUrl, apiKey, timeoutMs = 15000, protoc
         : res.status === 429
           ? '\n· 被限流：稍后重试'
           : '';
-    throw new Error(`获取模型列表失败：HTTP ${res.status} ${res.statusText || ''}\n`
-      + `请求地址：${url}${text ? `\n服务端返回：${previewBody(text)}` : ''}${hint}`);
+    throw new Error(`获取模型列表失败：HTTP ${res.status}${hint}`);
   }
   // 先取文本再解析：直接 res.json() 在服务端返回 HTML（反代欢迎页/错端口）时
   // 只会冒一句 "Unexpected token '<'"，看不出到底连到了什么。
@@ -295,15 +327,12 @@ export async function fetchModelsFrom(baseUrl, apiKey, timeoutMs = 15000, protoc
   try {
     data = JSON.parse(raw);
   } catch {
-    throw new Error(`端点返回的不是 JSON（可能是反向代理页面或错误端口）：\n`
-      + `请求地址：${url}\n`
-      + `响应开头：${previewBody(raw, 160)}`);
+    // P1：不回显响应体与完整请求地址，只给通用文案
+    throw new Error('端点返回的不是 JSON（可能是反向代理页面或错误端口）');
   }
   const models = parseProtocolModels(proto, data);
   if (!models.length) {
-    throw new Error(`端点返回成功，但没解析出任何模型：\n`
-      + `请求地址：${url}\n`
-      + `响应结构：${previewBody(raw, 200)}\n`
+    throw new Error('端点返回成功，但没解析出任何模型：\n'
       + '· 该端点可能不遵循标准模型列表格式，请用「手动添加模型」直接填模型 id');
   }
   return models;
@@ -319,6 +348,8 @@ export async function testModelChat({ baseUrl, apiKey, model, protocol = 'openai
   const base = normalizeBaseUrl(baseUrl) || PROTOCOL_DEFAULT_BASES[proto] || '';
   if (!base) throw new Error('请先填写 Base URL');
   if (!String(model || '').trim()) throw new Error('请先填写模型 ID');
+  // P1 SSRF：发请求前校验端点地址，拒绝内网/链路本地/云元数据
+  await validateProviderBaseUrl(base);
   const startedAt = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('超时')), 20000);
@@ -336,13 +367,13 @@ export async function testModelChat({ baseUrl, apiKey, model, protocol = 'openai
       openaiBody,
       extraHeaders: isOpenAiFamily(proto) ? opencodeHeaders(base, model) : {}
     });
-    const res = await fetch(built.url, {
+    const res = await guardedFetch(built.url, {
       method: 'POST',
       headers: built.headers,
       body: JSON.stringify(built.body),
       signal: controller.signal,
       dispatcher: dispatcherFor()   // 网络代理：测试也要走用户配的通道，否则"测试通过、实跑失败"
-    });
+    }, providerFetchGuard());
     const latencyMs = Date.now() - startedAt;
     const body = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -525,6 +556,13 @@ export function removeProvider(providerId) {
  */
 export async function testProvider(p, timeoutMs = 12000) {
   if (!p.baseURL) return { ok: false, verdict: 'no-endpoint', note: '没有端点地址', latencyMs: 0 };
+  // P1 SSRF：端点地址在发请求前校验。被拒时返回 verdict 而非抛出，
+  // 避免 /api/providers/test-all 因单个 provider 被拒而整条失败。
+  try {
+    await validateProviderBaseUrl(p.baseURL);
+  } catch (error) {
+    return { ok: false, verdict: 'error', note: `端点地址被安全策略拒绝：${String(error?.message ?? error)}`, latencyMs: 0 };
+  }
   const proto = normalizeProtocol(p.apiProtocol || p.api);
   // 修复（401 高发根因）：provider 目录里的 apiKey 字段通常是空串（真实 key 存在
   // dshProviderKeys），直接用 p.apiKey 会变成空 key → 401。统一从 providerKeyValue
@@ -536,11 +574,11 @@ export async function testProvider(p, timeoutMs = 12000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('超时')), timeoutMs);
   try {
-    const res = await fetch(url, {
+    const res = await guardedFetch(url, {
       headers,
       signal: controller.signal,
       dispatcher: dispatcherFor()   // 网络代理：连通性探测同样要走代理才有意义
-    });
+    }, providerFetchGuard());
     const latencyMs = Date.now() - startedAt;
     if (res.ok) {
       let count = 0;

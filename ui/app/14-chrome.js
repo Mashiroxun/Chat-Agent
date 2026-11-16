@@ -521,6 +521,13 @@
     //    ✕ 却只关遮罩回主界面，用户报「点 x 没有关闭」。有桥时改调 d.close()
     //    （与主顶栏 #win-close-btn 同款）；关全屏页仍由 ← 返回键 / Esc 承担。
     //    无桥（浏览器 / 预览）才退回 closeBigPage，预览里 ✕ 依旧点得动。
+    //    ⚠️ 2026-11-16 审查（问题4）：行为**保持**上面这套（✕ = 关窗口），改的是文案 ——
+    //    index.html 里它的 title/aria-label 已从「关闭本页（返回）」改成
+    //    「关闭窗口（最小化到托盘）」，因为旧文案承诺的是"返回"，用户点下去却整个窗口
+    //    缩进托盘。为什么不干脆让它只 closeBigPage：全屏页上主顶栏是 visibility:hidden，
+    //    这三颗是**唯一**的窗口控制（← 与 Esc 已经完整承担"返回"），把 ✕ 也改成关页
+    //    等于让"返回"重复一遍、同时把"关窗口"这条能力从这一屏彻底拿掉 ——
+    //    那正是 r54 用户报「点 x 没有关闭」的原始诉求。文案与行为一致即可。
     $('#bp-x') && $('#bp-x').addEventListener('click', function () {
       if (d && typeof d.close === 'function') { d.close(); return; }
       closeBigPage();
@@ -1084,6 +1091,21 @@
 
   function openBigPage(mode) {
     if (!bigpage) return;
+    /* 2026-11-16 审查修复（问题3）：金句勾选模式与全屏页**互斥**。
+       全屏页（z-index:60）压在主顶栏之上，而勾选模式下唯一能提交的
+       #quote-confirm-btn 就在顶栏里 —— 两条流程一叠加，用户勾完金句既点不到、
+       也 Tab 不到确认按钮，只能自己想到"先去关掉那个全屏页"。
+       从根上不让它们同时存在：勾选模式期间禁止打开全屏页，并明确告诉用户退路。 */
+    try {
+      if (typeof state !== 'undefined' && state.quoteMode) {
+        if (typeof showNoticeModal === 'function') {
+          showNoticeModal('金句勾选进行中',
+            '现在正在勾选要上传的金句，无法打开会话选择 / 会话设置页。\n\n'
+            + '请先点顶栏右侧的「取消」退出勾选（或先点「确认金句」把已勾选的传上去），再打开这一页。');
+        }
+        return;
+      }
+    } catch (e) { /* 状态不可读时不阻塞正常打开 */ }
     bpMode = mode === 'setup' ? 'setup' : 'chat';
     bigpage.hidden = false;
     // 2026-10-23 修复（回归）：这里原先是 remove/add `bp-in` 类做淡入 —— 但 `.bp-in`
@@ -1154,6 +1176,10 @@
   }
   // 06-settings-render.js 的「打开完整管理页」要走同一条路径（跨文件的私有函数只能这么给）
   window.closeBigPageThen = closeBigPageThen;
+  /* 2026-11-16：10-feedback.js 的「进入金句勾选模式」需要在进入前把全屏页收掉
+     （勾选模式与全屏页互斥，理由见 openBigPage 顶部的守卫）。closeBigPage 在本
+     IIFE 里是私有的，只能挂到 window 上给那一条路径用；调用方都已做类型判断。 */
+  window.closeBigPage = closeBigPage;
 
   /* 2026-10-23 修复：给 02-sse-sessions.js 的 chat-update 一个刷新「会话设置」右栏的入口。
      群内发 /安静 改的是禁言态，右栏卡片不重绘就会一直显示「未禁言」——
@@ -2319,7 +2345,12 @@
 
   // 首屏同步：DOM 就绪即可（脚本是 defer，元素已解析完）。
   syncChrome((typeof state !== 'undefined' && state.tab) || 'sessions');
-  setInterval(syncIdentity, 3000);
+  // 2026-11-16 审查修复：身份同步每 3s 做多次 querySelector + 一次全列表查询，
+  // 窗口隐藏时跳过（恢复可见时立即补一次，避免身份区停在旧状态）。
+  setInterval(() => { if (!document.hidden) syncIdentity(); }, 3000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) { try { syncIdentity(); } catch { /* 忽略 */ } }
+  });
   // 首屏后补一次：此时 status 可能已由 11-init 拉到
   setTimeout(syncIdentity, 1500);
 })();

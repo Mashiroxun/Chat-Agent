@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 
@@ -456,7 +457,7 @@ test('isValidPending 与 readPending 口径一致（两个进程对"坏标记"�
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-test('cancel()：清掉 staging / 下载缓存 / pending 三样东西，job 回 idle（B7）', () => {
+test('cancel()：清掉 staging / 下载缓存 / pending 三样东西，job 回 idle（B7）', async () => {
   const tmp = mkTmp();
   const svc = makeService(tmp);
   write(path.join(tmp, UPDATE_ARTIFACTS.staging, 'manifest.json'), '{}');
@@ -466,6 +467,7 @@ test('cancel()：清掉 staging / 下载缓存 / pending 三样东西，job 回 
   });
   const r = svc.cancel();
   assert.equal(r.ok, true);
+  await r.__done;   // 收尾（清理 + 置 idle）在旧流水线退出后完成
   assert.ok(!fs.existsSync(path.join(tmp, UPDATE_ARTIFACTS.staging)), '.update-staging 必须清掉');
   assert.ok(!fs.existsSync(path.join(tmp, UPDATE_ARTIFACTS.download)), '.update-download 必须清掉');
   assert.ok(!fs.existsSync(path.join(tmp, UPDATE_ARTIFACTS.pending)), 'pending 标记必须清掉');
@@ -579,6 +581,7 @@ test('cancel()：助手存活 → 拒绝取消且不动残留；助手已死 →
   writeHelperLock(tmp, 999999999);
   const r2 = svc.cancel();
   assert.equal(r2.ok, true);
+  await r2.__done;
   assert.ok(!fs.existsSync(path.join(tmp, UPDATE_ARTIFACTS.staging)));
   assert.ok(!fs.existsSync(path.join(tmp, UPDATE_ARTIFACTS.pending)));
   assert.ok(!fs.existsSync(helperLockPath(tmp)), '陈旧锁必须被清掉，否则留个不存在的进程吓人');
@@ -885,5 +888,128 @@ test('sha256File 与 parseSha256Text：流式哈希一致；.sha256 文本两种
   assert.equal(parseSha256Text(`${hex}  patch.zip`), hex);
   assert.equal(parseSha256Text(hex.toUpperCase()), hex.toLowerCase());
   assert.equal(parseSha256Text('no hash here'), null);
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+// ── generation token / cancel 竞态（2026-11-16 审查）──────────────────────────
+test('generation/cancel：旧流水线被 cancel 后自检退出，不再写 pending / 拉助手；cancel 等它退出才收尾', async () => {
+  const tmp = mkTmp();
+  // 本地 server 让 resolveRelease 真正成功，流水线才会走到 onResolved 这个可控点。
+  const server = http.createServer((_req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({
+      tag_name: 'v0.4.9.4',
+      assets: [{ name: 'patch-0.4.9.4.zip', browser_download_url: 'http://127.0.0.1:9/patch.zip', size: 1, digest: null }]
+    }));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const api = `http://127.0.0.1:${server.address().port}/releases/latest`;
+
+  let reached, releaseGate;
+  const reachedP = new Promise((r) => { reached = r; });
+  const gateP = new Promise((r) => { releaseGate = r; });
+  const svc = createSelfUpdateService({
+    appDir: tmp,
+    log: () => {},
+    getConfig: () => ({ update: { releaseApi: api } }),
+    localVersion: () => '0.4.9.3',
+    compareSemver: () => 1,   // 让流水线认为"有更新"，若不检查 gen 就会继续往下走
+    testHooks: { onResolved: () => { reached(); return gateP; } }
+  });
+
+  write(path.join(tmp, UPDATE_ARTIFACTS.staging, 'sentinel'), '需被 cancel 清理');
+  const applying = svc.apply();
+  await reachedP;                       // 旧流水线停在 release 之后、下载之前
+  assert.equal(svc.status().state, 'preparing');
+  const r = svc.cancel();
+  assert.equal(r.ok, true);
+  assert.equal(svc.status().state, 'preparing', 'cancel 必须等旧流水线退出后才置 idle');
+  releaseGate();                        // 放行：旧流水线应自检 gen 失配并立即退出
+  await r.__done;
+  await applying;
+
+  assert.equal(svc.status().state, 'idle');
+  assert.ok(!fs.existsSync(path.join(tmp, UPDATE_ARTIFACTS.pending)), '旧流水线绝不能写 pending');
+  assert.ok(!fs.existsSync(helperLockPath(tmp)), '旧流水线绝不能拉助手 / 写锁');
+  assert.ok(!fs.existsSync(path.join(tmp, UPDATE_ARTIFACTS.staging)), 'staging 应被 cancel 清理干净');
+  server.closeAllConnections?.();   // undici 的 keep-alive 连接别拖住 server.close
+  await new Promise((res) => server.close(res));
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+// ── 助手进程 fail-closed：路径逃逸 / 缺 sha256（2026-11-16 审查）───────────────
+test('applyPatchFromStaging：safeRel 拒绝 ../、绝对路径、盘符、反斜杠与不可信段，fail-closed', async () => {
+  const tmp = mkTmp();
+  const appDir = path.join(tmp, 'app');
+  const staging = path.join(tmp, 'staging');
+  const backup = path.join(tmp, 'backup');
+  write(path.join(appDir, 'src', 'a.js'), 'old');   // 一个不该被改动的现有文件
+  fs.mkdirSync(staging, { recursive: true });
+
+  const evilPaths = ['../outside.js', 'src/../../outside.js', '/abs/outside.js', 'C:\\outside.js',
+    '..\\outside.js', 'src\\..\\..\\outside.js', './src/a.js', 'src//a.js', ''];
+  for (const evil of evilPaths) {
+    fs.rmSync(staging, { recursive: true, force: true });
+    fs.mkdirSync(staging, { recursive: true });
+    fs.writeFileSync(path.join(staging, 'manifest.json'), JSON.stringify({
+      type: 'patch', files: [{ path: evil, sha256: 'a'.repeat(64) }], deletions: []
+    }));
+    await assert.rejects(() => applyPatchFromStaging({ staging, appDir, backupDir: backup }),
+      undefined, `应拒绝路径：${JSON.stringify(evil)}`);
+  }
+  // deletions 同样做 containment 校验（删除向量也不能逃出 appDir）
+  fs.rmSync(staging, { recursive: true, force: true });
+  fs.mkdirSync(staging, { recursive: true });
+  fs.writeFileSync(path.join(staging, 'manifest.json'), JSON.stringify({
+    type: 'patch', files: [], deletions: ['../outside.js']
+  }));
+  await assert.rejects(() => applyPatchFromStaging({ staging, appDir, backupDir: backup }), /越出|不可信/);
+  assert.equal(fs.readFileSync(path.join(appDir, 'src', 'a.js'), 'utf8'), 'old');
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('applyPatchFromStaging：缺 sha256 / 摘要格式非法 → 整批拒绝，合法文件也不落地', async () => {
+  const tmp = mkTmp();
+  const appDir = path.join(tmp, 'app');
+  const staging = path.join(tmp, 'staging');
+  const backup = path.join(tmp, 'backup');
+  write(path.join(appDir, 'src', 'a.js'), 'old');
+  write(path.join(staging, 'src', 'a.js'), 'new a');
+  write(path.join(staging, 'src', 'b.js'), 'new b');
+
+  // 第 1 个文件摘要完全正确，第 2 个缺 sha256 —— 仍不许第 1 个先落地。
+  fs.writeFileSync(path.join(staging, 'manifest.json'), JSON.stringify({
+    type: 'patch',
+    files: [
+      { path: 'src/a.js', sha256: sha256Buf(Buffer.from('new a')) },
+      { path: 'src/b.js' }
+    ],
+    deletions: []
+  }));
+  await assert.rejects(() => applyPatchFromStaging({ staging, appDir, backupDir: backup }), /缺少合法 sha256/);
+  assert.equal(fs.readFileSync(path.join(appDir, 'src', 'a.js'), 'utf8'), 'old', 'fail-closed：合法文件也不许先写');
+  assert.ok(!fs.existsSync(path.join(appDir, 'src', 'b.js')));
+
+  // 摘要格式非法（不是 64 位 hex）同样拒绝。
+  fs.writeFileSync(path.join(staging, 'manifest.json'), JSON.stringify({
+    type: 'patch', files: [{ path: 'src/a.js', sha256: 'not-a-hex-digest' }], deletions: []
+  }));
+  await assert.rejects(() => applyPatchFromStaging({ staging, appDir, backupDir: backup }), /缺少合法 sha256/);
+  assert.equal(fs.readFileSync(path.join(appDir, 'src', 'a.js'), 'utf8'), 'old');
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+// ── 启动自检：exports 通配符不得当字面路径误报（2026-11-16 审查）────────────────
+test('runStartupSelfCheck：依赖 exports 用 * 通配符时不误报安装不完整', async () => {
+  const { runStartupSelfCheck } = await import('../electron/startup-selfcheck.js');
+  const tmp = mkTmp();
+  write(path.join(tmp, 'package.json'), JSON.stringify({ name: 'app', version: '1.0.0', dependencies: { dep: '1' } }));
+  write(path.join(tmp, 'node_modules', 'dep', 'package.json'), JSON.stringify({
+    name: 'dep', main: 'index.js', exports: { '.': './index.js', './features/*': './dist/features/*.js' }
+  }));
+  write(path.join(tmp, 'node_modules', 'dep', 'index.js'), 'module.exports = {}');
+  const result = runStartupSelfCheck(tmp);
+  const entryProblems = result.problems.filter((p) => p.type === 'dep-entry');
+  assert.deepEqual(entryProblems, [], `通配符目标被误报：${JSON.stringify(entryProblems)}`);
   fs.rmSync(tmp, { recursive: true, force: true });
 });

@@ -5,6 +5,10 @@
 // 接一句闲聊也在烧几百 reasoning token**。但一刀切把 api.thinkingMode 改成 off
 // 会让被 @ 的复杂请求明显降质，所以改成「按本轮触发内容给一个意图档」。
 //
+// 2026-11-15 调整：产品默认改为**关闭**分流（回到上线前的单一档行为）。
+// 本模块保留完整判定能力，但只有用户在设置里手动打开「按消息类型分流思考档」
+// 时 orchestrator 才会以 enabled:true 调用它；直接调用本纯函数默认也是关闭。
+//
 // 这里只输出**意图**（off / light / full / passthrough），刻意不碰 mode/effort：
 //   · 什么参数能关思考、什么参数能降档，是模型/网关方言的事，归
 //     plugins/thinking-adapters 管（同一个意图在 generic 方言上就是不发参数）；
@@ -35,7 +39,7 @@ export const DEFAULT_THRESHOLDS = Object.freeze({
 const TASK_RE = /(?:帮我|麻烦|请(?:帮|问|给|查|写|解释|分析)|查一下|查查|搜一下|搜索|查找|找一下|算一下|计算|写一篇|写段|写代码|代码|脚本|总结|汇总|翻译|解释一下|为什么|为啥|怎么回事|怎么办|怎么处理|怎么|如何|区别|对比|列出|列个|计划|安排|提醒|定时|设个闹钟|设置|生成|画一张|分析|推理|证明|推荐|有多少|多少钱|几点|有没有|能不能|可以吗|什么意思|是什么|对不对)/;
 
 // 从文本里剥掉协议标记，得到「人真正打出来的字」。
-// 目的：@测试用户(QQ:10001) 这种名字不该被算成"内容"，否则一条纯 @
+// 目的：@测试用户(QQ:10000) 这种名字不该被算成"内容"，否则一条纯 @
 // 会被当成有实质文本，误判成 light 而漏掉本该 off 的轻互动。
 function stripMarkup(text) {
   return String(text ?? '')
@@ -125,7 +129,8 @@ export function escalateForTools(route) {
  * @param {object}  o.tierInfo        resolveContextTier 的结果 {tier,count,reason}
  * @param {boolean} o.proactive       主动机会（冷场开话题）
  * @param {string}  o.kind            'group' | 'private'
- * @param {boolean} o.enabled         总开关（cfg.api.thinkingRoute，默认 true）
+ * @param {boolean} o.enabled         总开关（cfg.api.thinkingRoute，默认 false；
+ *                                   由 orchestrator 显式传入，仅 === true 才启用分流）
  * @param {boolean} o.allowOff        是否允许 off 档（cfg.api.thinkingRouteAllowOff，默认 true）；
  *                                    false = 灰度模式，off 一律升为 light（只降档、不关思考）
  * @param {string}  o.baseMode        主设置 api.thinkingMode；非 auto 视为用户显式选择
@@ -138,7 +143,7 @@ export function routeThinking({
   tierInfo = null,
   proactive = false,
   kind = 'group',
-  enabled = true,
+  enabled = false,
   allowOff = true,
   baseMode = 'auto',
   thresholds = {}

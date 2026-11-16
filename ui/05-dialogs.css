@@ -123,6 +123,11 @@
   width: 100%; border: none; outline: none; resize: vertical; background: transparent;
   color: var(--text); font: inherit; font-size: 14px; line-height: 1.6; min-height: 56px;
 }
+/* R97：锻造输入 textarea 的 focus-visible 视觉增量（特异性高于皮肤层 textarea:focus） */
+.forge-input textarea:focus-visible {
+  outline: none;
+  box-shadow: var(--inset-edge), 0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent);
+}
 .forge-input-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
 .forge-hint { color: var(--faint); font-size: 12px; }
 
@@ -1263,6 +1268,51 @@ details.forge-summary.is-long > summary:hover { color: var(--text); }
   border-radius: var(--r);
   box-shadow: none;
 }
+
+/* ── QA 区块级 / 整页级 加载 & 错误态模板（P2，供 JS 直接套用，视觉自包含）──
+   复用 01-base.css 已有的 @keyframes spin；错误态统一走 var(--red)。
+   .qa-block-loading / .qa-block-error 是内容块，.qa-banner-error 是横幅，
+   .qa-full-error 是整页错误卡。都带 ::before 图标位，JS 只需套一个类名。 */
+.qa-block-loading {
+  display: flex; align-items: center; gap: 10px;
+  padding: 18px 20px; color: var(--muted); font-size: 13px;
+}
+.qa-block-loading::before {
+  content: ''; flex: none;
+  width: 16px; height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+.qa-block-error {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 14px 16px; font-size: 13px; line-height: 1.6; color: var(--red);
+  border: 1px solid color-mix(in srgb, var(--red) 38%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--red) 8%, var(--card));
+}
+.qa-block-error::before { content: '⚠'; flex: none; font-size: 15px; line-height: 1.2; }
+.qa-banner-error {
+  display: flex; align-items: center; gap: 10px;
+  box-sizing: border-box; width: 100%;
+  padding: 10px 14px; margin: 8px 0;
+  font-size: 13px; line-height: 1.5; color: var(--red);
+  border: 1px solid color-mix(in srgb, var(--red) 45%, var(--border));
+  border-left-width: 3px; border-radius: 8px;
+  background: color-mix(in srgb, var(--red) 10%, var(--card));
+}
+.qa-banner-error::before { content: '⚠'; flex: none; font-size: 14px; }
+.qa-full-error {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; min-height: 220px;
+  padding: 36px 28px; text-align: center; color: var(--red);
+  border: 1px solid color-mix(in srgb, var(--red) 38%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--red) 6%, var(--card));
+}
+.qa-full-error::before { content: '⚠'; font-size: 34px; line-height: 1; }
+
 /* ⚠️ r98：`.ac-body` 从上面那份名单里**摘掉**了。
    它是「活跃设置」弹窗的**布局容器**（flex 纵列：上面滑条块 .ac-left、下面参数块 .ac-right），
    不是"一张卡"——只是名字里带 body，早先清理阴影时被按名字扫进了这份卡片面名单。
@@ -1399,7 +1449,11 @@ fieldset {
   font-size: 12px;
   box-shadow: none;
 }
-.btn:hover {
+/* ⚠️ 每条 :hover 都带 :not(:disabled):not([aria-disabled='true'])：
+   本层的 .btn:disabled 只写了 opacity/box-shadow，没有回滚 color/border/background，
+   不加这个 :not() 就会"禁用却越悬停越亮"，与 cursor:not-allowed 打架。
+   （:disabled 只对表单元素生效，[aria-disabled] 兜住 div 扮的按钮。） */
+.btn:hover:not(:disabled):not([aria-disabled='true']) {
   background: rgba(127, 127, 127, .12);
   border-color: var(--line-str);
   color: var(--fg);
@@ -1408,13 +1462,13 @@ fieldset {
 /* R89：与主 .btn 定义保持同一个按压缩放（0.955）。
    ⚠️ 主题区这份在后、会覆盖 2547 那份的 transform，所以两边必须一起改，
       否则实际生效的永远是这里的旧值。 */
-.btn:active { transform: scale(.955); }
+.btn:active:not(:disabled):not([aria-disabled='true']) { transform: scale(.955); }
 .btn-primary {
   background: linear-gradient(180deg, var(--topbar-1), var(--topbar-2));
   border-color: transparent;
   color: #fff;
 }
-.btn-primary:hover { filter: brightness(1.08); color: #fff; box-shadow: none; }
+.btn-primary:hover:not(:disabled):not([aria-disabled='true']) { filter: brightness(1.08); color: #fff; box-shadow: none; }
 .btn-small { height: 28px; padding: 0 11px; font-size: 12px; }
 .btn-mini { height: 24px; padding: 0 9px; font-size: 12px; border-radius: 6px; }
 .btn-danger {
@@ -1423,15 +1477,15 @@ fieldset {
   border-color: color-mix(in srgb, var(--red) 45%, transparent);
   box-shadow: none;
 }
-.btn-danger:hover {
+.btn-danger:hover:not(:disabled):not([aria-disabled='true']) {
   color: var(--red);
   background: color-mix(in srgb, var(--red) 14%, transparent);
   border-color: color-mix(in srgb, var(--red) 65%, transparent);
   box-shadow: none;
 }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--fg-dim); box-shadow: none; }
-.btn-ghost:hover { background: rgba(127, 127, 127, .12); color: var(--fg); }
-.btn[disabled], .btn:disabled { opacity: .45; box-shadow: none; }
+.btn-ghost:hover:not(:disabled):not([aria-disabled='true']) { background: rgba(127, 127, 127, .12); color: var(--fg); }
+.btn[disabled], .btn:disabled, .btn[aria-disabled='true'] { opacity: .45; box-shadow: none; cursor: not-allowed; transform: none; }
 
 /* 列表头小按钮（群发 / 清空 / 保存排布…）*/
 .list-head-btn {
@@ -1537,8 +1591,10 @@ input.sw:checked { background-color: var(--accent); background-position: 18.5px 
 input.sw::after { content: none; display: none; }
 input.sw:disabled { opacity: .45; cursor: not-allowed; }
 input.sw[data-pending] { cursor: progress; }
-body[data-theme='light'] input.sw { background-color: rgba(120, 128, 140, .38); }
-body[data-theme='light'] input.sw:checked { background-color: var(--accent); }
+/* 2026-11-16 审查修复：data-theme 设在 <html>（theme-boot.js:14 / 00-core.js:513），
+   选择器必须是 html 级才命中；写成 body 级永不生效，亮色轨道退回 color-mix 基础值。 */
+html[data-theme='light'] input.sw { background-color: rgba(120, 128, 140, .38); }
+html[data-theme='light'] input.sw:checked { background-color: var(--accent); }
 
 /* ⚠️ 本节补丁（必须写在 ② 层之后，且选择器要够"重"）────────────────────────
    症状：所有「已打开」的开关都只剩一块纯蓝胶囊，**滑块圆点不见了**
@@ -1556,8 +1612,8 @@ body[data-theme='light'] input.sw:checked { background-color: var(--accent); }
         关 2.5px / 开 18.5px）。只改 ③，② 层一行未动。 */
 input.sw,
 input.sw:checked,
-body[data-theme='light'] input.sw,
-body[data-theme='light'] input.sw:checked {
+html[data-theme='light'] input.sw,
+html[data-theme='light'] input.sw:checked {
   width: 36px;
   min-width: 36px;
   flex: 0 0 36px;
@@ -1802,7 +1858,10 @@ code, .mono { font-family: var(--mono); }
 .dot-off { background: #8a8f98; }
 .dot-wait { background: var(--orange); }
 .readiness-dots { gap: 5px; }
-.rdot { width: 8px; height: 8px; box-shadow: none; }
+/* 2026-11-16：8px → 10px。8px 的圆点既点不准（热区靠 07-connect.css 的
+   .rdot-item::before 撑），「已亮/未亮」的色差在这套扁平配色下也不够读得出来。
+   10px 与 02-shell.css 的基础值一致，且不超过 12px —— 再大就会把胶囊顶高。 */
+.rdot { width: 10px; height: 10px; box-shadow: none; }
 
 /* ══════════ 10. 滚动条（与原型一致）══════════ */
 ::-webkit-scrollbar { width: 9px; height: 9px; }

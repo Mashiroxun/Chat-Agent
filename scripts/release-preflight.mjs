@@ -166,7 +166,10 @@ for (const rel of REQUIRED) {
 const TEXT_EXT = new Set(['.js', '.mjs', '.cjs', '.json', '.html', '.css', '.md', '.txt', '.yml', '.yaml']);
 // 注意 'docs' 是复数：原先只写了 'doc'（插件开发文档），docs/ 那 1.8MB
 // 历史与验证资料一直在被全量扫描，还报出一堆本机路径噪音。
-const SCAN_SKIP_DIRS = new Set(['node_modules', 'data', '.workbuddy', 'plugin-data', '.git', 'doc', 'docs']);
+const SCAN_SKIP_DIRS = new Set(['node_modules', 'data', '.workbuddy', 'plugin-data', '.git', 'doc', 'docs', 'backup', 'dist']);
+// data.removed-* 是手工挪走的历史数据备份（含真实运行数据），已在打包排除清单，
+// 扫描时跳过，避免体检把"本来就不进包的备份"报成 FATAL 噪音。
+const skipDir = (name) => SCAN_SKIP_DIRS.has(name) || name.startsWith('data.removed') || name.startsWith('.');
 const SECRET_RULES = [
   { re: /(sk-[A-Za-z0-9]{16,})/g, label: '疑似 API Key（sk- 开头）' },
   { re: /(?:api[_-]?key|apikey|token|secret|password)\s*[:=]\s*['"]([A-Za-z0-9_\-]{20,})['"]/gi, label: '疑似硬编码密钥' }
@@ -183,6 +186,8 @@ function isPlaceholder(value) {
   if (!s) return true;
   if (/^(?:abc|xyz|123|012|foo|bar|test|dummy|fake|sample|example|placeholder|your)/i.test(s)) return true;
   if (/^(?:a{4,}|x{4,}|0{4,}|1{4,})/i.test(s)) return true;
+  // 纯占位数字串：全 0/全 1，或 1 后补 0（1000000000 这类测试号）
+  if (/^10{4,}$/.test(s)) return true;
   // 单调递增的字母表片段（abcdefghijklmnopqrstuvwxyz…）
   const alphabet = 'abcdefghijklmnopqrstuvwxyz';
   for (let i = 0; i + 8 < s.length; i += 1) {
@@ -192,6 +197,11 @@ function isPlaceholder(value) {
 }
 const LOCAL_PATH_RULES = [
   { re: /[A-Za-z]:[\\/]+QQagent/gi, label: '本机绝对路径（<盘符>:\\QQagent）' }
+];
+// 2026-11-16：真实 QQ/群号泄露拦截。裸数字误报高（版本号/时间戳/价格），
+// 只匹配「带账号语义上下文」的号码，并复用 isPlaceholder 过滤测试假号。
+const ACCOUNT_RULES = [
+  { re: /(?:QQ号?|群号|user_?id|sender_?id|uin)[ \t]*[:：=是为]?[ \t]*['"]?(\d{5,12})['"]?/gi, label: '疑似真实 QQ/群号（带账号上下文）' }
 ];
 let scannedFiles = 0;
 const scannedHits = new Map();
@@ -222,6 +232,19 @@ function scanFile(file) {
       if (!scannedHits.has(hit)) scannedHits.set(hit, path.relative(ROOT, file));
     }
   }
+  // 账号规则只查生产代码/文档；tests/、预览假数据、selftest 里的号码是测试夹具，
+  // 误报会让体检失去可信度（真实号泄露主要发生在 CHANGELOG/README/生产 JS）。
+  const rel = path.relative(ROOT, file).replace(/\\/g, '/');
+  const isFixture = /(^|\/)tests?\/|preview|selftest|fixture/i.test(rel);
+  if (!isFixture) for (const rule of ACCOUNT_RULES) {
+    rule.re.lastIndex = 0;
+    let m;
+    while ((m = rule.re.exec(text)) !== null) {
+      if (isPlaceholder(m[1])) continue;
+      const hit = `${rule.label}: ${m[1].slice(0, 3)}…`;
+      if (!scannedHits.has(hit)) scannedHits.set(hit, path.relative(ROOT, file));
+    }
+  }
 }
 
 function walkForScan(dir, depth = 0) {
@@ -229,7 +252,7 @@ function walkForScan(dir, depth = 0) {
   let entries = [];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
   for (const entry of entries) {
-    if (SCAN_SKIP_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+    if (skipDir(entry.name)) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) { walkForScan(full, depth + 1); continue; }
     if (TEXT_EXT.has(path.extname(entry.name).toLowerCase())) scanFile(full);

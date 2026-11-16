@@ -724,6 +724,68 @@ document.addEventListener('click', (e) => {
 let __netFailStreak = 0;
 let __netFailAt = 0;
 let __netRecoverAt = 0;
+
+// 组C（P2）：整页 reload 会丢掉未保存输入 / 在途保存 / 打开的弹窗。
+// 兜底刷新前做宽泛检查；不硬依赖别的模块私有变量（settingsGuard 仅可选读取）。
+let __pendingNetReload = false;
+let __netReloadVisBound = false;
+function hasUnsavedUiState() {
+  // ① 在途保存：设置页把挂起的自动保存计数记在 settingsGuard.pending
+  try {
+    if (typeof settingsGuard !== 'undefined' && settingsGuard && settingsGuard.pending > 0) return true;
+  } catch { /* 模块未就绪：跳过 */ }
+  // ② 可见弹窗：正规 modelModalShell / 手搓遮罩 / 统一对话框
+  try {
+    if (document.querySelector('.model-modal-overlay:not(.closing), .modal-overlay:not(.closing), .qa-modal:not([hidden])')) return true;
+  } catch { /* 忽略 */ }
+  // ③ 显式脏标记（项目已有的 overlay.__dirtyGuard 一般随弹窗出现，②已覆盖；这里兜 dataset）
+  try {
+    for (const el of document.querySelectorAll('[data-dirty="1"],[data-dirty="true"]')) {
+      if (el.getClientRects().length) return true;
+    }
+  } catch { /* 忽略 */ }
+  // ④ 可见输入项当前值与初始值不一致（JS 填充的字段 default 为空、value 有值，宁可保守不刷）
+  try {
+    for (const el of document.querySelectorAll('input,textarea')) {
+      if (el.disabled || el.readOnly || el.type === 'hidden' || el.type === 'checkbox' || el.type === 'radio') continue;
+      if (!el.getClientRects().length) continue;
+      if (typeof el.defaultValue === 'string' && el.value !== el.defaultValue) return true;
+    }
+  } catch { /* 忽略 */ }
+  return false;
+}
+
+/** 网络看门狗兜底：安全时直接刷；不安全则留待刷新标志 + 页面内确认，不打断用户。 */
+function trySafeNetworkReload() {
+  if (!hasUnsavedUiState()) {
+    __pendingNetReload = false;
+    try { location.reload(); } catch { /* 忽略 */ }
+    return;
+  }
+  __pendingNetReload = true;
+  try {
+    if (typeof qaConfirm === 'function') {
+      qaConfirm({
+        title: '连接异常，需要刷新界面',
+        message: '控制台与后端的连接持续失败，通常需要刷新界面才能恢复。\n\n检测到你可能还有未保存的内容或正在编辑，自动刷新已暂停。点「刷新界面」会丢失未保存的改动；点「稍后」可先保存，再手动刷新。',
+        confirmText: '刷新界面',
+        cancelText: '稍后'
+      }).then((ok) => {
+        if (ok) { __pendingNetReload = false; try { location.reload(); } catch { /* 忽略 */ } }
+      });
+    } else if (typeof qaAlert === 'function') {
+      qaAlert('控制台与后端的连接持续失败，需要刷新界面。你似乎还有未保存的内容，请先保存再手动刷新页面。');
+    }
+  } catch { /* 弹窗不可用：只保留待刷新标志，等回到前台且安全时再试 */ }
+  // 待刷新标志：回到前台且已无未保存内容时再刷一次，绝不在用户编辑途中打断。
+  if (!__netReloadVisBound) {
+    __netReloadVisBound = true;
+    document.addEventListener('visibilitychange', () => {
+      if (__pendingNetReload && !document.hidden && !hasUnsavedUiState()) trySafeNetworkReload();
+    });
+  }
+}
+
 function noteNetworkFailure() {
   const now = Date.now();
   if (now - __netFailAt > 20000) __netFailStreak = 0;   // 间隔太久不算"连续"
@@ -740,8 +802,8 @@ function noteNetworkFailure() {
       try {
         fetch('/api/status', { headers: { 'x-console-token': CONSOLE_AUTH_TOKEN || CONSOLE_MARKER } })
           .then(() => { /* 已恢复，无需重载 */ })
-          .catch(() => { try { location.reload(); } catch { /* 忽略 */ } });
-      } catch { try { location.reload(); } catch { /* 忽略 */ } }
+          .catch(() => { trySafeNetworkReload(); });
+      } catch { trySafeNetworkReload(); }
     }, 800);
   }
 }
@@ -833,6 +895,50 @@ function fmtClock(ts) {
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+
+/* 按钮加载态（2026-11-16）：契约见 01-base.css 的 .btn-spin 注释 ——
+   **不改文案**，只注入 spinner + .is-loading，避免换字导致的横向跳动。
+   旧写法（btn.textContent = '测试中…' / finally 再改回来）会让 `.btn`（nowrap、
+   自适应宽）连同同一行控件左右跳一下；这里保留原文案、只加 spinner。
+   幂等：重复 on 不叠 spinner，重复 off 不会误清按钮里的图标等既有子节点。 */
+function qaBtnBusy(btn, on) {
+  if (!btn) return btn;
+  const busy = btn.classList.contains('is-loading');
+  if (on) {
+    if (busy) return btn;
+    // 只给「纯文本按钮」升级结构：本来就有子元素（图标 + 文字）的按钮不重构，
+    // 只加 class —— 否则会把既有子节点吞掉。
+    if (!btn.querySelector('.btn-spin') && !btn.children.length) {
+      const text = btn.textContent;
+      btn.textContent = '';
+      const sp = document.createElement('span');
+      sp.className = 'btn-spin';
+      sp.setAttribute('aria-hidden', 'true');
+      const lb = document.createElement('span');
+      lb.className = 'btn-label';
+      lb.textContent = text;
+      btn.append(sp, lb);
+    }
+    btn.classList.add('is-loading');
+    btn.setAttribute('aria-busy', 'true');
+    // CSS 里 `.btn.is-loading:disabled { opacity:1 }` 是特意压过 .btn:disabled 的，
+    // 所以这里必须同时设 disabled（否则视觉上"没在忙"、还能被再点一次）。
+    if ('disabled' in btn) btn.disabled = true;
+  } else {
+    if (!busy) return btn;
+    btn.classList.remove('is-loading');
+    btn.removeAttribute('aria-busy');
+    if ('disabled' in btn) btn.disabled = false;
+    const lb = btn.querySelector('.btn-label');
+    const sp = btn.querySelector('.btn-spin');
+    // 只还原由本函数升级过结构的按钮（正好两个子节点 = spinner + label），
+    // 避免吃掉按钮里的图标等既有子节点。
+    if (lb && sp && btn.children.length === 2) btn.textContent = lb.textContent;
+  }
+  return btn;
+}
+// 显式挂到 window：调用点分散在 7 个脚本里，且已有代码用 window.xxx 探测的方式引用全局
+window.qaBtnBusy = qaBtnBusy;
 
 const STATUS_LABEL = { waiting: '等待中', done: '已发言', noreply: '未回复', running: '运行中', error: '出错', aborted: '中止' };
 
@@ -1172,12 +1278,18 @@ function switchTab(name) {
     else t.removeAttribute('aria-current');
   });
   // R91：切页挂起子动画（PCL2 AniControlEnabled）。110ms 挂载窗口内
-  // body 带 .switching，CSS 会把非活动视图的过渡全部关掉，避免旧页
-  // 残留的悬停态 / 浮层过渡在切换瞬间闪一下。
-  document.body.classList.add('switching');
-  clearTimeout(document.body.__swTimer);
-  document.body.__swTimer =
-    setTimeout(() => document.body.classList.remove('switching'), 110);
+  // 把「正被切走的那个 view」的过渡关掉，避免旧页残留的悬停态 / 浮层过渡
+  // 在切换瞬间闪一下。
+  // 2026-11-16 审查修复：原先给 body 加 .switching，CSS 用
+  // `body.switching .view:not(.active) *` 命中全部 14 个非活动视图的后代，
+  // 一次切页两次大范围样式重算。改为只给"正要离开的那一个 view"加 .leaving。
+  $$('.view').forEach((v) => {
+    if (v.classList.contains('active') && v.id !== `view-${name}`) {
+      v.classList.add('leaving');
+      clearTimeout(v.__leaveTimer);
+      v.__leaveTimer = setTimeout(() => v.classList.remove('leaving'), 110);
+    }
+  });
   $$('.view').forEach((v) => {
     const on = v.id === `view-${name}`;
     v.classList.toggle('active', on);

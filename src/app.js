@@ -7,7 +7,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { getConfig, updateConfig, ROOT, DATA_DIR, isChatAllowed, setConfigProvider } from './config.js';
+import { getConfig, updateConfig, getConsoleToken, rotateConsoleToken, ROOT, DATA_DIR, isChatAllowed, setConfigProvider } from './config.js';
 // 版本迁移：处理跨版本升级后残留的旧插件目录/配置引用（详见该文件头部注释）。
 // 必须在 reloadSkills 之前跑 —— 插件扫描读的就是 config.trustedPlugins。
 import { runUpgrades } from './upgrade.js';
@@ -1180,9 +1180,10 @@ export function createApp({ log = console.log, desktopPetHost = null, components
     // 收包人报告（bug 清单 E3，2026-10-27）：配了 server.token 的外部脚本带
     // x-console-token 调 POST，仍被这里 403 —— 注释里写的"两条正路"其实
     // 只通了一条（Origin 同源）。token 本身就是"本机可信进程"的凭据
-    // （与 authorize 同口径），值匹配即放行写请求；没配 token 时行为不变。
+    // （与 authorize 同口径），值匹配即放行写请求。
+    // P1（2026-11-16）：token 空时会自动生成并落盘，不再出现"空 token 全放行"。
     try {
-      const token = String(getConfig().server?.token ?? '');
+      const token = getConsoleToken();
       if (token && consoleTokenMatches(req, token)) return true;
       // 渲染进程凭据（主进程 webRequest 注入，每启动随机、不落盘不进 DOM），
       // 桌宠等本机上下文走它 —— 与 keyEndpointAllowed ① 同口径。
@@ -1190,20 +1191,22 @@ export function createApp({ log = console.log, desktopPetHost = null, components
     } catch { /* URL 解析失败按无凭据处理 */ }
     return false;
   }
-  // ── 外部脚本调用口径（收包人报告 P3 问"为什么 POST 全 403"）──────────────
-  // 这是上面的**有意设计**（2026-10-07 安全审查：回环绑定挡不住本机其它进程，
-  // 无来源的写请求一律拒绝）。脚本要调写接口，三条正路：
-  //   1. 带 `Origin: http://127.0.0.1:<实际端口>` 头（回环同源即过；实际端口
-  //      看 <DATA_DIR>/console-port，多安装并存时不一定等于 config.server.port）；
-  //   2. 配置 server.token 后，外部脚本带 `x-console-token: <token>` 头或 ?token= 参数
-  //      （E3 修：值匹配即放行，**不再额外要求 Origin 同源** —— 旧实现两条都要
-  //      满足，等于 token 路线永远走不通）；
-  //   3. GET/HEAD 只读请求无来源也放行，脚本探测无需任何头。
-  // Electron 控制台的随机凭据由主进程通过 webRequest 注入，不暴露到渲染页面。
+  // ── 外部脚本调用口径（P1 修复后，2026-11-16）───────────────────────────
+  // 回环绑定挡不住本机其它进程，所以现在**所有 /api 请求**都要过 authorize：
+  //   1. 外部脚本：带 `x-console-token: <token>` 头（推荐）或 `?token=<token>`；
+  //      token 在首次启动时自动生成并落盘，见 <DATA_DIR>/console-token
+  //      与设置页「界面与应用 → 桌面端 → 控制台访问令牌」；
+  //   2. Electron 控制台：主进程通过 webRequest 注入进程私有的 rendererAuthToken，
+  //      不落盘、不进 DOM，也不暴露给渲染页面脚本。
+  // 浏览器直接打开控制台时需带 `?token=<token>`（前端会缓存到 sessionStorage）。
+  // 单靠伪造 Origin / 无来源 GET 已经拿不到任何 /api 权限。
 
   function authorize(req) {
-    const token = String(getConfig().server?.token ?? '');
-    if (!token) return true;
+    // P1（2026-11-16）：空 token 不再恒放行。getConsoleToken() 在首次取用时
+    // 自动生成随机令牌并写盘；之后所有 /api 请求都必须带 server.token
+    // （请求头或 ?token=）或 Electron 渲染进程的私有凭据。
+    const token = getConsoleToken();
+    if (!token) return false;
     return consoleTokenMatches(req, token)
       || req.headers['x-console-token'] === rendererAuthToken;
   }
@@ -1289,8 +1292,8 @@ export function createApp({ log = console.log, desktopPetHost = null, components
     //    修前沙箱实测：带渲染进程凭据的请求 403（见 _luofix/t-verify-keyendpoint.mjs）。
     if (rendererAuthToken && req.headers['x-console-token'] === rendererAuthToken) return true;
 
-    // ② 用户自配的 server.token（给外部脚本用；也可放在 ?token= 上）。
-    const token = String(getConfig().server?.token ?? '');
+    // ② 控制台令牌（用户自配或首次启动自动生成；给外部脚本用，也可放 ?token=）。
+    const token = getConsoleToken();
     if (token && consoleTokenMatches(req, token)) return true;
     // ⚠️ 这里**不能**退化成 originAllowed 的"无来源即放行"（见上面 originAllowed 注释）：
     //   明文密钥端点全是只读 GET，若跟着放行，本机任意进程 curl 一下就能读走主 API Key。
@@ -1353,6 +1356,15 @@ export function createApp({ log = console.log, desktopPetHost = null, components
     lifecycle
   });
 
+  /** 把当前令牌单独落一份，方便外部脚本/运维读取（与 console-port 同目录）。 */
+  function writeConsoleTokenFile(token) {
+    try {
+      fs.writeFileSync(path.join(DATA_DIR, 'console-token'), `${token}\n`, { encoding: 'utf8', mode: 0o600 });
+    } catch (error) {
+      log(`[api] ⚠️ 控制台令牌落盘失败（不影响使用，可从设置页复制）：${error?.message ?? error}`);
+    }
+  }
+
   async function handleHttp(req, res) {
     const url = new URL(req.url, 'http://127.0.0.1');
     const pathname = url.pathname;
@@ -1393,6 +1405,14 @@ export function createApp({ log = console.log, desktopPetHost = null, components
         return json(res, 403, { error: '请求来源不被信任（仅接受本机控制台的同源请求）' });
       }
       const method = req.method;
+
+      // 设置页「重新生成控制台令牌」：轮换后立即返回新值并同步 console-token 文件。
+      // 放在统一鉴权之后 —— 不知道旧令牌的本机进程同样调不动它。
+      if (pathname === '/api/console-token/regenerate' && method === 'POST') {
+        const token = rotateConsoleToken();
+        writeConsoleTokenFile(token);
+        return json(res, 200, { token });
+      }
 
       // 桌宠接口：必须留在上面 authorize + originAllowed 之后 —— 它复用控制台
       // 鉴权与同源口径，屏幕截图只进桌面上下文，不额外开口子。
@@ -1618,11 +1638,11 @@ export function createApp({ log = console.log, desktopPetHost = null, components
       server.headersTimeout = 65000;
       server.listen(port, '127.0.0.1', () => {
         server.off('error', reject);
-        // 0.4.9.3：回环绑定挡不住本机其它程序。没配 server.token 时，
-        // 任何进程都能调写接口（发消息、改配置、读聊天记录）。这里只告警，
-        // 不擅自自动生成 —— 那会让已有外部脚本突然 401/403。
-        if (!String(getConfig().server?.token ?? '')) {
-          logger.warn('server', `控制台未设置 server.token：本机任意进程均可调用 127.0.0.1:${port} 的写接口，建议在设置页配置一个`);
+        // P1（2026-11-16）：不再出现"空 token 全放行"。getConsoleToken()
+        // 在首次取用时已自动生成并落盘，这里只记录令牌位置，不打印明文。
+        const consoleToken = getConsoleToken();
+        if (consoleToken) {
+          logger.info?.('server', '控制台已启用令牌鉴权；令牌见设置页或 <DATA_DIR>/console-token');
         }
         resolve(port); // 必须把实际端口传回去，Electron 壳要用它加载页面
       });
@@ -1684,6 +1704,10 @@ export function createApp({ log = console.log, desktopPetHost = null, components
       fs.writeFileSync(path.join(DATA_DIR, 'console-port'), String(port), 'utf8');
       log(`[api] 控制台实际端口 ${port} 已写入 ${path.join(DATA_DIR, 'console-port')}`);
     } catch (e) { log(`[api] ⚠️ 端口落盘失败（不影响使用）：${e?.message ?? e}`); }
+
+    // P1：确保令牌已生成并落盘，再写一份独立文件供外部脚本/运维读取。
+    // 顺序放在端口落盘之后 —— 二者常被脚本一起读（console-port + console-token）。
+    writeConsoleTokenFile(getConsoleToken());
 
     // 匿名用量遥测：启动 90 秒后发第一次，之后每 6 小时一次；失败静默不影响使用
     startTelemetryLoop(log);

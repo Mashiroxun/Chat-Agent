@@ -7,7 +7,10 @@
 <link rel="stylesheet" href="/assets/theme.css" />
 <script src="/assets/theme.js" defer></script>
 <style>
-:root{--ink:#34271f;--muted:#7f7167;--bg:#f6f0e8;--paper:#fffaf2;--line:#e6d8c8;--accent:#bd633f;--accent2:#8c3e2b;--shadow:0 18px 55px rgba(92,55,30,.13)}*{box-sizing:border-box}body{margin:0;color:var(--ink);font-family:"Microsoft YaHei","PingFang SC",sans-serif;background:transparent;line-height:1.65}
+/* 2026-11-16 审查修复：--accent 原 #bd633f 在纸色 #fffaf2 上仅 4.03:1（标题强调 span 用），
+   --muted 原 #7f7167 为 4.53:1（临界）。分别加深到 #9c4a2c(5.89:1) / #6d6057(5.84:1)。
+   暖棕是本页人设主题的氛围主色（与官网 Kondius 主题包一致），保留色相，仅加深达标。 */
+:root{--ink:#34271f;--muted:#6d6057;--bg:#f6f0e8;--paper:#fffaf2;--line:#e6d8c8;--accent:#9c4a2c;--accent2:#8c3e2b;--shadow:0 18px 55px rgba(92,55,30,.13)}*{box-sizing:border-box}body{margin:0;color:var(--ink);font-family:"Microsoft YaHei","PingFang SC",sans-serif;background:transparent;line-height:1.65}
 /* 主题包缺席（本地预览）时的兜底背景，站点环境下自动失效 */
 html.no-theme body{background:radial-gradient(800px 450px at 8% -10%,#ffe5cf,transparent 66%),radial-gradient(850px 480px at 94% 0,#eadff8,transparent 65%),var(--bg)}
 /* 自绘提示条：替代原生 alert（原生弹窗会阻塞渲染主线程、样式脱离主题）。

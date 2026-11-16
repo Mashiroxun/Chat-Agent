@@ -19,6 +19,12 @@ let lastStatusSig = null;
 //   连续 3 次（≈45 秒，足够滤掉一次网络抖动）仍失败 → 顶栏改口径。
 const STATUS_FAIL_THRESHOLD = 3;
 let statusFailStreak = 0;
+// 2026-11-16 组C（P2）：refreshStatus 并发代际锁。
+// 它同时被 15s 状态轮询、每条 SSE（status/chat-update/session-start/…）、
+// 保存后回调、切回设置页等多路调用；await 期间若又发起一轮，旧响应迟到时
+// 会把 state.status / lastStatusSig / statusFailStreak 覆盖成过期值，
+// 失败计数还会乱序累加。每轮入口自增、写状态前比对，旧代一律丢弃。
+let statusSeq = 0;
 
 /** 顶栏进入"状态未知"态。 */
 function markStatusStale() {
@@ -50,8 +56,13 @@ function clearStatusStale() {
 }
 
 async function refreshStatus() {
+  const seq = ++statusSeq;
   try {
-    state.status = await api('/api/status');
+    const nextStatus = await api('/api/status');
+    // 代际保护：await 期间若又发起了一轮刷新，本轮响应已过期，不得写任何状态
+    // （state.status / statusFailStreak / lastStatusSig / 顶栏 DOM 全部跳过）。
+    if (seq !== statusSeq) return;
+    state.status = nextStatus;
     const s = state.status;
     // ⚠️ 复位必须在**签名短路之前**：恢复后数据可能与失败前一字不差，
     //   放在后面就会被下面的 `sig === lastStatusSig` 提前 return 掉 ——
@@ -110,6 +121,8 @@ async function refreshStatus() {
     renderBanner();
     updateReadinessDots(s);
   } catch (e) {
+    // 过期响应（已被更新的一轮取代）连失败计数都不能污染。
+    if (seq !== statusSeq) return;
     // ⚠️（M6）不能静默吞掉 —— 见 statusFailStreak 上方的注释。
     //   单次失败仍然是"忽略"（瞬时错误不该打扰用户），只累计；连够次数才改口径。
     statusFailStreak += 1;
@@ -172,9 +185,11 @@ function updateReadinessDots(s) {
     {
       ok: protoUp || obConnected,
       // 2026-10-20：缩写原为「⚠SL」—— SL 是 SnowLuma 的首字母，只有开发者认得出。
-      // 2026-10-23：再改成「⚠QQ」—— 设置分区已改名「连接 QQ」，对小白来说这一项就是
-      // QQ 连接组件，出问题直接标 QQ 比标「网关」直观；四项缩写统一用中文短词。
-      off: '⚠QQ',
+      // 2026-10-23：改成「⚠QQ」—— 但对小白来说它与第 1 项的「⚠QQ」完全同字，
+      // 两项同时异常时显示「⚠QQ ⚠QQ」，无法区分（与"不用悬停也知道缺哪项"的设计目标相悖）。
+      // 2026-11-16 审查修复：改「⚠协议」，紧扣本项 title「协议端（SnowLuma/NapCat）」，
+      // 与其余三项（QQ / 连接 / 配置）两两不同，仍保持 1~2 字不撑破账号卡。
+      off: '⚠协议',
       title: protoUp ? '协议端（SnowLuma / NapCat）在运行'
         : (obConnected ? '已连接外部 QQ 协议端'
         : '协议端没在运行（点击前往连接页）')
@@ -205,12 +220,21 @@ function updateReadinessDots(s) {
   });
 }
 
-// 就绪圆点点击跳转（点圆点或它旁边的缩写都能跳）
+// 就绪圆点跳转（点圆点或它旁边的缩写都能跳）
+// 2026-11-16 审查修复：这四个圆点是明确的可交互元素，原先只有 click，
+// span 无 tabindex/role，键盘与读屏用户无法激活。补 role=button + tabindex + Enter/Space。
+const jumpFromDot = (item) => {
+  const target = item.dataset.target;
+  if (target === 'connection') switchTab('connection');
+  else if (target === 'settings') switchTab('settings');
+};
 $$('#readiness-dots .rdot-item').forEach((item) => {
-  item.addEventListener('click', () => {
-    const target = item.dataset.target;
-    if (target === 'connection') switchTab('connection');
-    else if (target === 'settings') switchTab('settings');
+  item.addEventListener('click', () => jumpFromDot(item));
+  item.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      jumpFromDot(item);
+    }
   });
 });
 
@@ -253,8 +277,20 @@ function countToolCalls(s) {
 $('#pause-btn')?.addEventListener('click', async () => {
   if (state.paused) {
     await resumePause({ skipBacklog: false });
-  } else {
-    await api('/api/pause', { method: 'POST', body: JSON.stringify({ paused: true }) });
+    return;
+  }
+  // 暂停失败必须让用户知道：旧实现直接 await，后端失败时 Promise 未处理，
+  // 按钮文字/横幅都不更新 —— 机器人其实还在自动回复，用户却以为已经停了，
+  // 可能继续往群里发敏感内容。口径与 00-core.js 的 resumePause 保持一致。
+  try {
+    const r = await api('/api/pause', { method: 'POST', body: JSON.stringify({ paused: true }) });
+    if (r && r.ok === false) throw new Error(r.error || '服务端未确认');
+    refreshStatus();
+  } catch (e) {
+    try {
+      qaAlert(`暂停失败：${e?.message || e}\n\n机器人可能仍在自动回复，请不要按"已暂停"来操作。请确认程序还在运行，然后再试一次。`);
+    } catch { /* 弹窗不可用则静默 */ }
+    // 保留按钮原状态：不改文案、不置 paused，界面不能替后端说谎
     refreshStatus();
   }
 });

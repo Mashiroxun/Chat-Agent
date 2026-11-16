@@ -186,6 +186,29 @@ export const UPGRADES = [
       log(`[upgrade]     ${note}`);
       return { changed: ['trustedPlugins'], removed: orphans, note };
     }
+  },
+
+  {
+    id: 'thinking-route-opt-in',
+    title: '思考档分流改为显式开启（默认回到网关默认思考档）',
+    run({ log, saveConfig }) {
+      const changed = [];
+      saveConfig((cfg) => {
+        // 0.4.9.3 ~ 0.4.9.4 的分流默认开启，且设置页复选框默认勾选 —— 用户只要
+        // 点过一次「保存」，就会把 true 写进 config.json，即便从未主动想开分流。
+        // 产品默认改成 false 后，这些残留的 true 仍会被读成「用户已开启」，
+        // 与「只有手动打开才采用分流」的新语义冲突，故一次性归零。
+        // 幂等账本保证只跑一次：之后用户手动勾选写入的 true 不会被清掉。
+        if (cfg?.api?.thinkingRoute !== true) return {};
+        changed.push('api.thinkingRoute: true → false');
+        return { api: { thinkingRoute: false } };
+      });
+      const note = changed.length
+        ? '已把历史默认勾选写入的 true 归零；需要分流请在「聊天设置」里手动勾选'
+        : '配置里没有残留的 true（已是关闭状态），无需处理';
+      log(`[upgrade]     ${note}`);
+      return { changed, note };
+    }
   }
 ];
 

@@ -1083,6 +1083,7 @@
   chip.innerHTML = '<span class="preview-chip-dot"></span>预览演示 · 模拟数据';
   document.body.appendChild(chip);
 
-  // 模拟器：5 秒一拍，让运行中的会话"干活"、等待中的到期、用量数字上涨
-  setInterval(pvTick, 5000);
+  // 模拟器：5 秒一拍，让运行中的会话"干活"、等待中的到期、用量数字上涨。
+  // 2026-11-16 审查修复：窗口隐藏时跳过，与其他轮询的可见性感知保持一致。
+  setInterval(() => { if (!document.hidden) pvTick(); }, 5000);
 })();

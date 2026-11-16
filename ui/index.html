@@ -421,7 +421,14 @@
         <button class="bp-max" id="bp-max" type="button" title="最大化" aria-label="最大化">
           <svg viewBox="0 0 10 10" aria-hidden="true"><rect x="0.6" y="0.6" width="8.8" height="8.8" /></svg>
         </button>
-        <button class="bp-x" id="bp-x" type="button" title="关闭本页（返回）" aria-label="关闭本页">
+        <!-- ⚠️ 2026-11-16 审查修复（问题4）：文案与行为必须一致。
+             这颗 ✕ 的行为是**关窗口（最小化到托盘）**，与左边的「最小化 / 最大化」
+             同属窗口控制（r54 起如此，因为这里三颗是全屏页上**唯一**的窗口控制 ——
+             进全屏页后主顶栏是 visibility:hidden，真要关窗只剩托盘菜单/Alt+F4）。
+             旧文案写「关闭本页（返回）」，用户点下去以为回到了主界面、实际整个窗口
+             缩进托盘，感知上就是"界面丢了"。
+             现在如实写「关闭窗口」；「返回」的语义只由左边的 ← 与 Esc 承担。 -->
+        <button class="bp-x" id="bp-x" type="button" title="关闭窗口（最小化到托盘）" aria-label="关闭窗口（最小化到托盘）">
           <!-- ⚠️ 与主顶栏 #win-close-btn 的 svg **逐字符相同**（viewBox 0 0 10 10 + 细线圆头 path）。
                原先这里是 viewBox 0 0 20 20 的「粗 × 轮廓」path（fill 被 CSS 的 `.bp-win svg
                { fill:none }` 覆盖成描边），渲染出来比主顶栏粗一号、线端还是方角 ——
@@ -460,10 +467,10 @@
                      （中文短词，如 ⚠QQ / ⚠连接 / ⚠配置），不用悬停也知道缺哪一项；全部就绪时
                      标签为空，仍是最简洁的四个点。 -->
                 <span id="readiness-dots" class="readiness-dots" title="就绪进度：点击跳转到对应设置">
-                  <span class="rdot-item" data-target="connection" title="QQ 没启动"><span class="rdot"></span><b class="rdot-t"></b></span>
-                  <span class="rdot-item" data-target="connection" title="协议端（SnowLuma / NapCat）没启动"><span class="rdot"></span><b class="rdot-t"></b></span>
-                  <span class="rdot-item" data-target="connection" title="机器人没连上"><span class="rdot"></span><b class="rdot-t"></b></span>
-                  <span class="rdot-item" data-target="settings" title="配置未完成"><span class="rdot"></span><b class="rdot-t"></b></span>
+                  <span class="rdot-item" role="button" tabindex="0" aria-label="QQ 未就绪，点击前往连接页" data-target="connection" title="QQ 没启动"><span class="rdot"></span><b class="rdot-t"></b></span>
+                  <span class="rdot-item" role="button" tabindex="0" aria-label="协议端未就绪，点击前往连接页" data-target="connection" title="协议端（SnowLuma / NapCat）没启动"><span class="rdot"></span><b class="rdot-t"></b></span>
+                  <span class="rdot-item" role="button" tabindex="0" aria-label="机器人未连接，点击前往连接页" data-target="connection" title="机器人没连上"><span class="rdot"></span><b class="rdot-t"></b></span>
+                  <span class="rdot-item" role="button" tabindex="0" aria-label="配置未完成，点击前往设置" data-target="settings" title="配置未完成"><span class="rdot"></span><b class="rdot-t"></b></span>
                 </span>
                 <span class="ss-spacer"></span>
                 <button id="pause-btn" type="button" class="btn btn-small" title="暂停后机器人不再处理任何消息，随时可恢复">暂停</button>

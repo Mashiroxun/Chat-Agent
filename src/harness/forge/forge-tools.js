@@ -71,8 +71,12 @@ export function draftDir(ctx, draftId) {
 
 /** 草稿 id 只允许安全字符 —— 它会成为目录名。 */
 export function sanitizeDraftId(id) {
-  const s = String(id || '').replace(/[^a-zA-Z0-9._-]/g, '');
-  return s.slice(0, 64) || 'draft';
+  const s = String(id || '').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 64);
+  // ⚠️ 白名单本身放行 '.' 与 '..'：若不拦，draftDir(ctx,'..') 会落到 staging 的父目录
+  //    extension-forge，clearDraft 的 rmSync(recursive) 将删光全部草稿/快照/备份，
+  //    readFileTool 也能回读人工确认票据。与 fix/core.js 的 sanitizeId 同口径。
+  if (s === '.' || s === '..' || s.includes('..')) return 'draft';
+  return s || 'draft';
 }
 
 /** 生成一个新草稿 id（时间序 + 随机后缀，便于人工按名字排序辨认）。 */
@@ -106,8 +110,25 @@ export function resolveDraftPath(ctx, draftId, rel) {
   // 目录还不存在时（首次写），退到最近的存在祖先上校验 —— 否则新草稿第一次写必然失败。
   const probe = nearestExisting(abs);
   if (probe) {
-    let realProbe, realBase;
+    let realProbe;
     try { realProbe = fs.realpathSync(probe); } catch { return { ok: false, error: '路径不存在' }; }
+
+    // 双保险：以**未拼接 draftId 的 stagingRoot** 为基准复检。
+    // 不能只拿 draftDir(ctx, draftId) 当基准 —— 若 staging/<draftId> 本身被预置成
+    // 指向外部的符号链接，realpath(draftDir) 就落在外部，relative(它, realProbe)
+    // 反而是 '.'，逃逸会被误判为合规。stagingRoot 不含 draftId，无法被它污染。
+    const rootBase = stagingRoot(ctx);
+    let realRoot;
+    try { realRoot = fs.realpathSync(rootBase); } catch { realRoot = null; }
+    if (realRoot) {
+      const rr = path.relative(realRoot, realProbe);
+      if (rr.startsWith('..') || path.isAbsolute(rr)) {
+        return { ok: false, error: '路径解析后越出暂存区（疑似符号链接逃逸）' };
+      }
+    }
+
+    // 原有草稿级复检：base 存在时还要确保结果仍在本草稿目录内。
+    let realBase;
     try { realBase = fs.realpathSync(base); } catch { realBase = null; }
     if (realBase) {
       const r = path.relative(realBase, realProbe);

@@ -151,13 +151,26 @@ async function markOnboardingSeen() {
  * 为什么需要：萌新点「去配置」跳去设置页，配完那一步后**不知道该干嘛了** ——
  * 旧行为是引导彻底消失，要么自己摸回设置页、要么每次重启再看一遍。现在配好
  * 2 秒内引导自己弹回来（该步打勾 + 高亮闪一下），接着走下一步。
- * 只认 onboardingSteps() 的完成口径，不会误弹；「我先自己看看 / Esc / 开始使用」
+ * 只认 onboardingSteps() 的完成口径，不会误弹；「Esc / 开始使用」
  * 走 markOnboardingSeen，会把守候撤掉，不再回来。
+ * 另外还有 10 分钟上限（OB_PENDING_MAX_MS）：用户点了「去配置」就跑去忙别的、
+ * 该项始终没配好时，定时器不能整会话常驻。
  */
+const OB_PENDING_MAX_MS = 10 * 60 * 1000;
+
 function startPendingWatch() {
   if (obPendingTimer) return;
+  obPendingSince = Date.now();
   obPendingTimer = setInterval(() => {
     if (!obPendingStep) { stopPendingWatch(); return; }
+    // 上限兜底（2026-11-16 审查修复）：用户点「去配置」后完全可能跑去忙别的、
+    // 这一项始终没配好。旧实现只靠 markOnboardingSeen 撤除，定时器会整会话常驻；
+    // 之后该项被别的入口顺手配好时，引导会在他做别的事时突然弹出来打断操作。
+    if (Date.now() - obPendingSince > OB_PENDING_MAX_MS) {
+      obPendingStep = null;
+      stopPendingWatch();
+      return;
+    }
     const step = onboardingSteps().find((s) => s.id === obPendingStep);
     if (step && step.done) {
       obHighlight = obPendingStep;
@@ -169,14 +182,17 @@ function startPendingWatch() {
 }
 function stopPendingWatch() {
   if (obPendingTimer) { clearInterval(obPendingTimer); obPendingTimer = null; }
+  obPendingSince = 0;
 }
 
 let obOverlay = null;
 let obTimer = null;
 let obKeyHandler = null;
+let obLastFocus = null;   // 2026-11-16：打开前的焦点元素，关闭时归还
 let obLastSig = null;   // 步骤状态签名：一字不变就不碰 DOM（焦点/悬停态不闪）
 let obPendingStep = null;   // 「去配置」之后守候的步骤 id：配好就自动接回引导
 let obPendingTimer = null;
+let obPendingSince = 0;     // 守候开始时刻（毫秒），用于 10 分钟上限兜底
 let obHighlight = null;     // 刚配好的步骤：回到引导时高亮一下，让用户知道为什么又弹出来了
 
 /** 只重绘步骤状态区（不重建卡片）—— 按钮焦点不闪、动画不重放。 */
@@ -211,7 +227,8 @@ function refreshOnboarding() {
         // 并挂上守候：该步骤一旦配好（2s 内发现），自动把引导弹回来接着走。
         obPendingStep = step.id;
         startPendingWatch();
-        closeOnboarding();
+        // keepPending：关窗是为了去配这一步，守候必须留着（见 closeOnboarding）
+        closeOnboarding({ keepPending: true });
         onboardingJump(step.jump);
         // 2026-10-18：带 open 的步骤（模型 / 人设）跳完再把对应弹窗盖上来 ——
         // 只跳到设置页还不够，萌新会在页面里找不到「模型管理」「⚙ 编辑人设」
@@ -263,6 +280,10 @@ function onboardingJump(jump) {
  */
 function openOnboarding() {
   if (obOverlay) { obLastSig = null; refreshOnboarding(); return; }
+  // 2026-11-16 审查修复：引导是全屏 aria-modal，但此前既不接管焦点、
+  // 全局焦点陷阱（08-modals.js:183/205）又因引导在场整体让路 → 焦点管理真空。
+  // 记录触发前焦点，关闭时归还；打开后把焦点移入对话框首个按钮。
+  obLastFocus = document.activeElement;
   const overlay = document.createElement('div');
   overlay.className = 'ob-overlay';
   overlay.setAttribute('role', 'dialog');
@@ -280,8 +301,11 @@ function openOnboarding() {
         </div>
       </div>
       <div class="ob-steps" id="ob-steps"></div>
-      <div class="ob-foot">
-        <button class="btn ob-skip" id="ob-skip-btn" type="button">我先自己看看</button>
+      <!-- P3：原「我先自己看看」与「开始使用」文案不同但 handler 完全相同（都标记看过并关闭），
+           两个入口语义重复、徒增认知负担 —— 合并为单一「开始使用」按钮。
+           .ob-foot 原本靠 justify-content:space-between 把两个按钮分列两端，
+           只剩一个按钮后需居中，否则它会被顶到最左侧留下大片空位。 -->
+      <div class="ob-foot" style="justify-content:center">
         <button class="btn btn-primary" id="ob-done-btn" type="button">开始使用</button>
       </div>
     </div>`;
@@ -290,30 +314,50 @@ function openOnboarding() {
   // ⚠️ 2026-10-18 修「再次点使用引导时步骤区空白」：obLastSig 是跨实例的签名缓存，
   //    新建的 overlay 里 #ob-steps 是空 div —— 若签名与上次关闭时相同（用户还没配
   //    任何东西，状态没变），refreshOnboarding 会以为"没变化"跳过渲染，于是引导只剩
-  //    标题和两个按钮。每次新建弹层都必须让签名失效，强制重绘一次。
+  //    标题和底部按钮。每次新建弹层都必须让签名失效，强制重绘一次。
   obLastSig = null;
 
-  overlay.querySelector('#ob-skip-btn').addEventListener('click', () => {
-    // "跳过" = 明确拒绝引导 → 标记看过，以后不再自动弹。
-    markOnboardingSeen();
-    closeOnboarding();
-  });
   overlay.querySelector('#ob-done-btn').addEventListener('click', () => {
+    // 单一入口：标记看过（以后不再自动弹）并关闭引导。
     markOnboardingSeen();
     closeOnboarding();
   });
 
-  // Esc = 跳过（同"我先自己看看"）：捕获阶段拦截，避免连带关掉背后的全屏页。
+  // 2026-11-16 审查修复：引导层自己做焦点管理（全局陷阱在引导在场时让路）。
+  // Esc = 跳过；Tab/Shift+Tab 在对话框内首尾相接，不让焦点跑到背景主界面。
   obKeyHandler = (e) => {
-    if (e.key !== 'Escape') return;
-    e.preventDefault();
-    e.stopPropagation();
-    markOnboardingSeen();
-    closeOnboarding();
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      markOnboardingSeen();
+      closeOnboarding();
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    const focusables = [...overlay.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+      .filter((el) => el.offsetParent !== null || el === document.activeElement);
+    if (!focusables.length) { e.preventDefault(); return; }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const cur = document.activeElement;
+    if (!overlay.contains(cur)) {
+      e.preventDefault();
+      (e.shiftKey ? last : first).focus({ preventScroll: true });
+    } else if (e.shiftKey && cur === first) {
+      e.preventDefault();
+      last.focus({ preventScroll: true });
+    } else if (!e.shiftKey && cur === last) {
+      e.preventDefault();
+      first.focus({ preventScroll: true });
+    }
   };
   document.addEventListener('keydown', obKeyHandler, true);
 
   refreshOnboarding();
+  // 焦点移入对话框：优先「开始使用」主按钮，其次首个可聚焦元素。
+  try {
+    (overlay.querySelector('#ob-done-btn') || overlay.querySelector('button') || overlay).focus({ preventScroll: true });
+  } catch { /* 忽略极老环境 */ }
   // 从「去配置」守候回来的：给刚配好的步骤闪一下高亮，用户立刻明白为什么引导又出现了
   if (obHighlight) {
     const el = overlay.querySelector(`.ob-step[data-step="${obHighlight}"]`);
@@ -329,7 +373,11 @@ function openOnboarding() {
 }
 
 /** 关闭引导（只做清理）。"标不标 seen"由各按钮自己决定后调用方自行处理。 */
-function closeOnboarding() {
+function closeOnboarding({ keepPending = false } = {}) {
+  // 关窗即撤销「去配置」守候 —— 唯一例外就是「去配置」本身（keepPending=true，
+  // 关窗跳走正是为了去配那一步，守候要留着）。这样任何将来新增的关闭入口
+  // 都自动带上撤销语义，不会留下常驻定时器。
+  if (!keepPending) stopPendingWatch();
   if (obTimer) { clearInterval(obTimer); obTimer = null; }
   if (obKeyHandler) {
     document.removeEventListener('keydown', obKeyHandler, true);
@@ -342,6 +390,11 @@ function closeOnboarding() {
   const finish = () => el.remove();
   el.addEventListener('animationend', finish, { once: true });
   setTimeout(finish, 300);   // 兜底：动画被 reduced-motion 压掉时也能收掉
+  // 2026-11-16：焦点归还到触发前的元素，避免落在 body 上导致键盘用户丢失位置。
+  try {
+    if (obLastFocus && document.contains(obLastFocus)) obLastFocus.focus({ preventScroll: true });
+  } catch { /* 忽略 */ }
+  obLastFocus = null;
 }
 
 /**

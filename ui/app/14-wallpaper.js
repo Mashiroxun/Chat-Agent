@@ -307,7 +307,7 @@ html[data-text='purple'] { --fg:#c3a1ff; --fg-dim:rgba(195,161,255,.72);  --fg-m
 .wp-dyn, .wp-redo { display: inline-flex; align-items: center; padding: 3px 8px; border-radius: 6px;
   border: 1px solid var(--line-str); background: var(--layer-1); color: var(--fg-dim); font-size: 11px;
   cursor: pointer; user-select: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-.wp-dyn:hover, .wp-redo:hover { color: var(--accent); border-color: var(--line-str); }
+.wp-dyn:not([aria-disabled='true']):hover, .wp-redo:not([aria-disabled='true']):hover { color: var(--accent); border-color: var(--line-str); }
 .wp-dyn[aria-disabled='true'], .wp-redo[aria-disabled='true'] { opacity: .75; cursor: default; }
 .wp-hintbox { padding: 14px 16px; border: 1px dashed var(--line); border-radius: var(--radius, 10px); color: var(--fg-dim); font-size: 13px; line-height: 1.8; }
 
@@ -652,13 +652,12 @@ function wpCfgSaveLocal(cfg) {
   try { cfg ? localStorage.setItem(WP_STORE_KEY, JSON.stringify(cfg)) : localStorage.removeItem(WP_STORE_KEY); }
   catch { /* 静默 */ }
 }
-// SSE：机器人换壁纸的实时通道（无 SSE 环境退化为不跟随，无副作用）
-if (typeof EventSource !== 'undefined') {
-  try {
-    const wpEs = new EventSource('/api/events');
-    wpEs.addEventListener('wallpaper-changed', () => wpPullState());
-  } catch { /* 静默 */ }
-}
+// SSE：机器人换壁纸的实时通道。
+// 2026-11-16 审查修复：原先这里裸建第二条 new EventSource('/api/events')，
+// 既不带 CONSOLE_AUTH_TOKEN（配置 server.token 时必 401 → 无限自动重连），
+// 又绕开 02-sse-sessions.js 的单例管理（预览模式短路、看门狗重建都会叠连接）。
+// 改为把 wpPullState 导出，由 02 的共享单例 EventSource 注册 wallpaper-changed 监听。
+try { window.wpPullState = wpPullState; } catch { /* 忽略 */ }
 
 // defer 脚本在 DOM 解析完、首帧绘制前执行 —— 开机直接恢复壁纸，基本无闪白
 wpRenderBackground();
@@ -1161,7 +1160,10 @@ async function loadWallpaperPage() {
       const full = String(msg || '未知错误');
       btn.textContent = `✗ ${prefix}（点按钮重试）`;
       btn.title = full;
-      alert(`转动态壁纸失败：\n\n${full}`);
+      // ⚠️ 不要用原生 alert 弹窗：它会阻塞渲染主线程，长驻时触发看门狗「心跳停摆」
+      //    判 hung → 重建窗口（见 09-dialogs.js 文件头约定）。而这里的失败文案恰是
+      //    含 ffmpeg 安装指引的长文本，最容易长时间停留。改用非阻塞的 qaAlert。
+      qaAlert(`转动态壁纸失败：\n\n${full}`);
     };
     let r;
     try {
@@ -1176,11 +1178,30 @@ async function loadWallpaperPage() {
       btn.removeAttribute('aria-disabled');
       return;
     }
+    // 轮询兜底：后端 job 若永不 done（转码进程崩了 / 任务记录丢失），不能无限轮询
+    // —— 那样按钮会永远停在「⏳ …」且 aria-disabled 挂着，本次会话再也点不动。
+    // 1000ms × 300 = 5 分钟，超时走同一条失败分支（清 interval + 解禁 + 可重试）。
+    const MAX_POLL_TICKS = 300;
+    let pollTicks = 0;
     const timer = setInterval(async () => {
       let s;
       try { s = await api(`/api/wallpaper/import?job=${encodeURIComponent(r.job)}`); }
-      catch { clearInterval(timer); btn.textContent = '✗ 查询失败'; return; }
+      catch (e) {
+        // 网络抖动也要解禁：1183 行正是用 aria-disabled 做点击守卫，
+        // 漏掉这一句会让按钮本次会话永久锁死（其他三条失败分支都有解禁）。
+        clearInterval(timer);
+        wpImportFail(btn, '查询失败', e?.message || e);
+        btn.removeAttribute('aria-disabled');
+        return;
+      }
       if (seq !== wpLoadSeq) { clearInterval(timer); return; }   // 页面已重渲染：旧按钮作废
+      pollTicks += 1;
+      if (pollTicks > MAX_POLL_TICKS) {
+        clearInterval(timer);
+        wpImportFail(btn, '查询超时', '转动态任务长时间未完成，请点按钮重试');
+        btn.removeAttribute('aria-disabled');
+        return;
+      }
       if (s?.ok && !s.done) {
         btn.textContent = `⏳ ${s.stage}${s.detail ? `·${s.detail}` : ''}`.slice(0, 60);
         return;

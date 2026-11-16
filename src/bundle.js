@@ -39,6 +39,18 @@ export const BUNDLE_VERSION = 1;
 const EXPORT_ROOT = path.join(DATA_DIR, 'exports');
 const IMPORT_ROOT = path.join(DATA_DIR, 'import-bundles');
 
+/**
+ * 可读包文件必须落在「导出 / 导入」两个目录下（2026-11-16 审计修）。
+ * 用 realpath 复核根目录本身，避免目录本身是软链时口径分叉。
+ */
+function realRootOf(dir) {
+  try { return fs.realpathSync(dir); } catch { return path.resolve(dir); }
+}
+const READ_ROOTS = () => [realRootOf(EXPORT_ROOT), realRootOf(IMPORT_ROOT)];
+function pathWithin(real, root) {
+  return real === root || real.startsWith(root + path.sep);
+}
+
 // 整包要装的是"一个实例的存档"，尺度比单个扩展大一个数量级：
 // 100 文件 / 32MB 那套是给插件包定的，直接套上来什么都装不下。
 const BUNDLE_MAX_FILES = 20000;
@@ -340,14 +352,22 @@ export function inspectBundle({ filePath = '', buffer = null } = {}) {
   if (!Buffer.isBuffer(buf)) {
     if (!p) return { ok: false, error: '缺少包文件路径' };
     const abs = path.resolve(p);
+    // 只允许读导出 / 导入目录里的包：这条接口此前直接 resolve + readFile，
+    // 任意绝对路径都能读，错误还把绝对路径回给调用方（2026-11-16 审计修）。
+    let real;
+    try { real = fs.realpathSync(abs); }
+    catch { return { ok: false, error: '文件不存在或不可读' }; }
+    if (!READ_ROOTS().some((root) => pathWithin(real, root))) {
+      return { ok: false, error: '包文件路径不在允许的目录内（仅支持导出目录与导入目录）' };
+    }
     let st = null;
-    try { st = fs.statSync(abs); } catch { /* 不存在 */ }
-    if (!st || !st.isFile()) return { ok: false, error: `文件不存在：${abs}` };
+    try { st = fs.statSync(real); } catch { /* 不存在 */ }
+    if (!st || !st.isFile()) return { ok: false, error: '文件不存在或不是普通文件' };
     if (st.size > MAX_BUNDLE_ZIP_BYTES) {
       return { ok: false, error: `包体积 ${(st.size / 1048576).toFixed(1)}MB 超过上限 ${Math.round(MAX_BUNDLE_ZIP_BYTES / 1048576)}MB` };
     }
-    buf = fs.readFileSync(abs);
-    p = abs;
+    buf = fs.readFileSync(real);
+    p = real;
   }
   if (!buf.length) return { ok: false, error: '包是空的' };
 

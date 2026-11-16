@@ -999,6 +999,58 @@
       '<svg class="bp-chev" viewBox="0 0 12 8"><path d="M2 6l4-4 4 4"/></svg></span>';
   }
 
+  // ── 卡内动作条：重试 / 中止 ──────────────────────────────────────────────
+  // 为什么必须在这里补一套：02-sse-sessions.js 的「重试 / 中止」按钮只渲染进
+  // #session-items，而本层一进全屏「会话选择」页就给 #session-items 加 .cc-hide
+  // （buildStatic 末尾），全屏页关掉后 #session-list 又整体在隐藏的 .bp-mode-chat 里
+  // —— 两条路径都点不到。后果：出错会话无法重试、跑飞的长任务无法止损，
+  // 用户只能等它跑完或重启应用（2026-11-16 两位审查专家独立确认）。
+  // 这里在卡片底部补一条动作条，**处理器直接复用 02 的 getSessionListHandlers()**
+  // （它是全局函数；onRetry/onAbort 只依赖 btn.dataset.id / disabled / textContent，
+  //  传本层的真实 <button> 进去就能工作，不必在 02 里开新导出）。
+  // #session-items 里那套按钮保持原样 —— 经典列表模式仍走它。
+  /** 按钮 HTML（不含外层容器）。显示条件与 02 的 retryHtml / abortHtml 逐字对齐。 */
+  function cardActsButtons(s) {
+    if (!s || !s.status) return '';
+    var out = '';
+    if (s.status === 'error' && !(s.sent && s.sent.length)) {
+      out += '<button class="btn btn-small session-retry-btn" type="button"' +
+        ' data-id="' + esc2(s.id) + '"' +
+        ' aria-label="重试这条出错的会话"' +
+        ' title="把这条会话的触发消息翻回未读并重新处理">重试</button>';
+    }
+    if (s.status === 'running' || s.status === 'waiting') {
+      out += '<button class="btn btn-small btn-danger session-abort-btn" type="button"' +
+        ' data-id="' + esc2(s.id) + '"' +
+        ' aria-label="中止这次处理（已发出的消息不受影响）"' +
+        ' title="中止这次处理（已发出的消息不受影响）">中止</button>';
+    }
+    return out;
+  }
+
+  /** 把动作条同步到某张卡上（没有动作就整块移除；内容没变不动 DOM）。 */
+  function syncCardActs(card, s) {
+    if (!card) return;
+    var html = cardActsButtons(s);
+    var box = card.querySelector('.cc-card-acts');
+    if (!html) { if (box) box.remove(); return; }
+    // 卡体是后来挂回来的（restoreExpanded / 点卡头展开都走 appendChild），
+    // 会把这个盒子挤到中间去 —— 每次同步顺手挪回末尾，保证"头 → 正文 → 动作"。
+    if (box && card.lastElementChild !== box) card.appendChild(box);
+    if (box && box.getAttribute('data-acts') === html) return;
+    if (!box) {
+      box = document.createElement('div');
+      box.className = 'cc-card-acts';
+      box.setAttribute('data-cc', '1');
+      // 内联样式而非新建 CSS 类：本批修复不动 CSS 文件（并行改动会冲突），
+      // 只用布局（右对齐 + 与卡头同水平内边距），按钮外观完全沿用全局 .btn.btn-small。
+      box.setAttribute('style', 'display:flex;gap:8px;justify-content:flex-end;padding:0 16px 12px');
+      card.appendChild(box);
+    }
+    box.setAttribute('data-acts', html);
+    box.innerHTML = html;
+  }
+
   /** 长期持有的 .session-status 引用 —— 见 ensureHead() 注释里「坑 2」。
    *  ⚠️ 必须是模块级 var，不能省；本文件顶有 'use strict'，
    *     少了它 rehomeStatus 里的 `SS = SS || …` 会直接抛 ReferenceError，
@@ -1213,6 +1265,8 @@
       (nodes || []).forEach(function (n) { body.appendChild(n); });
       card.appendChild(body);
     }
+    // 动作条放最后（卡体之下）：折叠卡也能重试/中止，展开卡的按钮不挤在正文入口
+    syncCardActs(card, s);
     return card;
   }
 
@@ -1265,7 +1319,13 @@
     var inList = {};
     list.forEach(function (s) { inList[s.id] = 1; });
     Object.keys(ccUserExpanded).forEach(function (sid) {
-      var c = cards.querySelector('.bp-card[data-sid="' + sid + '"]');
+      // 按 dataset.sid 遍历比对，避免 sid 含引号 / 反斜杠时拼属性选择器抛 SyntaxError
+      // 中断整轮恢复（与 placeDetailHint 的写法一致）。
+      var c = null;
+      var allCards = cards.querySelectorAll('.bp-card[data-sid]');
+      for (var ci = 0; ci < allCards.length; ci++) {
+        if (allCards[ci].dataset.sid === String(sid)) { c = allCards[ci]; break; }
+      }
       if (!c || sid === selId) return;         // 已不存在（被清/删）/ 选中卡走正常路径
       c.classList.remove('collapsed');
       var old = c.querySelector('.bs-cb');
@@ -1278,7 +1338,12 @@
           if (!active || tabNow() !== 'sessions' || !s || !s.id) return;
           try {
             // 卡还在、还展开着才填 —— 用户中途收起过就别打扰
-            var cc = DETAIL.querySelector('#cc-cards .bp-card[data-sid="' + sid + '"]');
+            // 同样按 dataset.sid 比对，避免 sid 含特殊字符时抛 SyntaxError（外层已有 try）
+            var cc = null;
+            var allCc = DETAIL.querySelectorAll('#cc-cards .bp-card[data-sid]');
+            for (var cci = 0; cci < allCc.length; cci++) {
+              if (allCc[cci].dataset.sid === String(sid)) { cc = allCc[cci]; break; }
+            }
             if (cc && !cc.classList.contains('collapsed')) window.renderSessionDetail(s);
           } catch (e) { /* 忽略：最差是停在「加载中…」 */ }
         }, function () { /* 拉取失败就停在「加载中…」，用户可重点卡头重试 */ });
@@ -1667,6 +1732,11 @@
         }
       }
     });
+    // ①′ 卡内动作条（重试 / 中止）同样按状态同步：会话从「运行中」「出错」
+    //     走到终态时按钮要自己消失，不能等下一次全量重建。
+    cards.querySelectorAll('.bp-card[data-sid]').forEach(function (card) {
+      syncCardActs(card, map[card.dataset.sid]);
+    });
     // ② 删卡：列表里没有的（会话被删除 / 清空已结束）
     cards.querySelectorAll('.bp-card[data-sid]').forEach(function (card) {
       if (!map[card.dataset.sid]) card.remove();
@@ -1900,7 +1970,18 @@
           // 补内容 —— P1-3 的卡体重填自愈靠这个（见 applyRightInner 末尾）。
           sel = (arguments[0] && arguments[0].id) || state.currentSessionId || null;
         } catch (e) { sel = null; }
-        var selCard = (cards && sel) ? cards.querySelector('.bp-card[data-sid="' + sel + '"]') : null;
+        // 按值比对定位选中卡（P3）：session id 含引号 / 反斜杠时，拼
+        // `[data-sid="'+sel+'"]` 选择器会抛 SyntaxError 中断整个右栏更新 ——
+        // 与文件上方 placeDetailHint 的写法一致，改用 dataset.sid 逐张比对。
+        var selCard = null;
+        try {
+          if (cards && sel) {
+            var _all = cards.querySelectorAll('.bp-card[data-sid]');
+            for (var _i = 0; _i < _all.length; _i++) {
+              if (_all[_i].dataset.sid === String(sel)) { selCard = _all[_i]; break; }
+            }
+          }
+        } catch (e) { selCard = null; }   // 异常回落全量重建路径，不影响其它渲染
         if (!cards || !selCard) {
           // R119（入口①）：回退 = 全量重建。但先别急着让 02 渲染 —— 它的
           // `detail.innerHTML = 整串` 会把 DETAIL 连骨架一起清掉、scrollTop
@@ -2056,6 +2137,39 @@
     raw.hidden = !show;
     b.setAttribute('aria-expanded', show ? 'true' : 'false');
     card.classList.toggle('ts-open', show);
+  });
+
+  // 卡内动作条的重试 / 中止：同样委托在 #session-detail 上（卡片会整体重建，
+  // 逐个绑定必丢事件）。处理器复用 02 的全局 getSessionListHandlers()。
+  DETAIL.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!t || !t.closest) return;
+    var btn = t.closest('.session-retry-btn') || t.closest('.session-abort-btn');
+    // 只认本层卡内的动作条：#session-items 里那套由 02 自己的委托处理，别抢
+    if (!btn || !btn.closest('#cc-cards')) return;
+    if (typeof getSessionListHandlers !== 'function') return;
+    var h = getSessionListHandlers();
+    var isRetry = btn.classList.contains('session-retry-btn');
+    var card = btn.closest('.bp-card');
+    var p;
+    try {
+      p = isRetry ? h.onRetry(btn) : h.onAbort(btn);
+    } catch (err) {
+      p = null;
+    }
+    // 收尾后强制重算这张卡的动作条：中止成功后会话可能仍是 running（后端要等
+    // 下一轮请求前才收尾），状态没变的话签名比对不会重绘，按钮会永久停在
+    // 「中止中…」+ disabled。清掉签名即可保证下一轮一定重写。
+    var done = function () {
+      try {
+        if (card) {
+          var box = card.querySelector('.cc-card-acts');
+          if (box) box.removeAttribute('data-acts');
+        }
+        if (active && tabNow() === 'sessions') refreshCards();
+      } catch (err) { /* 忽略：最差是等下一轮轮询刷新 */ }
+    };
+    Promise.resolve(p).then(done, done);
   });
 
   sync();

@@ -727,7 +727,11 @@ export const providers = {
     if (!loc.ok) return loc;
     const targetBase = loc.base;
     const safeDir = loc.name;
-    const manifestId = String(readManifestOf(targetBase)?.manifest?.id || safeDir);
+    // 备份目录名直接来自 manifest.id（外部可控），必须和目录名一样过 installedDirName：
+    // 否则 manifest.id = '../..' 之类会让 backupsRoot 越出 backups/ 去删/挪别人的目录。
+    // 非法（含空串、'.'/'..'、含 '/' 或 '\0'）一律回落已校验的 safeDir。
+    const rawManifestId = String(readManifestOf(targetBase)?.manifest?.id || '');
+    const manifestId = installedDirName(rawManifestId) || safeDir;
     const backupsRoot = path.join(dataBase, 'plugin-data', 'extension-forge', 'backups', manifestId);
     // reverted- 前缀排除：那是"回滚前的现场"，不是可恢复的备份
     let cands = [];

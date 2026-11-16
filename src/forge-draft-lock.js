@@ -51,3 +51,23 @@ export function forgeDraftLockHolder(draftId) {
 export function __resetForgeDraftLocks() {
   BUSY.clear();
 }
+
+/**
+ * 「已装扩展目标」的锁键：<kind>:<dir>（2026-11-16 审计修）。
+ *
+ * 升级安装 / 回滚写的是同一个 plugins/<dir> 或 skills/<dir>，
+ * 而它们的 draftId 各不相同（回滚甚至没有草稿）——按 draftId 上锁拦不住
+ * 这两条路交叉覆盖。统一改成按**目标目录**上锁才能互斥。
+ *
+ * 校验与 harness/forge/index.js 的 installedDirName 同口径：单段目录名，
+ * 不含 `..` / 分隔符 / NUL；kind 只认 skill / plugin。非法返回空串（调用方
+ * 据此不上锁 —— 那种请求本来就会被 harness 的 realpath containment 拒绝，
+ * 不会产生写入）。
+ */
+export function forgeTargetLockKey(kind, dir) {
+  const k = String(kind || '');
+  if (k !== 'skill' && k !== 'plugin') return '';
+  const d = String(dir || '').replace(/\\/g, '/');
+  if (!d || d === '.' || d === '..' || d.includes('/') || d.includes('\0')) return '';
+  return `${k}:${d}`;
+}

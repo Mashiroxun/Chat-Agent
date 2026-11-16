@@ -15,6 +15,8 @@ import { skillManager } from '../skills/manager.js';
 import { setSkillEnabled } from '../skills/config.js';
 import { PLUGINS_DIR } from '../plugin-loader.js';
 import { toOpenAiTools, executeTool } from '../tools.js';
+import { forgeTargetLockKey } from '../forge-draft-lock.js';
+import { sanitizeDraftId } from '../harness/forge/forge-tools.js';
 // 探测结果的"可对外"视图：删掉两枚令牌，只留有无标记。
 // 令牌不越过 HTTP 边界的保证在这个纯函数里，路由只负责调它。
 
@@ -91,8 +93,12 @@ export function forgeRoutes(deps, shared) {
         const body = await bodyOf(req);
         const zipBase64 = typeof body.zipBase64 === 'string' ? body.zipBase64 : '';
         if (!zipBase64) return json(res, 400, { ok: false, error: '没有收到 zip 内容' });
-        // 导入会把 zip 解到暂存区，与正在进行的适配/升级互斥（body.draftId 为空时自动放行）
-        if (!lockForgeDraft(res, json, body.draftId, '导入')) return;
+        // 导入会把 zip 解到暂存区，与正在进行的适配/升级互斥（body.draftId 为空时自动放行）。
+        // ⚠️ 锁键必须等于**实际写入**的草稿 id：harness 在 draftId 存在时沿用该 id，
+        //   否则新建。传进来的 id 先按同一套白名单规整，避免"锁旧 id、写新 id"。
+        const requestedDraftId = typeof body.draftId === 'string' && body.draftId.trim()
+          ? sanitizeDraftId(body.draftId) : '';
+        if (!lockForgeDraft(res, json, requestedDraftId, '导入')) return;
 
         const ctx = skillRuntimeContext();
         const impProv = skillManager.getCapabilityProviders('forge.import-zip', ctx)[0];
@@ -105,7 +111,7 @@ export function forgeRoutes(deps, shared) {
 
         let out;
         try {
-          out = impProv.fn({ zipBase64, zipName: String(body.zipName || '') });
+          out = impProv.fn({ zipBase64, zipName: String(body.zipName || ''), draftId: requestedDraftId || null });
         } catch (error) {
           return json(res, 500, { ok: false, available: true, error: `导入失败：${String(error?.message ?? error)}` });
         }
@@ -1310,7 +1316,12 @@ export function forgeRoutes(deps, shared) {
       handler: async ({ req, res, json }) => {
         const body = await bodyOf(req);
         // 与 install 同理：落地前必须确保草稿没在被改写
-        if (!lockForgeDraft(res, json, body.draftId, '升级安装')) return;
+        const draftKey = String(body.draftId || '').trim();
+        if (draftKey && !lockForgeDraft(res, json, draftKey, '升级安装')) return;
+        // 再按**目标目录**上一把锁：升级安装与回滚写同一个 plugins/<dir> / skills/<dir>，
+        // 二者 draftId 不同（回滚根本没有草稿），只锁草稿拦不住交叉覆盖（2026-11-16 审计修）。
+        const targetKey = forgeTargetLockKey(body.kind, body.dir);
+        if (targetKey && !lockForgeDraft(res, json, targetKey, '升级安装(目标)')) return;
         const ctx = skillRuntimeContext();
         const provs = skillManager.getCapabilityProviders('forge.upgrade-install', ctx);
         if (!provs.length) return json(res, 200, { ok: false, available: false, error: '「扩展锻造台」插件未启用' });
@@ -1342,6 +1353,11 @@ export function forgeRoutes(deps, shared) {
       method: 'POST', pattern: '/api/forge/rollback',
       handler: async ({ req, res, json }) => {
         const body = await bodyOf(req);
+        // 与 upgrade-install 共用目标键锁：两者都会备份/覆盖同一个已装扩展目录，
+        // 并发等于交叉写。body.dir 的格式校验在 forgeTargetLockKey 里与 harness 同口径，
+        // 真正的 realpath containment 仍由 harness 的 installedBase 做（双重校验不退化）。
+        const targetKey = forgeTargetLockKey(body.kind, body.dir);
+        if (targetKey && !lockForgeDraft(res, json, targetKey, '回滚')) return;
         const ctx = skillRuntimeContext();
         const provs = skillManager.getCapabilityProviders('forge.rollback', ctx);
         if (!provs.length) return json(res, 200, { ok: false, available: false, error: '「扩展锻造台」插件未启用' });

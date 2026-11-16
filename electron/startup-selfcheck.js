@@ -96,6 +96,11 @@ function declaredEntryTargets(depPkg) {
     if (!s) return;
     if (/^(?:[a-z][a-z0-9+.-]*:|\/)/i.test(s)) return;   // URL / 绝对路径不归这里管
     if (/\.d\.(?:ts|mts|cts)$/i.test(s)) return;         // 类型声明运行时不加载
+    // 含 * 的是 exports 通配符模式（check-package.mjs 按 pattern 匹配包内文件，
+    // 不当字面路径）。这里没有包内文件清单做匹配，只能一律跳过 —— 若当字面路径
+    // 去 exists() 判断必然"缺失"，会把装好的依赖误报成安装不完整，Bootstrap
+    // 直接 app.exit(1)（2026-11-16 审查）。
+    if (s.includes('*')) return;
     if (!out.includes(s)) out.push(s);
   };
   add(depPkg.main);
@@ -121,6 +126,7 @@ function missingEntryTargets(depDir, markerPath) {
   }
   const missing = [];
   for (const target of declaredEntryTargets(depPkg)) {
+    if (target.includes('*')) continue;   // 通配符不是字面路径（与 check-package 同口径，skip）
     const rel = target.replace(/^\.\//, '');
     if (rel.split('/').includes('..')) continue;   // 指向依赖外部，不归本次检查
     if (!exists(path.join(depDir, rel))) missing.push(target);

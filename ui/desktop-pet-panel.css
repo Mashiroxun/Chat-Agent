@@ -32,9 +32,11 @@
   background: transparent; color: var(--fg-dim);
   font: inherit; font-size: 12.5px; line-height: 1.4; padding: 7px 10px;
   cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  transition: background .15s, color .15s;
+  transition: background-color .15s, color .15s, transform .12s var(--ease-out-quart);
 }
 .dp-nav button:hover { color: var(--fg); background: var(--hover); }
+/* 按压缩放：页内分区的切换没有页面转场可依靠，只有这一下手的反馈 */
+.dp-nav button:active { transform: scale(.97); }
 .dp-nav button.is-active { background: var(--accent-soft); color: var(--accent-hi); font-weight: 600; }
 .dp-nav button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
@@ -212,12 +214,16 @@
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
   border: 1px dashed var(--line-str); border-radius: 12px;
   background: transparent; color: var(--fg-dim); font: inherit; cursor: pointer;
-  transition: background .15s, border-color .15s, color .15s;
+  transition: background-color .15s, border-color .15s, color .15s, transform .12s var(--ease-out-quart);
 }
 .dp-model-add > span { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--layer-2); color: var(--fg-dim); font-size: 22px; font-weight: 300; }
 .dp-model-add strong { font-size: 12.5px; font-weight: 600; }
 .dp-model-add small { font-size: 11px; color: var(--fg-mute); }
-.dp-model-add:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-hi); }
+/* ⚠️ `:not(:disabled)` 必须带：本块自己没有回滚 hover 的 color/border/background，
+   而 .dp-model-add:disabled 只写 opacity + cursor —— 不加这个 :not() 的话，
+   鼠标扫过「添加角色」的禁用态会整卡变成强调色，和 not-allowed 光标自相矛盾。 */
+.dp-model-add:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-hi); }
+.dp-model-add:active:not(:disabled) { transform: scale(.99); }
 .dp-model-add:disabled { cursor: not-allowed; opacity: .45; }
 .dp-model-add:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .dp-library-empty { grid-column: 1 / -1; padding: 28px 14px; border: 1px dashed var(--line-str); border-radius: 12px; text-align: center; color: var(--fg-dim); font-size: 12px; line-height: 1.8; }

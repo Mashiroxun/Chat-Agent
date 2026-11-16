@@ -5,12 +5,51 @@
 // 不改任何一条路由的行为。新增路由请按域放进对应文件，不要再往 routes.js 里堆。
 import { skillRuntimeContext } from './_shared.js';
 import fs from 'node:fs';
-import { getConfig } from '../config.js';
+import path from 'node:path';
+import { getConfig, DATA_DIR, ROOT } from '../config.js';
 import { chatCompletion, resolveApiKey } from '../llm.js';
 import { logger } from '../logger.js';
 import { skillManager } from '../skills/manager.js';
 // 探测结果的"可对外"视图：删掉两枚令牌，只留有无标记。
 // 令牌不越过 HTTP 边界的保证在这个纯函数里，路由只负责调它。
+
+/**
+ * /api/fix/propose 的 target 收敛校验（2026-11-16 审计修）。
+ * harness 的 collectRelevantFiles 直接 path.join(appRoot, rel) 读文件，
+ * 没有 realpath containment —— 路由层先把它锁死：
+ *   · target.file 必须是单段/多段相对路径，拒绝绝对路径与任何 '..' 段；
+ *   · realpath 后必须仍落在对应根目录内（code → appRoot，data → DATA_DIR），
+ *     符号链接逃逸一并拒绝。harness 层不改，这里就是那道闸。
+ * @returns {{ok:true}|{ok:false, error:string}}
+ */
+export function checkFixTargetContainment(target) {
+  if (target == null) return { ok: true };            // 没带 target 是合法用法
+  if (!target || typeof target !== 'object' || Array.isArray(target)) {
+    return { ok: false, error: 'target 必须是对象' };
+  }
+  if (typeof target.file !== 'string' || !target.file.trim()) {
+    return { ok: false, error: 'target.file 必须是非空字符串' };
+  }
+  const raw = target.file;
+  const rel = raw.replace(/\\/g, '/');
+  if (path.isAbsolute(rel) || /^[A-Za-z]:/.test(rel) || rel.includes('\0')
+      || rel.split('/').includes('..')) {
+    return { ok: false, error: 'target.file 必须是根目录内的相对路径（拒绝绝对路径与 ..）' };
+  }
+  const base = target.scope === 'data' ? DATA_DIR : ROOT;
+  const candidate = path.resolve(base, rel);
+  // 显式拒绝符号链接：即使 realpath 在某些平台上解析失败，也不能把它当普通路径放行
+  try { if (fs.lstatSync(candidate).isSymbolicLink()) return { ok: false, error: 'target.file 不允许指向符号链接' }; }
+  catch { /* 文件不存在时交给下面的 containment 判断 */ }
+  let realBase = base;
+  let realFile = candidate;
+  try { realBase = fs.realpathSync(base); } catch { /* 根目录不存在时退到字面量 */ }
+  try { realFile = fs.realpathSync(candidate); } catch { /* 文件可能尚未创建，按字面量判 containment */ }
+  if (realFile !== realBase && !realFile.startsWith(realBase + path.sep)) {
+    return { ok: false, error: 'target.file 解析后不在允许的根目录内（符号链接逃逸）' };
+  }
+  return { ok: true };
+}
 
 export function fixRoutes(deps, shared) {
   const {
@@ -87,7 +126,10 @@ export function fixRoutes(deps, shared) {
         if (!promptProvs.length || !createProvs.length) {
           return json(res, 200, { ok: false, available: false, error: '「自动修复」插件未启用（或未开启自动修复）' });
         }
-        // ① 拼 prompt（插件侧读文件片段，核心不懂路径规则）
+        // ① 先验 target 路径：harness 会按它读文件片段，绝不能让它指到根目录之外。
+        const targetCheck = checkFixTargetContainment(body.target);
+        if (!targetCheck.ok) return json(res, 400, { ok: false, error: targetCheck.error });
+        // ② 拼 prompt（插件侧读文件片段，核心不懂路径规则）
         let p;
         try {
           p = promptProvs[0].fn({
@@ -99,7 +141,7 @@ export function fixRoutes(deps, shared) {
         } catch (error) { return json(res, 500, { ok: false, error: `准备提案失败：${String(error?.message ?? error)}` }); }
         if (!p?.ok) return json(res, 200, { ok: false, available: true, error: p?.error || '无法准备提案' });
 
-        // ② 选凭据（与 /api/doctor/ask 完全同源：doctorApi 开关对这里也生效）
+        // ③ 选凭据（与 /api/doctor/ask 完全同源：doctorApi 开关对这里也生效）
         const cfg = getConfig();
         const d = cfg.doctorApi || {};
         const useOwn = d.enabled === true && String(d.model || '').trim();

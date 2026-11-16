@@ -12,7 +12,7 @@ import {
   currentProviders, setProviderKey, setProviderProtocol, testAllProviders,
   testOneProvider, testModelChat, fetchModelsFrom, upsertProvider,
   addModelsToProvider, removeModelFromProvider, removeProvider, providerKeyValue,
-  normalizeBaseUrl
+  normalizeBaseUrl, validateProviderBaseUrl
 } from '../providers.js';
 import { normalizeProtocol, protocolLabel } from '../api-protocols.js';
 import { scanModelsVision, visionResults } from '../vision-scan.js';
@@ -134,6 +134,8 @@ export function providersRoutes(deps, shared) {
           const body = await bodyOf(req);
           const cfgNow = getConfig();
           const baseUrl = String(body.baseUrl || cfgNow.api.baseUrl || '');
+          // P1 SSRF：路由层先校验前端传入的 baseUrl；内网/链路本地/元数据/非 http(s) 直接拒绝
+          await validateProviderBaseUrl(baseUrl);
           // API 协议口径（2026-10-19）：显式传入 > 按 providerId 查已存 > 主提供商的
           const pid0 = String(body.providerId ?? '').trim();
           const proto = normalizeProtocol(
@@ -174,6 +176,8 @@ export function providersRoutes(deps, shared) {
       handler: async ({ req, res, json }) => {
         try {
           const body = await bodyOf(req);
+          // P1 SSRF：路由层先校验前端传入的 baseUrl（空值表示走已存 provider，交由下游校验）
+          await validateProviderBaseUrl(body.baseUrl);
           const result = await testOneProvider({
             providerId: String(body.providerId ?? ''),
             baseUrl: String(body.baseUrl ?? ''),
@@ -205,6 +209,8 @@ export function providersRoutes(deps, shared) {
             ? submitted
             : (providerKeyValue(matchByUrl, cfgNow) || resolveApiKey(cfgNow));
           const baseUrl = String(body.baseUrl ?? '');
+          // P1 SSRF：路由层先校验前端传入的 baseUrl；内网/链路本地/元数据/非 http(s) 直接拒绝
+          await validateProviderBaseUrl(baseUrl);
           const model = String(body.model ?? '');
           // 测试协议必须与实跑同源（2026-10-19）：显式传入 > 主提供商已存的协议
           const proto = normalizeProtocol(

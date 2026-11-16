@@ -6,7 +6,7 @@
 import { skillRuntimeContext } from './_shared.js';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getConfig, updateConfig, getConfigWriteBlock, deepMerge as deepMergeConfig } from '../config.js';
+import { getConfig, updateConfig, getConfigWriteBlock, deepMerge as deepMergeConfig, withTrustedPluginGrant } from '../config.js';
 import { initPriceFeed } from '../price-feed.js';
 import { effectiveVisionEnabled } from '../vision-scan.js';
 import { logger } from '../logger.js';
@@ -274,7 +274,9 @@ export function skillsRoutes(deps, shared) {
         const id = path.basename(String(row.dir || base).replace(/\\/g, '/')) || base;
         const ids = Array.isArray(getConfig().trustedPlugins) ? getConfig().trustedPlugins.map(String) : [];
         if (!ids.includes(id)) {
-          updateConfig({ trustedPlugins: [...ids, id] });
+          // 只有走过上面「确实因高危被拦」这条闸的调用，才能拿到一次性授予去改白名单。
+          // 直接打 /api/config 写 trustedPlugins 不会带授予，会被 config.js 吞掉（2026-11-16）。
+          withTrustedPluginGrant(id, () => updateConfig({ trustedPlugins: [...ids, id] }));
           logger.info('routes', `用户主动信任模块：${id}（准入闸要求显式确认；清单 id=${row.id}）`);
         }
 

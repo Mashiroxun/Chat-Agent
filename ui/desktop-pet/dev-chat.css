@@ -1,5 +1,7 @@
 /* 开发工单对话框：452×568 透明圆角卡片。
-   视觉与桌宠气泡/用量卡片同一套（白底、圆角、淡阴影）。 */
+   视觉与桌宠气泡/用量卡片同一套（白底、圆角、淡阴影）。
+   2026-11-16 UI 审查修复：辅助文字色统一提到 WCAG AA 正文 4.5:1（#69707a ≈5:1），
+   中文辅助文字最小 12px（10px 汉字笔画粘连）。 */
 * { box-sizing: border-box; }
 html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
 body { font: 13px/1.55 "Microsoft YaHei", "Segoe UI", sans-serif; color: #1a2a3a; }
@@ -20,7 +22,7 @@ body { font: 13px/1.55 "Microsoft YaHei", "Segoe UI", sans-serif; color: #1a2a3a
 .dot.on { background: #1d9e75; }
 .dot.busy { background: #ef9f27; }
 .hd-title { font-size: 13px; font-weight: 600; }
-.hd-status { font-size: 11px; color: #7b93a6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hd-status { font-size: 12px; color: #69707a; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* margin-left:auto 只给第一个 ghost（把按钮组推到最右），
    第二个起紧挨着排 —— 否则两个 auto 会平分剩余空白，中间裂开一道缝。 */
 .ghost {
@@ -31,7 +33,7 @@ body { font: 13px/1.55 "Microsoft YaHei", "Segoe UI", sans-serif; color: #1a2a3a
 .ghost:hover { background: #f2f7fb; }
 .x {
   width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%;
-  background: transparent; color: #7b93a6; font: 17px/1 "Segoe UI", sans-serif; cursor: pointer;
+  background: transparent; color: #69707a; font: 17px/1 "Segoe UI", sans-serif; cursor: pointer;
 }
 .x:hover { background: #eef4f9; color: #365e7e; }
 
@@ -39,29 +41,29 @@ body { font: 13px/1.55 "Microsoft YaHei", "Segoe UI", sans-serif; color: #1a2a3a
 .session {
   flex: 1 1 auto; min-width: 0; height: 26px; padding: 0 24px 0 8px; border: 1px solid #d6e3ee; border-radius: 8px;
   background: #fff; color: #22384a; font: 12px/1.4 inherit; appearance: none;
-  background-image: linear-gradient(45deg, transparent 50%, #7b93a6 50%), linear-gradient(135deg, #7b93a6 50%, transparent 50%);
+  background-image: linear-gradient(45deg, transparent 50%, #69707a 50%), linear-gradient(135deg, #69707a 50%, transparent 50%);
   background-position: calc(100% - 13px) 11px, calc(100% - 8px) 11px;
   background-size: 5px 5px, 5px 5px; background-repeat: no-repeat;
 }
-.session-meta { font-size: 10px; color: #8aa0b2; white-space: nowrap; }
+.session-meta { font-size: 12px; color: #69707a; white-space: nowrap; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
 .list { flex: 1 1 auto; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; scroll-behavior: smooth; }
 .list::-webkit-scrollbar { width: 8px; }
 .list::-webkit-scrollbar-thumb { background: #d6e3ee; border-radius: 8px; }
 
-.empty { margin: auto 8px; text-align: center; color: #7b93a6; }
+.empty { margin: auto 8px; text-align: center; color: #69707a; }
 .empty-title { margin: 0 0 6px; font-size: 13px; color: #365e7e; }
-.empty-desc { margin: 0; font-size: 11px; line-height: 1.7; }
+.empty-desc { margin: 0; font-size: 12px; line-height: 1.7; }
 
 .msg { max-width: 86%; padding: 7px 10px; border-radius: 12px; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; }
 .msg.user { align-self: flex-end; background: #e6f1fb; color: #12354f; border-bottom-right-radius: 4px; }
 .msg.assistant { align-self: flex-start; background: #f4f8fb; color: #22384a; border-bottom-left-radius: 4px; }
-.who { display: block; margin-bottom: 2px; font-size: 10px; color: #8aa0b2; }
-.tool { align-self: flex-start; max-width: 92%; font-size: 11px; color: #5f7a8f; background: #f7fafc; border: 1px dashed #dbe7f0; border-radius: 8px; padding: 4px 8px; }
+.who { display: block; margin-bottom: 2px; font-size: 12px; color: #69707a; }
+.tool { align-self: flex-start; max-width: 92%; font-size: 12px; color: #5a6c7d; background: #f7fafc; border: 1px dashed #dbe7f0; border-radius: 8px; padding: 4px 8px; }
 .tool.err { color: #a32d2d; border-color: #f0c9c9; background: #fdf6f6; }
-.notice { align-self: center; font-size: 10.5px; color: #9aaebd; }
-.divider { align-self: center; font-size: 10px; color: #9aaebd; padding: 2px 8px; border-radius: 999px; background: #f4f8fb; }
+.notice { align-self: center; font-size: 12px; color: #69707a; }
+.divider { align-self: center; font-size: 12px; color: #69707a; padding: 2px 8px; border-radius: 999px; background: #f4f8fb; }
 
 .composer { display: flex; gap: 8px; padding: 10px 12px 12px; border-top: 1px solid #e8eff5; background: #fbfdff; }
 .input {
@@ -76,3 +78,45 @@ body { font: 13px/1.55 "Microsoft YaHei", "Segoe UI", sans-serif; color: #1a2a3a
 }
 .send:hover { background: #134e87; }
 .send:disabled { background: #b7c6d2; cursor: default; }
+
+/* ── 暗色主题（2026-11-16 审查修复）：与主窗口 data-theme 联动 ──
+   浮窗是透明窗 + 内缩卡片，只换卡片自身的表面/文字色，窗口底保持透明。 */
+[data-theme='dark'] body { color: #e9eaec; }
+[data-theme='dark'] .panel {
+  background: rgba(36, 37, 43, .97);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .5), 0 0 0 1px rgba(255, 255, 255, .12);
+}
+[data-theme='dark'] .hd,
+[data-theme='dark'] .session-bar,
+[data-theme='dark'] .composer { border-color: rgba(255, 255, 255, .09); }
+[data-theme='dark'] .hd-status,
+[data-theme='dark'] .session-meta,
+[data-theme='dark'] .empty,
+[data-theme='dark'] .who,
+[data-theme='dark'] .tool,
+[data-theme='dark'] .notice,
+[data-theme='dark'] .divider { color: #8a919d; }
+[data-theme='dark'] .ghost {
+  background: #2a2c33; border-color: rgba(255, 255, 255, .15); color: #b7c3d0;
+}
+[data-theme='dark'] .ghost:hover { background: #343742; }
+[data-theme='dark'] .x { color: #8a919d; }
+[data-theme='dark'] .x:hover { background: #343742; }
+[data-theme='dark'] .session {
+  background: #1d1e23; border-color: rgba(255, 255, 255, .15); color: #e9eaec;
+  background-image: linear-gradient(45deg, transparent 50%, #8a919d 50%), linear-gradient(135deg, #8a919d 50%, transparent 50%);
+}
+[data-theme='dark'] .empty-title { color: #7fb0ff; }
+[data-theme='dark'] .msg.user { background: #2f3a4d; color: #e9eaec; }
+[data-theme='dark'] .msg.assistant,
+[data-theme='dark'] .divider { background: #2a2c33; }
+[data-theme='dark'] .msg.assistant { color: #e9eaec; }
+[data-theme='dark'] .tool { background: #24262d; border-color: rgba(255, 255, 255, .12); }
+[data-theme='dark'] .tool.err { color: #ff6b6b; border-color: rgba(255, 107, 107, .35); background: rgba(255, 107, 107, .08); }
+[data-theme='dark'] .list::-webkit-scrollbar-thumb { background: #3f434d; }
+[data-theme='dark'] .composer { background: #202127; }
+[data-theme='dark'] .input { background: #1d1e23; border-color: rgba(255, 255, 255, .15); color: #e9eaec; }
+[data-theme='dark'] .input:focus { border-color: #3d8bfd; box-shadow: 0 0 0 3px rgba(61, 139, 253, .2); }
+[data-theme='dark'] .send { background: #3d8bfd; }
+[data-theme='dark'] .send:hover { background: #2f6fd0; }
+[data-theme='dark'] .send:disabled { background: #4a4d55; }

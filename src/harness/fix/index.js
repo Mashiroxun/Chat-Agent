@@ -27,6 +27,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+// 数据目录的唯一真源：config.js 已处理 QQ_AGENT_DATA_DIR / PROFILE 推导。
+// 不再自行 `|| '.'` 回落到 cwd —— headless / 单测里 cwd 不是数据目录，
+// 会把审计记录写到工作目录、并让多个进程互相串数据（安全审查项）。
+import { DATA_DIR } from '../../config.js';
 import {
   ensureDir, newFixId, newApprovalToken, sanitizeId, fixesDir,
   stagingDir, sandboxDir, backupDir, recordFile,
@@ -260,7 +264,7 @@ export function setup(api) {
   log = api.log;
   askCapability = api.capability || (() => undefined);
 
-  root = path.join(String(process.env.QQ_AGENT_DATA_DIR || '').trim() || '.', 'plugin-data', 'self-fix');
+  root = path.join(DATA_DIR, 'plugin-data', 'self-fix');
   // <DATA_DIR> = root 往上两级（root=<DATA>/plugin-data/self-fix）
   dataRoot = path.dirname(path.dirname(root));
   // appRoot：本文件位于 <appRoot>/plugins/self-fix/index.js
@@ -606,6 +610,25 @@ export const providers = {
         error: `尚未通过自验，拒绝落地（当前状态：${rec.status || '未知'}）。`
           + '下一步：在闸②点「运行验证」；若验证项本身要改代码，请改完后重新批准应用（工单详情里会给新的批准入口）。'
       };
+    }
+    // ⚠️ CHANGELOG:4142：syntax 是硬性项，必须**确实跑过且通过**（skip/缺失都不许落地）。
+    //   模型可以在 verifyPlan 里省略 syntax，旧版 runVerifyPlan 只看 anyFailed，于是带
+    //   SyntaxError 的 JS 被判 verified 后写进 src/，下次启动整机崩。runVerifyPlan 已收紧
+    //   passed，这里在落地前再独立复核一遍最后一轮的 syntax 结果，防旧工单/被改过的记录。
+    //   没有 JS 改动时 syntax 本就不产出检查项，这种"合法空跑"不该拦，故先判 hasJs。
+    const hasJs = (Array.isArray(rec.proposal?.changes) ? rec.proposal.changes : [])
+      .some((c) => /\.(js|mjs|cjs)$/i.test(String(c?.path || '')));
+    if (hasJs) {
+      const rounds = Array.isArray(rec.rounds) ? rec.rounds : [];
+      const lastRows = rounds.length ? (rounds[rounds.length - 1]?.verify?.items || []) : [];
+      const syntaxRows = lastRows.filter((i) => i?.verifier === 'syntax');
+      if (!syntaxRows.length || syntaxRows.some((i) => i.status !== 'pass')) {
+        return {
+          ok: false,
+          error: '缺少通过的语法检查（syntax）结果：syntax 为硬性项，必须实际运行并通过，'
+            + 'skip / 超时 / 省略都不允许落地。下一步：在闸②重新运行验证（确认验证计划包含 syntax）。'
+        };
+      }
     }
     // ⚠️ fail-closed：`!rec.protocol` 也要拒（2026-10-07 安全验证实测）。
     //   早期写的是 `if (rec.protocol && rec.protocol.passed === false)` ——

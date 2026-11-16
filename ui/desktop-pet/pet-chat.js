@@ -206,11 +206,13 @@ async function send() {
   state.busy = true;
   state.typing = true;
   state.error = '';
-  input.value = '';
-  state.pending = [];
-  fitInput();
   render();
 
+  // 2026-11-16 审查修复（交互问题·中4）：输入框与待发附件**只有发送成功才清空**。
+  // 旧版在 await 之前就清掉，网络/后端一失败内容即刻不可逆丢失 —— 用户辛苦打的字
+  // 和选好的文件全没了，只剩一句「回复失败」。现在失败时原样保留，可直接重试。
+  // 与同类 dev-chat.js 的口径对齐（那边也是成功后才 input.value = ''）。
+  let sentOk = false;
   try {
     const result = await api.send(text, files);
     if (result?.state) {
@@ -220,10 +222,25 @@ async function send() {
       state.notice = String(result.state.notice || '');
       if (result.state.greeting) state.name = String(result.state.greeting);
     }
-    if (result && result.ok === false) state.error = result.error || '回复失败';
+    if (result && result.ok === false) {
+      state.error = result.error || '回复失败';
+    } else if (result) {
+      sentOk = true;
+    } else {
+      // 桥返回空值属于异常：按失败处理，宁可保留草稿也不清空
+      state.error = '回复失败：未收到响应';
+    }
   } catch (error) {
     state.error = `回复失败：${error?.message || error}`;
   } finally {
+    if (sentOk) {
+      input.value = '';
+      state.pending = [];
+      fitInput();
+    } else if (state.error) {
+      // 内容还在输入框/附件条里，明确告诉用户不用重打一遍
+      state.error += '（内容已保留，可直接重试）';
+    }
     state.typing = false;
     state.busy = false;
     render();

@@ -340,7 +340,7 @@ export class Orchestrator {
     // groupId -> { card, at }：我在本群的群名片（10 分钟 TTL）。
     // 为什么单独缓存：提示词【场景】里要写"你在本群的名片是 X"，而 QQ 昵称与群名片
     // 经常不一致 —— 只写昵称时模型会把"@群名片"当成别人（2026-10-21 实测：
-    // 提示词写「测试用户」，群里 @ 的是「阿明(QQ:100086)」，
+    // 提示词写「测试用户」，群里 @ 的是「阿明(QQ:10000)」，
     // 6 次被 @ 有 3 次被模型判成"在叫别人"→ 静默）。
     this.selfCardCache = new Map();
     this.wakeTimers = new Map();       // chatKey -> timer
@@ -405,7 +405,7 @@ export class Orchestrator {
    *
    * 为什么必须要群名片（2026-10-21）：入站消息经过 segmentsToText 拍平后，
    * "@我"剩下的是 `@群名片(QQ:号)`。提示词只写 QQ 昵称时，模型看到
-   * `@阿明(QQ:100086)` 会认为那是在叫别人 —— 实测 6 次被 @ 有 3 次
+   * `@阿明(QQ:10000)` 会认为那是在叫别人 —— 实测 6 次被 @ 有 3 次
    * 直接 finish("没我事")。名字对不上，模型再听话也没用。
    *
    * 10 分钟 TTL：群名片是低频变更，但改完不该等到重启才生效。
@@ -1703,7 +1703,9 @@ export class Orchestrator {
       try {
         return routeThinking({
           triggerEntries, atMe, tierInfo, proactive, kind,
-          enabled: cfg.api?.thinkingRoute !== false,
+          // 2026-11-15：默认关闭。只有用户手动勾选并保存、显式写入 true 才分流；
+          // 不能写成 !== false —— 那会让「配置里没这个字段」也自动开启。
+          enabled: cfg.api?.thinkingRoute === true,
           allowOff: cfg.api?.thinkingRouteAllowOff !== false,
           baseMode: cfg.api?.thinkingMode
         });
@@ -2013,6 +2015,9 @@ export class Orchestrator {
     // 自确认（nudge）：每次运行最多一次，且不占 maxRounds。与 stickerGraceUsed 同理 ——
     // 上限是硬性的，否则一个拿不定主意的模型会在这里来回问自己，白烧预算。
     let nudgeUsed = false;
+    // 组E P1：撞 context_length_exceeded 后只做一次"激进裁剪 + 重试"，绝不循环。
+    // 唤醒级标志（不是轮级）——激进裁剪会原地改 messages，后续轮次都带着裁剪结果。
+    let contextLengthRetryUsed = false;
     session.nudgeTurn = false;
     session.activity = '';
     session.webSearchCount = 0;
@@ -2105,6 +2110,9 @@ export class Orchestrator {
       // 预热要复用真实请求的 body，所以先按真实入参**只构造不发送**一份，
       // 把它交给预热模块 —— 这样预热与真实调用打到**同一个端点、同一个模型、
       // 同一段前缀**，缓存键才一致（账号池会换端点、专用模型会换模型，自己拼会踩坑）。
+      // 组E P1：发请求前再兜一次常规裁剪（幂等，未超预算直接返回）。
+      // 预热与真实调用共用这份 messages，缓存前缀才一致。
+      trimToolResultBudget(messages);
       let warmBody = null;
       let warmApi = null;
       let warmSample = null;
@@ -2148,11 +2156,32 @@ export class Orchestrator {
         //   下沉到尝试级后，预算数字与真实计费请求一一对应。
       }
 
-      const response = await this.policy.llmComplete(
+      // 组E P1：上下文超限自愈降级。llm.js 把这类 400 包成 code='context_length_exceeded'
+      // 且 isRetryableError 判不可重试（换模型也救不了"太长"），所以这里走专门路径：
+      // 强制再做一次更激进的工具结果裁剪，然后原样重试一次。
+      // contextLengthRetryUsed 是唤醒级开关 → 最多重试一次，绝不循环。
+      const callLlm = () => this.policy.llmComplete(
         { messages, tools: openAiTools, skillContext, signal: abortSignal, tag: `real:${session.id}` },
         undefined,   // 用默认重试次数（与改动前一致）
         { onAttempt: budget ? () => { budget.left -= 1; } : null }
       );
+      let response;
+      try {
+        response = await callLlm();
+      } catch (error) {
+        const canHeal = error?.code === 'context_length_exceeded'
+          && !contextLengthRetryUsed
+          && abortSignal?.aborted !== true && !this.aborted
+          && (!budget || budget.left > 0);
+        if (!canHeal) throw error;
+        contextLengthRetryUsed = true;   // 先置位：无论后续成功与否，都不再重试第二次
+        const saved = trimToolResultBudget(messages, { aggressive: true });
+        if (saved <= 0) throw error;     // 没有可裁的老结果：重试注定还是超限，直接上抛
+        logger.warn('orchestrator', `${session.id} 第 ${round + 1} 轮上下文超限，已激进裁剪 ${saved} 字符历史工具结果后自愈重试一次`);
+        session.activity = '上下文超限，裁减历史后重试…';
+        this.sessions.update(session.id);
+        response = await callLlm();
+      }
       session.model = response.model || session.model;
       // 渠道与模型必须同源：fallback 可以配另一个 provider，只更新 model 会把
       // 这次调用记到主渠道名下，导致按渠道拆分的成本报表误导用户。
@@ -2696,6 +2725,9 @@ export class Orchestrator {
           } catch (error) { skillManager.recordError('reply-safety', error); }
         }
       }
+      // 组E P1：先把历史工具结果裁进预算，再 push 本轮结果 —— 本轮保持完整，
+      // 只截更早的轮次；不改 tool_call_id / 不删消息，配对结构始终合法。
+      trimToolResultBudget(messages);
       messages.push(...toolResults.map(({ role, tool_call_id, name, content }) => ({ role, tool_call_id, content, name })));
       // 媒体消息跟随在全部 tool 结果之后（OpenAI 校验要求每个 tool_call 都有对应 tool 消息）
       messages.push(...imageUserMessages);
@@ -3659,6 +3691,62 @@ function safeParse(text) {
   try { return typeof text === 'string' ? JSON.parse(text) : text; } catch { return { raw: String(text).slice(0, 500) }; }
 }
 
+// ── 跨轮工具结果字符预算裁剪（组E P1，2026-11-16）────────────────────────
+// 多轮工具循环里每轮把 tool 结果 push 进 messages，单条 web_fetch 最多 2 万字符，
+// 12 轮累积可膨胀到撞 context_length_exceeded → 不可重试 → 整轮失败、群友收不到回复。
+// 这里在 push 前 / 发请求前对历史 tool 消息的 content 做字符预算裁剪：
+//   · 只截断 role==='tool' 的文本 content，绝不删消息、绝不改 tool_call_id ——
+//     删消息会产生"孤儿 tool 消息"（找不到父 tool_call）导致下一轮 400；
+//   · 最近若干条保持完整，更早的按"头 + 省略标记 + 尾"截断（保留 URL / 结果要点）；
+//   · aggressive（撞限额后降级重试）用更小预算与更少保留条数。
+// 保守起见：只省字符、不改消息序列形态，宁可多裁一点文本也不动配对结构。
+const TOOL_RESULT_CHAR_BUDGET = Number(process.env.QQ_AGENT_TOOLRESULT_BUDGET) || 96 * 1024;
+const TOOL_RESULT_KEEP_RECENT = 4;          // 常规裁剪：最近 N 条 tool 结果保持完整
+const TOOL_RESULT_AGGRESSIVE_RATIO = 0.25;  // 降级重试：预算压到常规的 1/4
+const TOOL_RESULT_AGGRESSIVE_KEEP = 1;      // 降级重试：只保留最近 1 条完整
+
+function trimToolResultBudget(messages, { aggressive = false } = {}) {
+  if (!Array.isArray(messages) || messages.length === 0) return 0;
+  const budget = Math.max(4000, Math.floor(TOOL_RESULT_CHAR_BUDGET * (aggressive ? TOOL_RESULT_AGGRESSIVE_RATIO : 1)));
+  const keep = aggressive ? TOOL_RESULT_AGGRESSIVE_KEEP : TOOL_RESULT_KEEP_RECENT;
+  const tools = [];
+  let total = 0;
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (!m || m.role !== 'tool' || typeof m.content !== 'string') continue;
+    tools.push({ idx: i, content: m.content });
+    total += m.content.length;
+  }
+  if (tools.length <= keep || total <= budget) return 0;   // 没超预算 / 没有可裁的老消息
+
+  const needSave = total - budget;
+  const trimCount = tools.length - keep;   // 最近 keep 条不动
+  let saved = 0;
+  for (let k = 0; k < trimCount && saved < needSave; k++) {
+    const t = tools[k];
+    const original = t.content;
+    if (original.length < 240) continue;   // 太短，裁了意义不大
+    const marker = `\n…（较早的工具结果，因上下文预算已省略 ${original.length} 字符）…\n`;
+    // 目标：省下"还需要的量"为主，至少让这条明显变短；头尾合计不超过阈值就跳过
+    const target = Math.max(200, original.length - Math.max(240, needSave - saved));
+    if (target + marker.length >= original.length) continue;
+    const headLen = Math.floor((target - marker.length) * 0.6);
+    const tailLen = (target - marker.length) - headLen;
+    const head = original.slice(0, headLen);
+    const tail = tailLen > 0 ? original.slice(original.length - tailLen) : '';
+    const next = head + marker + tail;
+    if (next.length >= original.length) continue;
+    messages[t.idx].content = next;   // 原地改：只在本轮 messages 上生效，不回写会话存档
+    saved += original.length - next.length;
+  }
+  if (saved > 0) {
+    try {
+      logger.warn('orchestrator', `工具结果预算裁剪：${total} → ${total - saved} 字符（预算 ${budget}${aggressive ? '，降级重试' : ''}，裁剪 ${tools.length - keep} 条中的最旧项）`);
+    } catch { /* 日志不影响主流程 */ }
+  }
+  return saved;
+}
+
 // ── 内联工具调用解析（少数模型不返回原生 tool_calls，而是把调用写进文本） ──
 // 支持的格式：
 //   1. <tool_call> <function=send_message> <parameter=messages>…</parameter> </function> </tool_call>
@@ -3678,16 +3766,45 @@ export function parseInlineToolCalls(text) {
   return out;
 }
 
+// 组E P3：从每个 '{' 起做花括号平衡扫描，列出所有"完整对象"候选子串。
+// 原贪婪正则 /\{[\s\S]*\}/ 在块内对象之后还有别的花括号文字（如说明文字里带 {}）时
+// 会一路抓到最后一个 '}'，JSON.parse 失败 → 整次工具调用被静默丢弃 → 群友收不到回复。
+// 这里逐个候选 try，解析出带 name 的第一个即为目标；解析失败继续下一个，不误伤其它格式。
+function balancedJsonCandidates(text) {
+  const out = [];
+  for (let start = 0; start < text.length; start++) {
+    if (text[start] !== '{') continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+      if (inString) {
+        if (escaped) { escaped = false; continue; }
+        if (ch === '\\') { escaped = true; continue; }
+        if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') { inString = true; continue; }
+      if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) { out.push(text.slice(start, i + 1)); break; }
+      }
+    }
+  }
+  return out;
+}
+
 function parseInlineBlock(block) {
-  // 1) 整个块是 JSON：{"name": "...", "arguments": {...}}（部分模型用 parameters/args）
-  const jsonMatch = block.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
+  // 1) 块内含 JSON 对象：从每个 '{' 做平衡扫描，逐个解析（部分模型用 parameters/args）
+  for (const candidate of balancedJsonCandidates(block)) {
     try {
-      const obj = JSON.parse(jsonMatch[0]);
+      const obj = JSON.parse(candidate);
       const name = obj.name || obj.function || obj.tool;
       const args = obj.arguments || obj.parameters || obj.args || obj.input || {};
       if (name) return { name: String(name), args: (args && typeof args === 'object' && !Array.isArray(args)) ? args : {} };
-    } catch { /* 不是 JSON，继续按 XML 解析 */ }
+    } catch { /* 这个候选不是目标，继续下一个 / 退回下面的 XML 解析 */ }
   }
 
   // 2) <function=send_message> + <parameter=key>value</parameter>

@@ -425,7 +425,7 @@ function anySignal(signals) {
  */
 function fetchWithTimeout(url, ms, extra = {}) {
   const signal = extra.signal ? anySignal([extra.signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms);
-  return fetch(url, { redirect: 'follow', cache: 'no-store', signal });
+  return fetch(url, { method: extra.method || 'GET', redirect: 'follow', cache: 'no-store', signal });
 }
 
 /**
@@ -540,8 +540,10 @@ function rmRf(dir) {
  * @param {function} opts.getConfig  读 config（update.releaseApi / update.mirrorPrefix / update.disabled）
  * @param {function} opts.localVersion
  * @param {function} opts.compareSemver
+ * @param {object}   [opts.testHooks] 仅测试用：onResolved(gen) 在拿到 release 信息后 await，
+ *                                    用来把流水线停在可控点验证 generation/cancel 竞态。
  */
-export function createSelfUpdateService({ appDir, log = () => {}, getConfig = () => ({}), localVersion, compareSemver }) {
+export function createSelfUpdateService({ appDir, log = () => {}, getConfig = () => ({}), localVersion, compareSemver, testHooks = {} }) {
   const rootDir = resolveRootDir(appDir);
   const isPackagedInstall = rootDir !== appDir;   // 开发检出（无 QQ Agent.exe 的 app 根）不做全量替换
   const A = UPDATE_ARTIFACTS;
@@ -568,6 +570,13 @@ export function createSelfUpdateService({ appDir, log = () => {}, getConfig = ()
   // 本次更新是否被 cancel() 叫停：置 true 后流水线里的任何报错都按"已取消"收场，
   // 不能让它以 error 状态覆盖掉用户看到的 cancel 结果。
   let cancelRequested = false;
+  // 单调递增的流水线代次（generation token）：apply / cancel 各 +1。
+  // 异步流水线在每个 await 之后校验自己拿到的 gen 是否仍等于 generation；
+  // 不等就立刻退出，绝不再写 pending / 拉助手 / 碰 staging（cancel→apply 竞态）。
+  let generation = 0;
+  // 当前正在跑的流水线 Promise。cancel 必须等它真正退出后才收尾（清理 + 置 idle），
+  // 否则旧流水线仍可能与紧随其后的新 apply 争用同一个 staging。
+  let activePipeline = null;
 
   /** 拉最新 release：先走 GitHub API；失败则按命名约定构造下载 URL 兜底（api.github.com 不可达时仍能更新）。 */
   async function resolveRelease(currentVersion) {
@@ -601,10 +610,26 @@ export function createSelfUpdateService({ appDir, log = () => {}, getConfig = ()
     // 以前 withMirror 只在这一处兜底 URL 上生效，而真正的下载/校验走的是
     // asset.url —— mirrorPrefix 配了等于没配（E1，2026-11-12 审查）。
     const dl = (name) => `${base}/${name}`;
+    // 兜底资产是按命名约定"猜"出来的，release API 不可达时无法从 JSON 确认它是否真实存在。
+    // 0.4.9.4 只发全量包、make-patch 拒绝出补丁，补丁通道要到 0.4.9.5 才生效 —— 若这里
+    // 无条件构造 patch，mode 会优先选 patch，下载一个根本不存在的 patch-<ver>.zip，
+    // 404 被 downloadOnce 标成 retryable=false 后直接 fail，应用内更新在 api 不可达时
+    // 100% 不可用。所以构造 patch 前先 HEAD 探测：仅当资产真实存在（响应 ok）才暴露
+    // patch 通道；任何失败（404/405/超时/网络错误）都当补丁不可用，让 mode 自然选 full。
+    // ⚠️ HEAD 失败绝不向外抛 —— 兜底的意义就是"一切探测都不可靠时仍能更新"；下载阶段
+    // 另有 4xx 回退 full 的第二道保险，即便 HEAD 误判也不会让更新整体不可用。
+    let patchAsset = null;
+    const patchUrl = dl(`patch-${latest}.zip`);
+    try {
+      const probe = await fetchWithTimeout(patchUrl, 10000, { method: 'HEAD' });
+      if (probe.ok) patchAsset = { name: `patch-${latest}.zip`, url: patchUrl, size: 0, digest: null };
+    } catch (error) {
+      log('warn', `[self-update] 兜底补丁资产探测失败（${String(error?.message ?? error)}），本次只用全量包`);
+    }
     return {
       latest,
       hasUpdate: true,
-      patch: { name: `patch-${latest}.zip`, url: dl(`patch-${latest}.zip`), size: 0, digest: null },
+      patch: patchAsset,
       full: { name: `${latest}.zip`, url: dl(`${latest}.zip`), size: 0, digest: null },
       shaSiblings: new Set([`patch-${latest}.zip.sha256`, `${latest}.zip.sha256`]),
       constructed: true,
@@ -847,7 +872,9 @@ export function createSelfUpdateService({ appDir, log = () => {}, getConfig = ()
     /** 启动一次更新（异步流水线，立即返回；进度走 status()）。 */
     async apply() {
       if (getConfig().update?.disabled) return { ok: false, error: '更新检查已在设置中关闭' };
-      if (job.state === 'preparing' || job.state === 'downloading' || job.state === 'extracting' || job.state === 'validating') {
+      // ready 也必须拦：此时 pending 已写、助手已在等退出，再进一次流水线会重写
+      // pending / 再拉一个助手，两套状态互相踩（与 executing 各态同等对待）。
+      if (['preparing', 'downloading', 'extracting', 'validating', 'ready'].includes(job.state)) {
         return { ok: false, error: '已有更新在进行中' };
       }
       // pending 标记处理（B4 + 2026-11-12 QA 第二轮的 P2 残骸）。
@@ -887,13 +914,20 @@ export function createSelfUpdateService({ appDir, log = () => {}, getConfig = ()
       } catch (error) {
         return { ok: false, error: String(error?.message ?? error) };
       }
+      // 递增代次：本条流水线拿到唯一 gen。此前 cancel 递增过的值不会与它相同，
+      // 于是旧流水线里任何残留的 await 恢复后都会被自检挡掉。
+      const gen = ++generation;
       cancelRequested = false;
       job = { state: 'preparing', mode: null, stage: 'preparing', message: '正在获取版本信息…', received: 0, total: 0, latest: '', error: '', startedAt: Date.now(), finishedAt: null };
 
       // 流水线整体异步跑，HTTP 响应立即返回，UI 轮询 status。
-      (async () => {
+      activePipeline = (async () => {
         try {
           const picked = await resolveRelease(current);
+          if (gen !== generation) return;   // cancel/新 apply 已换代次，旧流水线就地退出
+          // 测试接缝：把流水线停在可控点，用于验证 cancel 不会让旧流水线继续写 pending。
+          if (typeof testHooks.onResolved === 'function') await testHooks.onResolved(gen);
+          if (gen !== generation) return;
           job.latest = picked.latest;
           if (picked.hasUpdate === false || compareSemver(picked.latest, current) <= 0) {
             job.state = 'idle'; job.stage = 'idle'; job.message = '已是最新'; job.finishedAt = Date.now();
@@ -919,66 +953,92 @@ export function createSelfUpdateService({ appDir, log = () => {}, getConfig = ()
           // 两轮：第一轮 patch，manifest 基线不符时第二轮换 full。
           // （下载层面的"最多 2 次重试"在 downloadZip 内部，别和这里混。）
           for (let round = 1; round <= 2; round++) {
-            setStage('downloading', `正在下载 ${asset.name}…`);
-            job.mode = mode;
-            const { dest, sha256 } = await downloadZip(asset, 'downloading');
-            setStage('validating', '校验下载包…');
-            await verifyDownloadedZip(asset, sha256, picked);
+            try {
+              setStage('downloading', `正在下载 ${asset.name}…`);
+              job.mode = mode;
+              const { dest, sha256 } = await downloadZip(asset, 'downloading');
+              if (gen !== generation) return;
+              setStage('validating', '校验下载包…');
+              await verifyDownloadedZip(asset, sha256, picked);
+              if (gen !== generation) return;
 
-            fs.mkdirSync(staging, { recursive: true });
-            setStage('extracting', '正在解压…');
-            await extractZip(dest, staging);
-            rmRf(abs(A.download));
+              fs.mkdirSync(staging, { recursive: true });
+              setStage('extracting', '正在解压…');
+              await extractZip(dest, staging);
+              rmRf(abs(A.download));
+              if (gen !== generation) return;
 
-            const escaped = findEscapePaths(walkCollect(staging));
-            if (escaped.length) {
-              rmRf(staging);
-              throw new Error(`解压内容包含可疑路径（${escaped[0]}），已中止更新`);
-            }
-
-            if (mode === 'patch') {
-              setStage('validating', '校验补丁清单…');
-              let validated;
-              try {
-                validated = validatePatchManifest(staging, current);
-              } catch (error) {
+              const escaped = findEscapePaths(walkCollect(staging));
+              if (escaped.length) {
                 rmRf(staging);
-                if (error?.fallbackToFull) {
-                  if (picked.full && isPackagedInstall) {
-                    log('warn', '[self-update] 补丁与当前版本不匹配，回退全量包');
-                    mode = 'full';
-                    asset = mirrorAsset(picked.full, picked);
-                    staging = abs(A.staging);
-                    continue;   // 第二轮：下载全量
-                  }
-                  // 补丁基线对不上、发布方又没传全量包 —— 这是用户点「一键更新」唯一
-                  // 只能失败的路径，而且原来抛出去的是 `补丁基线（0.4.9.3）与当前安装
-                  // （0.4.9.4）不符`：内部术语，用户既不知道发生了什么，也不知道下一步
-                  // 能做什么（2026-11-14 审查确认：全链路里唯一"用户可见却无法自助"的失败）。
-                  // 这里换成人话并给出可执行动作；UI 在 error 态本来就会显示「去下载」链接。
-                  log('warn', `[self-update] 补丁基线不匹配且发布版无全量包：${error.message}`);
-                  fail('这个版本无法用补丁升级（发布方尚未上传完整安装包）。请点下方「去下载」手动安装，或稍后重试');
-                  return;   // 已写 job.error，不再 throw（否则外层 catch 会用原始术语覆盖）
-                }
-                throw error;
+                throw new Error(`解压内容包含可疑路径（${escaped[0]}），已中止更新`);
               }
-              // 逐文件校验 sha256（staging 内文件对得上 manifest 才允许覆盖）
-              for (const file of validated.files) {
-                const actual = await sha256File(file.abs);
-                if (file.sha256 && actual !== file.sha256) {
+
+              if (mode === 'patch') {
+                setStage('validating', '校验补丁清单…');
+                let validated;
+                try {
+                  validated = validatePatchManifest(staging, current);
+                } catch (error) {
                   rmRf(staging);
-                  throw new Error(`补丁文件校验失败：${file.rel}`);
+                  if (error?.fallbackToFull) {
+                    if (picked.full && isPackagedInstall) {
+                      log('warn', '[self-update] 补丁与当前版本不匹配，回退全量包');
+                      mode = 'full';
+                      asset = mirrorAsset(picked.full, picked);
+                      staging = abs(A.staging);
+                      continue;   // 第二轮：下载全量
+                    }
+                    // 补丁基线对不上、发布方又没传全量包 —— 这是用户点「一键更新」唯一
+                    // 只能失败的路径，而且原来抛出去的是 `补丁基线（0.4.9.3）与当前安装
+                    // （0.4.9.4）不符`：内部术语，用户既不知道发生了什么，也不知道下一步
+                    // 能做什么（2026-11-14 审查确认：全链路里唯一"用户可见却无法自助"的失败）。
+                    // 这里换成人话并给出可执行动作；UI 在 error 态本来就会显示「去下载」链接。
+                    log('warn', `[self-update] 补丁基线不匹配且发布版无全量包：${error.message}`);
+                    fail('这个版本无法用补丁升级（发布方尚未上传完整安装包）。请点下方「去下载」手动安装，或稍后重试');
+                    return;   // 已写 job.error，不再 throw（否则外层 catch 会用原始术语覆盖）
+                  }
+                  throw error;
+                }
+                // 逐文件校验 sha256（staging 内文件对得上 manifest 才允许覆盖）
+                for (const file of validated.files) {
+                  const actual = await sha256File(file.abs);
+                  if (gen !== generation) return;
+                  if (file.sha256 && actual !== file.sha256) {
+                    rmRf(staging);
+                    throw new Error(`补丁文件校验失败：${file.rel}`);
+                  }
                 }
               }
+              break;   // 本轮成功
+            } catch (error) {
+              // 补丁通道的任何失败（尤其资产 404/410 等 4xx —— 0.4.9.4 只发全量包，
+              // 补丁根本不存在；即便 release API 兜底 HEAD 探测误判也会在此兜住），
+              // 只要还有全量包、是打包安装、且不是用户主动取消，就回退 full 再试一轮，
+              // 不让应用内更新整体失败。下载/校验/解压/清单任一环节都在此列；full 轮
+              // 会走自己独立的 digest 与 zip-slip 校验，安全闸不放宽。取消交给外层按
+              // "已取消"收场，且只在第一轮回退（full 轮再失败即真正 fail）。
+              if (mode === 'patch' && round === 1 && picked.full && isPackagedInstall && !cancelRequested) {
+                rmRf(staging);
+                rmRf(abs(A.download));
+                log('warn', `[self-update] 补丁通道失败（${String(error?.message ?? error)}），回退全量包`);
+                mode = 'full';
+                asset = mirrorAsset(picked.full, picked);
+                staging = abs(A.staging);
+                continue;   // 第二轮：下载全量
+              }
+              throw error;
             }
-            break;   // 本轮成功
           }
 
           // ⚠️ 顺序：先拉起助手（失败就抛，此时**不留** pending），成功后才写标记、
           // 才进入 ready（B2，2026-11-12 审查）。旧顺序正好相反 —— 助手 spawn 失败时
           // 用户看到的仍是"已就绪，退出应用即生效"，退出后什么都不会发生。
           // 助手侧对"标记还没落盘"有等待窗口（见 self-update-apply.js 的 waitForPendingMarker）。
+          // 拉助手前后各校验一次：spawn 期间被 cancel，也绝不能写 pending / 进 ready。
+          if (gen !== generation) return;
           const helperPid = await spawnHelper();
+          if (gen !== generation) return;
           writePending({
             type: mode,
             staging,
@@ -996,6 +1056,9 @@ export function createSelfUpdateService({ appDir, log = () => {}, getConfig = ()
             : `全量更新 v${picked.latest} 已就绪，退出应用后自动完成替换并重启`;
           job.finishedAt = Date.now();
         } catch (error) {
+          // 旧代次的残留异常（cancel 已换代次）：由 cancel 的收尾负责置 idle，
+          // 这里绝不能碰 job —— 否则会把紧接着的新 apply 状态覆盖成"已取消/error"。
+          if (gen !== generation) return;
           // 用户主动取消时不要把状态翻回 error：那会让 UI 显示"更新失败"，
           // 而实际是用户自己点的取消（B7）。
           if (cancelRequested) {
@@ -1038,21 +1101,44 @@ export function createSelfUpdateService({ appDir, log = () => {}, getConfig = ()
             + '若退出后仍失败，重新打开应用即可在设置页点「检查更新」重试'
         };
       }
+      // 换代次：旧流水线在下一个 await 自检后自行退出，不会再写 pending / 拉助手。
+      const gen = ++generation;
       cancelRequested = true;
       if (activeAbort) {
         try { activeAbort.abort(); } catch { /* 已经结束的请求，忽略 */ }
         activeAbort = null;
       }
-      rmRf(abs(A.staging));
-      rmRf(abs(A.download));
-      clearPendingMarker();
-      clearHelperLock(rootDir);   // 陈旧锁（助手已死）一并清掉，别挡住下一次更新
-      job = {
-        state: 'idle', mode: null, stage: 'idle', message: '已取消更新',
-        received: 0, total: 0, latest: job.latest, error: '', startedAt: null, finishedAt: Date.now()
-      };
-      log('info', '[self-update] 已取消更新（已清理 staging / 下载缓存 / 待应用标记 / 陈旧助手锁）');
-      return { ok: true };
+      const pipeline = activePipeline;
+      // 必须等旧流水线真正退出后再清理 + 置 idle：它可能还在往 staging 写解压文件，
+      // 提前清理会被写回；提前置 idle 则会让紧随其后的新 apply 与它争用同一 staging。
+      // 兜底超时：极端情况下某个 await 卡住也不能让取消永久无响应 —— 此时 generation
+      // 守卫仍保证旧流水线不会写 pending / 拉助手，正确性不依赖这段等待。
+      const done = (async () => {
+        if (pipeline) {
+          await new Promise((resolve) => {
+            let timer = null;
+            const finish = () => { if (timer) clearTimeout(timer); resolve(); };
+            pipeline.then(finish, finish);   // 流水线内部已 catch，这里两个分支都收
+            timer = setTimeout(finish, 15000);
+            if (typeof timer.unref === 'function') timer.unref();
+          });
+        }
+        if (activePipeline === pipeline) activePipeline = null;
+        if (gen !== generation) return;   // 期间又发了新 apply：不踩它的新状态
+        rmRf(abs(A.staging));
+        rmRf(abs(A.download));
+        clearPendingMarker();
+        clearHelperLock(rootDir);   // 陈旧锁（助手已死）一并清掉，别挡住下一次更新
+        job = {
+          state: 'idle', mode: null, stage: 'idle', message: '已取消更新',
+          received: 0, total: 0, latest: job.latest, error: '', startedAt: null, finishedAt: Date.now()
+        };
+        log('info', '[self-update] 已取消更新（已等旧流水线退出并清理 staging / 下载缓存 / 待应用标记 / 陈旧助手锁）');
+      })();
+      const result = { ok: true };
+      // 非枚举属性：路由 JSON 序列化只看到 { ok:true }；测试用 r.__done 等收尾完成。
+      Object.defineProperty(result, '__done', { value: done, enumerable: false });
+      return result;
     },
 
     /** UI 轮询用的进度快照。 */

@@ -232,11 +232,11 @@ function renderChatMessages() {
   // 点了毫无反应也不提示（用户会反复点，并误判"已生效"）。统一补
   // 「禁用 → 执行 → 失败 qaAlert → 恢复」，顺带挡住连点。
   const runChatAction = async (btn, fn, label) => {
-    const old = btn.textContent;
-    btn.disabled = true; btn.textContent = '处理中…';
+    // 加载态走 qaBtnBusy：只加 spinner + .is-loading，不改文案（换字会让同行按钮跳动）
+    qaBtnBusy(btn, true);
     try { await fn(); }
     catch (e) { qaAlert(`${label}失败：${e.message}`); }
-    finally { if (btn.isConnected) { btn.disabled = false; btn.textContent = old; } }
+    finally { if (btn.isConnected) qaBtnBusy(btn, false); }
   };
   $('#chat-wake-btn').addEventListener('click', (e) => runChatAction(e.currentTarget, async () => {
     await api(`/api/chats/${key.replace(':', '_')}/wake`, { method: 'POST', body: '{}' });
@@ -337,8 +337,7 @@ function renderChatMessages() {
     const input = $('#test-send-text');
     const text = input.value.trim();
     if (!text) { qaAlert('先输入要发送的内容'); return; }
-    const old = btn.textContent;
-    btn.disabled = true; btn.textContent = '发送中…';
+    qaBtnBusy(btn, true);
     try {
       await api(`/api/chats/${key.replace(':', '_')}/test-send`, {
         method: 'POST', body: JSON.stringify({ text })
@@ -349,7 +348,7 @@ function renderChatMessages() {
     } catch (err) {
       qaAlert(`发送失败：${err.message}`);
     } finally {
-      if (btn.isConnected) { btn.disabled = false; btn.textContent = old; }
+      if (btn.isConnected) qaBtnBusy(btn, false);
     }
   });
 

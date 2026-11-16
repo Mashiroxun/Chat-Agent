@@ -16,7 +16,12 @@ function openBlocklistModal() {
   let pendingGlobal = new Set((cfg.globalBlocklist || []).map(String));
   // 云端是全局名单的权威来源；打开弹窗时先刷新一次，失败继续显示本地缓存。
   api('/api/community/blocklist').then((d) => {
-    if (d.ok && Array.isArray(d.ids)) { pendingGlobal = new Set(d.ids.map(String)); renderRight(); }
+    if (!d.ok || !Array.isArray(d.ids)) return;
+    pendingGlobal = new Set(d.ids.map(String));
+    // ⚠️ 2026-11-16 审查修复：成员还没拉回来时**不要重绘** —— 那会把
+    // "正在拉取群成员…"的 loading 态冲掉，列表变成"没有匹配的群员"，
+    // 看起来像这个群没人（其实是还没到）。等成员就绪后那次渲染自然会带上 ⊘ 状态。
+    if (membersReady) renderRight();
   }).catch(() => {});
   // 机器人自己的 QQ 号：从状态接口取（cfg.onebot?.selfId 这个字段根本不存在，
   // 曾经恒为空串 —— "过滤机器人自己"形同虚设，机器人自己出现在可屏蔽列表里）
@@ -24,6 +29,9 @@ function openBlocklistModal() {
   let activeGid = allowIds[0];
   let members = [];       // 当前群成员缓存（{userId, nickname, card}）
   let kw = '';
+  // 成员加载的请求序号 + "当前群的成员是否已就绪"（2026-11-16 审查修复，见 loadMembers）
+  let loadSeq = 0;
+  let membersReady = false;
 
   const overlay = modelModalShell({
     head: '屏蔽名单',
@@ -57,10 +65,29 @@ function openBlocklistModal() {
     renderLeft();
   }).catch(() => {});
 
+  // ── 右栏骨架（2026-11-16 审查修复）──
+  // 搜索框此前写在 renderRight() 的 innerHTML 里：每敲一个字符就整块重建，
+  // #bl-search 被换成新节点、焦点丢到 body —— 第 2 个字符根本打不进去，
+  // **多字符搜索实际不可用**（功能性 bug，不是打磨项）。
+  // 现在骨架只建一次：搜索框是固定部分，输入只重绘 #bl-list。
+  right.innerHTML = `
+    <div class="ma-toolbar">
+      <input type="text" id="bl-search" placeholder="搜索群员（昵称 / 群名片 / QQ 号）…" autocomplete="off" aria-label="搜索群员" />
+    </div>
+    <div id="bl-list"></div>`;
+  const searchEl = right.querySelector('#bl-search');
+  const listEl = right.querySelector('#bl-list');
+  searchEl.addEventListener('input', () => {
+    kw = String(searchEl.value || '').trim().toLowerCase();
+    renderRight();
+  });
+
   function isBlocked(uid) { return (pending[activeGid] || []).map(String).includes(String(uid)); }
   function isGlobalBlocked(uid) { return pendingGlobal.has(String(uid)); }
 
+  /** 只重绘成员列表（搜索框、状态条都不动）。 */
   function renderRight() {
+    if (!listEl) return;
     const filtered = kw
       ? members.filter((m) => `${m.card} ${m.nickname} ${m.userId}`.toLowerCase().includes(kw))
       : members;
@@ -74,13 +101,8 @@ function openBlocklistModal() {
         <button type="button" class="bl-global-toggle ${gb ? 'on' : ''}" data-uid="${esc(m.userId)}" title="${gb ? '取消全局屏蔽' : '全局屏蔽（所有群+私聊）'}">${gb ? '⊘ 全局' : '⊘'}</button>
       </label>`;
     }).join('');
-    right.innerHTML = `
-      <div class="ma-toolbar">
-        <input type="text" id="bl-search" placeholder="搜索群员（昵称 / 群名片 / QQ 号）…" autocomplete="off" value="${esc(kw)}" />
-      </div>
-      <div id="bl-list">${rows || '<div class="empty-hint" style="padding:18px">没有匹配的群员</div>'}</div>`;
-    right.querySelector('#bl-search').addEventListener('input', (e) => { kw = e.target.value.trim().toLowerCase(); renderRight(); });
-    right.querySelectorAll('.bl-chk').forEach((chkEl) => {
+    listEl.innerHTML = rows || '<div class="empty-hint" style="padding:18px">没有匹配的群员</div>';
+    listEl.querySelectorAll('.bl-chk').forEach((chkEl) => {
       chkEl.addEventListener('change', () => {
         const uid = chkEl.dataset.uid;
         const set = new Set((pending[activeGid] || []).map(String));
@@ -91,7 +113,7 @@ function openBlocklistModal() {
       });
     });
     // 全局屏蔽切换（点 ⊘ 按钮）
-    right.querySelectorAll('.bl-global-toggle').forEach((btn) => {
+    listEl.querySelectorAll('.bl-global-toggle').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -103,18 +125,31 @@ function openBlocklistModal() {
     });
   }
 
+  /* ── 群成员加载（2026-11-16 审查修复：请求序号 + 群号快照）──────────────
+     此前没有序号 / 会话校验：快速从 A 群切到 B 群，A 的 members 响应晚到会覆盖
+     members，却仍在 activeGid=B 下渲染 —— 用户看到「B 群显示 A 群成员」，
+     据此勾选屏蔽会**改错对象**（比"没加载出来"危险得多）。
+     现在请求发出时记下 seq 与 gid，响应回来先比对，迟到的一律丢弃。 */
   async function loadMembers() {
-    right.innerHTML = '<div class="empty-hint" style="padding:18px">正在拉取群成员…</div>';
+    const seq = ++loadSeq;
+    const gid = activeGid;
+    membersReady = false;
+    members = [];
+    kw = '';
+    if (searchEl) searchEl.value = '';
+    if (listEl) listEl.innerHTML = '<div class="empty-hint" style="padding:18px">正在拉取群成员…</div>';
     try {
-      const d = await api(`/api/groups/${activeGid}/members`);
+      const d = await api(`/api/groups/${gid}/members`);
+      if (seq !== loadSeq || gid !== activeGid) return;   // 迟到响应：丢弃
       // 机器人自己列出来也没意义（自己的消息本来就不走这条管道）
       members = (d.members || []).filter((m) => String(m.userId) !== selfId);
-      kw = '';
+      membersReady = true;
       renderRight();
       const n = (pending[activeGid] || []).length;
       statusEl.textContent = n ? `当前群已屏蔽 ${n} 人` : '';
     } catch (e) {
-      right.innerHTML = `<div class="empty-hint" style="padding:18px">拉取失败：${esc(e.message)}（机器人连上后才能拿到群成员列表）</div>`;
+      if (seq !== loadSeq || gid !== activeGid) return;
+      if (listEl) listEl.innerHTML = `<div class="empty-hint" style="padding:18px">拉取失败：${esc(e.message)}（机器人连上后才能拿到群成员列表）</div>`;
     }
   }
 
@@ -204,8 +239,12 @@ function openFeedbackModal() {
         <div class="field"><label>附图（最多 9 张，自动压缩）</label>
           <!-- 原生 <input type=file> 的"选择文件"按钮是系统样式，与 UI 割裂：
                隐藏本体，用统一的 .btn 风格 label 触发 -->
-          <input type="file" id="fb-file" accept="image/*" multiple style="display:none" />
-          <label for="fb-file" class="btn btn-small" id="fb-file-btn" style="cursor:pointer">＋ 添加图片（<span id="fb-img-count">${state2.images.length}</span>/9）</label>
+          <!-- 2026-11-16 审查修复：原先 display:none 让键盘用户无法选图。
+               改用 visually-hidden（裁到 1px 但保留可聚焦）：原生 file input 聚焦后
+               Enter/Space 会打开选图框；下方 CSS 让聚焦态在 label 上显示焦点环。 -->
+          <input type="file" id="fb-file" accept="image/*" multiple aria-label="添加附图"
+                 style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0" />
+          <label for="fb-file" class="btn btn-small" id="fb-file-btn" role="button" tabindex="0" style="cursor:pointer">＋ 添加图片（<span id="fb-img-count">${state2.images.length}</span>/9）</label>
           <div class="fb-imgs" id="fb-imgs"></div>
         </div>
         <div id="fb-hint" class="muted" style="font-size:12px"></div>
@@ -271,15 +310,35 @@ function openFeedbackModal() {
   }
   renderImgs();
 
+  // 2026-11-16 审查修复：label 补角色/焦点后，键盘按 Enter/Space 触发原生选图框。
+  $q('#fb-file-btn').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      $q('#fb-file').click();
+    }
+  });
+
+  // 2026-11-16 审查修复：选图并发闸。清空 input.value 后用户可以在上一批
+  // **还在压缩**（await 交错）时再选一批，两个 change 循环各自判断
+  // `images.length >= 9` —— 都在对方 push 之前通过检查，最终会超过 9 张。
+  // 用互斥标志把两批串起来：压缩期间再选图直接提示，不再并行。
+  let compressing = false;
   $q('#fb-file').addEventListener('change', async (e) => {
     const hint = $q('#fb-hint');
     const files = [...(e.target.files || [])];
     e.target.value = '';
-    for (const f of files) {
-      if (state2.images.length >= 9) { hint.textContent = '最多 9 张，超出的已忽略'; break; }
-      try {
-        state2.images.push(await fbCompressImage(f));
-      } catch (err) { hint.textContent = String(err.message || err); }
+    if (!files.length) return;
+    if (compressing) { hint.textContent = '上一批图片还在处理，稍等一下再选'; return; }
+    compressing = true;
+    try {
+      for (const f of files) {
+        if (state2.images.length >= 9) { hint.textContent = '最多 9 张，超出的已忽略'; break; }
+        try {
+          state2.images.push(await fbCompressImage(f));
+        } catch (err) { hint.textContent = String(err.message || err); }
+      }
+    } finally {
+      compressing = false;
     }
     renderImgs();
     saveDraft();
@@ -425,6 +484,16 @@ function syncQuoteButtons() {
 function enterQuoteMode() {
   state.quoteMode = true;
   state.quoteSelected = new Set();
+  // 2026-11-16 审查修复（问题3）：勾选模式与全屏页**互斥**。
+  // 全屏页 .bigpage 的层级高于顶栏，一旦它开着，顶栏上唯一能提交的
+  // #quote-confirm-btn 既点不到、也 Tab 不到 —— 用户勾完金句走进死路，
+  // 只能自己想明白"要先关掉那个全屏页"。
+  // 进入勾选模式时先把全屏页收掉（closeBigPage 是 14-chrome.js 的私有函数，
+  // 那边已挂到 window 上）；同时 openBigPage 里加了反向守卫，两条流程不会叠加。
+  try {
+    const bp = document.getElementById('bigpage');
+    if (bp && !bp.hidden) window.closeBigPage?.();
+  } catch { /* 全屏页模块没加载时忽略 */ }
   syncQuoteButtons();
   switchTab('chats');
   if (state.currentChatKey) renderChatMessages();   // 重建出勾选框
@@ -619,6 +688,12 @@ $('#session-broadcast-btn')?.addEventListener('click', async () => {
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
+  // 无障碍（2026-11-16 审查修复）：这个弹窗此前既没有 role/aria-modal，
+  // 也没有 Esc、没有焦点陷阱 —— 读屏软件不播报对话框，键盘用户打开后
+  // Tab 能跑到背景顶栏，Esc 也关不掉。
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-labelledby', 'bc-title');
   const item = (kind, id, name) => `
     <label class="pick-item">
       <input type="checkbox" value="${kind}:${esc(String(id))}" />
@@ -627,56 +702,119 @@ $('#session-broadcast-btn')?.addEventListener('click', async () => {
     </label>`;
   overlay.innerHTML = `
     <div class="modal" style="width:560px">
-      <div class="modal-head">群发消息（勾选目标后发送）</div>
-      <div style="display:flex;gap:8px;margin-bottom:8px">
+      <div class="modal-head" id="bc-title">群发消息（勾选目标后发送）</div>
+      <div style="display:flex;gap:8px;margin-bottom:8px" id="bc-bulk">
         <button class="btn btn-small" id="bc-all-groups">全选群（${groups.length}）</button>
         <button class="btn btn-small" id="bc-all-friends">全选私聊（${friends.length}）</button>
         <button class="btn btn-small" id="bc-none">全不选</button>
       </div>
-      <div class="modal-list">
+      <div class="modal-list" id="bc-targets">
         ${groups.length ? `<div class="muted" style="padding:4px 8px">群聊</div>` : ''}
         ${groups.map((g2) => item('group', g2.id, g2.name)).join('')}
         ${friends.length ? `<div class="muted" style="padding:4px 8px;margin-top:6px">私聊（好友）</div>` : ''}
         ${friends.map((f2) => item('private', f2.id, f2.name)).join('')}
       </div>
-      <div class="field" style="margin-top:10px"><label>消息内容</label>
+      <!-- 发送结果：逐条列出，可滚动 + 可选中复制（2026-11-16 审查修复）。
+           此前只显示"完成：N 成功 / M 失败"并在 1.6 秒后自动移除弹窗 ——
+           用户知道"有失败"却看不到是哪个群、为什么，想截图/复制时窗口已经没了。 -->
+      <div id="bc-results" hidden
+           style="max-height:220px;overflow:auto;user-select:text;-webkit-user-select:text;font-size:12.5px;line-height:1.7;margin-top:8px;white-space:pre-wrap"></div>
+      <div class="field" style="margin-top:10px" id="bc-text-field"><label>消息内容</label>
         <textarea id="bc-text" rows="3" placeholder="要发送的内容（所有勾选目标收到同一条）" style="width:100%"></textarea></div>
-      <div id="bc-hint" class="muted" style="font-size:12px;margin-top:4px"></div>
+      <div id="bc-hint" class="muted" style="font-size:12px;margin-top:4px" role="status" aria-live="polite"></div>
       <div class="modal-foot">
         <button class="btn" id="bc-cancel">取消</button>
         <button class="btn btn-primary" id="bc-send">发送</button>
       </div>
     </div>`;
+  // 记住打开它的那颗按钮，关闭时把焦点还回去（键盘用户关闭后不迷失）
+  const prevFocus = document.activeElement;
   document.body.appendChild(overlay);
-  overlay.querySelector('#bc-cancel').addEventListener('click', () => overlay.remove());
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  // 手搓遮罩必须显式登记焦点陷阱（自动登记虽然也覆盖 .modal-overlay，
+  // 但显式登记让"这个弹窗要管焦点"这件事在代码里说得清楚）
+  registerFocusTrap(overlay);
+  overlay.setAttribute('tabindex', '-1');
+  try { overlay.focus({ preventScroll: true }); } catch { /* ignore */ }
+
+  let sending = false;   // 发送中：禁止遮罩点击 / Esc / 取消键关闭
+  const closeBroadcast = () => {
+    if (sending) return;   // 发送期间任何关闭路径都不生效（见下方注释）
+    document.removeEventListener('keydown', onEsc, true);
+    unregisterFocusTrap(overlay);
+    overlay.remove();
+    if (prevFocus && typeof prevFocus.focus === 'function' && prevFocus.isConnected) {
+      try { prevFocus.focus({ preventScroll: true }); } catch { /* ignore */ }
+    }
+  };
+  const onEsc = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeBroadcast(); } };
+  // Esc 挂 document 捕获阶段：焦点一旦因故跑出弹窗也还能关
+  document.addEventListener('keydown', onEsc, true);
+
+  overlay.querySelector('#bc-cancel').addEventListener('click', () => closeBroadcast());
+  // 发送中点遮罩**不再**关窗 —— 旧代码点掉之后循环还在继续操作已移除的节点
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeBroadcast(); });
   const boxes = () => [...overlay.querySelectorAll('input[type=checkbox]')];
   const setChecked = (pred, on) => boxes().forEach((b) => { if (pred(b.value)) b.checked = on; });
   overlay.querySelector('#bc-all-groups').addEventListener('click', () => setChecked((v) => v.startsWith('group:'), true));
   overlay.querySelector('#bc-all-friends').addEventListener('click', () => setChecked((v) => v.startsWith('private:'), true));
   overlay.querySelector('#bc-none').addEventListener('click', () => setChecked(() => true, false));
-  overlay.querySelector('#bc-send').addEventListener('click', async () => {
+  overlay.querySelector('#bc-send').addEventListener('click', async (ev) => {
     const picked = boxes().filter((b) => b.checked).map((b) => b.value);
     const text = overlay.querySelector('#bc-text').value.trim();
     const hint = overlay.querySelector('#bc-hint');
     if (!picked.length) { hint.textContent = '先勾选至少一个目标'; return; }
     if (!text) { hint.textContent = '消息内容不能为空'; return; }
-    const sendBtn = overlay.querySelector('#bc-send');
+    const sendBtn = ev?.currentTarget || overlay.querySelector('#bc-send');
+    const cancelBtn = overlay.querySelector('#bc-cancel');
+    if (sending) return;
+    sending = true;
     sendBtn.disabled = true;
+    sendBtn.setAttribute('aria-busy', 'true');
+    if (cancelBtn) cancelBtn.disabled = true;
     const results = [];
     for (const key of picked) {
+      // ⚠️ 每轮开头判活：弹窗若已从文档移除（页面重渲染 / 别的路径关掉了它），
+      //    立刻停止 —— 不要对着已经消失的节点继续发请求。
+      if (!overlay.isConnected) return;
       const [kind, id] = key.split(':');
       try {
         await api(`/api/chats/${kind}_${id}/test-send`, { method: 'POST', body: JSON.stringify({ text }) });
-        results.push(`✅ ${key}`);
+        results.push({ key, ok: true, msg: '' });
       } catch (e) {
-        results.push(`❌ ${key}：${e.message}`);
+        results.push({ key, ok: false, msg: String(e && e.message ? e.message : e) });
       }
+      if (!overlay.isConnected) return;
       hint.textContent = `发送中… ${results.length}/${picked.length}`;
     }
-    hint.textContent = `完成：${results.filter((r) => r.startsWith('✅')).length} 成功 / ${results.filter((r) => r.startsWith('❌')).length} 失败`;
-    sendBtn.textContent = '已发送';
-    sendBtn.disabled = false;
-    setTimeout(() => { overlay.remove(); }, 1600);
+    const okCount = results.filter((r) => r.ok).length;
+    const failCount = results.length - okCount;
+    hint.textContent = `完成：${okCount} 成功 / ${failCount} 失败`;
+    // 结果逐条列出（含失败原因），**不自动关闭** —— 用户要能慢慢看 / 截图 / 复制。
+    const resultsBox = overlay.querySelector('#bc-results');
+    if (resultsBox) {
+      resultsBox.innerHTML = results.map((r) =>
+        `<div>${r.ok ? '✅' : '❌'} ${esc(r.key)}${r.msg ? `：${esc(r.msg)}` : ''}</div>`).join('');
+      resultsBox.hidden = false;
+    }
+    // 目标勾选列表与输入框已经没用了，收起来给结果腾地方（结果在最上面）
+    // ⚠️ 只用 .hidden 类（`display:none !important`）而不用 hidden 属性 ——
+    //    `.btn { display:inline-flex }` 这类授权样式会盖掉 UA 的 [hidden]。
+    const bulkBox = overlay.querySelector('#bc-bulk');
+    if (bulkBox) bulkBox.classList.add('hidden');
+    const listBox = overlay.querySelector('#bc-targets');
+    if (listBox) listBox.classList.add('hidden');
+    const textField = overlay.querySelector('#bc-text-field');
+    if (textField) textField.classList.add('hidden');
+    // 收尾：发送按钮换成「关闭」，改由用户决定什么时候关
+    sendBtn.classList.add('hidden');
+    if (cancelBtn) {
+      cancelBtn.disabled = false;
+      cancelBtn.textContent = '关闭';
+      cancelBtn.classList.add('btn-primary');
+      // 发送按钮刚被隐藏，焦点会掉到 body 上（键盘用户当场失去位置）——
+      // 明确接到「关闭」上。
+      try { cancelBtn.focus({ preventScroll: true }); } catch { /* ignore */ }
+    }
+    sending = false;
   });
 });

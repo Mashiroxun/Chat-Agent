@@ -48,7 +48,8 @@ const DANGER_RULES = [
   {
     id: 'process-exit',
     level: 'block',
-    re: /\bprocess\.exit\s*\(|\bprocess\.abort\s*\(/,
+    // 点号前后允许空白/换行：`process\n.exit(` 是合法 JS，逐行与字面点号正则都会漏判。
+    re: /\bprocess\s*\.\s*exit\s*\(|\bprocess\s*\.\s*abort\s*\(/,
     title: '终止进程（process.exit）',
     why: '会直接杀掉整个应用，且在工具调用中触发时用户看不到任何解释。'
       + '要表达"这次调用失败"，请 return { isError: true }。'
@@ -135,7 +136,9 @@ const DANGER_RULES = [
   {
     id: 'env-read',
     level: 'block',
-    re: /\bprocess\.env\b/,
+    // 点号前后允许空白/换行：`process\n.env` 是合法 JS 且确实 access process.env，
+    // 字面点号正则即使全文扫描也不命中，等于给闸门留了拆行绕过口。
+    re: /\bprocess\s*\.\s*env\b/,
     title: '读取环境变量（process.env）',
     why: '环境变量里常有 token / 密钥（QQ_AGENT_* 系列、以及本进程继承来的任何机密）。'
       + '把环境变量的值返回给模型等于把整台机器的机密放进聊天记录 —— 与读 config.json 同等级，'
@@ -208,6 +211,18 @@ const DANGER_RULES = [
     why: '生产扩展请用 api.log()，它带 skillId 前缀，便于在日志里定位来源。'
   }
 ];
+
+// 把注释内容换成等长空格（保留换行与长度），供全文级危险判定使用：
+//   · 正则里的 [\s\S]{0,80}? 是**跨行**意图（如 `import foo\n from 'node:fs'`、
+//     `process\n.env`），逐行 split('\n') 会把它们拆散而漏判 → 闸门误放行；
+//   · 但整份源码直接 test 又会把注释里提到的 "import fs" / "config.json" 算成命中。
+//   所以全文判定跑在脱敏文本上：既支持跨行，又不因注释误报（注释里的代码本就不执行）。
+//   行号定位仍用原文逐行做，与展示口径一致。
+function scrubComments(src) {
+  return String(src)
+    .replace(/\/\/[^\n]*/g, (m) => ' '.repeat(m.length))
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
+}
 
 /** 清单必填项与格式。 */
 const ID_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
@@ -618,26 +633,36 @@ function gateDanger(base, manifest, entryRel, opts) {
       continue;
     }
 
-    // 逐行扫：报出具体行号，模型才知道改哪里
+    // 逐行只用来定位行号/摘要（模型才知道改哪里）；是否命中由**全文**判定。
+    // 危险规则（尤其 block 档）若逐行 split('\n') 判定，跨行写法会被拆散而漏判：
+    //   `import foo\n from 'node:fs'`、`process\n.env` 单行都不命中但 node --check 通过
+    //   —— 旧实现因此放行，属 P1 绕过。全文判定用脱敏文本（去掉注释），详见 scrubComments。
+    const useFullText = rule.level === 'block';
     for (const s of srcs) {
+      const fullHit = useFullText ? rule.re.test(scrubComments(s.text)) : false;
       const lines = s.text.split('\n');
+      let hit = null;
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         const code = line.replace(/\/\/.*$/, '');      // 去掉行尾注释，减少误报
         if (!rule.re.test(code)) continue;
         // 跳过明显的注释整行
         if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;
-        issues.push({
-          level,
-          code: rule.id,
-          title: `${rule.title}（${s.path}:${i + 1}）`,
-          why,
-          file: s.path,
-          line: i + 1,
-          snippet: line.trim().slice(0, 160)
-        });
+        hit = { line: i + 1, snippet: line.trim().slice(0, 160) };
         break;   // 同一规则同一文件只报第一处，避免刷屏
       }
+
+      // block：全文命中即拦（含逐行定位不到的跨行情形）；confirm/notice 保持原逐行语义。
+      if (useFullText ? !fullHit : !hit) continue;
+      issues.push({
+        level,
+        code: rule.id,
+        title: hit ? `${rule.title}（${s.path}:${hit.line}）` : `${rule.title}（${s.path}）`,
+        why,
+        file: s.path,
+        line: hit ? hit.line : null,
+        snippet: hit ? hit.snippet : ''
+      });
     }
   }
   return { ok: issues.every((i) => i.level !== 'block'), issues };

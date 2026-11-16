@@ -329,7 +329,7 @@ function readJsFiles(dir, entry, out = [], depth = 0) {
  * 静态准入检查。
  * @returns {{ok:true}|{ok:false, reason:string}}
  */
-export function checkPluginTrust(id, entryPath) {
+export function checkPluginTrust(id, entryPath, moduleDir) {
   // 随应用分发的模块（在 builtin-modules.json 基线里）→ 放行
   // ⚠️ 必须按**目录名**比对，不能只按 id：id 写在第三方可编辑的清单文件里，
   //   拿 id 当判据等于"自称内置即可免检"。
@@ -361,7 +361,12 @@ export function checkPluginTrust(id, entryPath) {
   let files = [];
   let truncated = false;
   try {
-    const r = readJsFiles(path.dirname(entryPath), entryPath);
+    // 扫描起点必须是**模块根目录**（manifest 所在目录），不是入口文件的父目录。
+    // 用入口父目录会被"子目录入口"绕过：manifest 写 entry:"dist/index.js"，
+    // 把危险 JS 放到模块根目录 evil.js，再由 dist/index.js `import '../evil.js'`
+    // —— 那时只扫 dist/，根目录的 evil.js 不在扫描集合，闸门会误判 ok。
+    // moduleDir 缺省时回退到入口父目录，避免 undefined 被 readdirSync 吞成"扫不到→放行"。
+    const r = readJsFiles(moduleDir || path.dirname(entryPath), entryPath);
     files = r.files; truncated = r.truncated;
   } catch { files = []; truncated = false; }
   if (!files.length && !truncated) return { ok: true }; // 一个 js 都没有 → 交给加载器自然报错
@@ -976,7 +981,7 @@ async function loadSkillDir(dir, { log = console.log, kind = null } = {}) {
   //
   // 这是"显式化信任边界"，不是"实现隔离"—— 但它把「装个插件就交出整机」
   // 从默认行为变成了知情选择。见 README 的「插件安全」一节。
-  const trust = checkPluginTrust(manifest.id, entryPath);
+  const trust = checkPluginTrust(manifest.id, entryPath, dir);
   if (!trust.ok) {
     const error = trust.reason;
     if (hadPrevious) {

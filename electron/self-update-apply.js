@@ -111,36 +111,78 @@ export async function waitForPidExit(pid, timeoutMs = PID_WAIT_TIMEOUT_MS) {
 }
 
 /**
+ * 补丁相对路径的严格校验（助手进程是最后一道闸，不能只信主进程那边的校验）。
+ * 拒绝：空串、绝对路径、盘符、反斜杠（Windows 上 \ 同样是分隔符，是经典逃逸手法）、
+ * . / .. 段、NUL、以及解析后越出 appDir 的路径（symlink/怪异拼接也在这里兜住）。
+ * 返回 { segs, src, dest }，全部用规范化后的分段参与后续拼接，杜绝二次解释。
+ */
+function safeRel(rel, appDirBase, stagingBase) {
+  const s = String(rel ?? '');
+  if (!s || s.includes('\0')) throw new Error(`补丁路径非法（空或含 NUL）：${JSON.stringify(rel)}`);
+  if (s.includes('\\')) throw new Error(`补丁路径含反斜杠（疑似逃逸）：${s}`);
+  if (path.isAbsolute(s)) throw new Error(`补丁路径为绝对路径：${s}`);
+  if (/^[A-Za-z]:/.test(s)) throw new Error(`补丁路径含盘符：${s}`);
+  const segs = s.split('/');
+  if (segs.some((seg) => seg === '' || seg === '.' || seg === '..')) {
+    throw new Error(`补丁路径含不可信段：${s}`);
+  }
+  const dest = path.resolve(appDirBase, ...segs);
+  if (dest !== appDirBase && !dest.startsWith(appDirBase + path.sep)) {
+    throw new Error(`补丁路径越出目标目录：${s}`);
+  }
+  const src = path.resolve(stagingBase, ...segs);
+  if (src !== stagingBase && !src.startsWith(stagingBase + path.sep)) {
+    throw new Error(`补丁路径越出暂存目录：${s}`);
+  }
+  return { segs, src, dest };
+}
+
+/**
  * patch 模式：把 staging 里的文件按 manifest 逐个覆盖到 appDir。
  * 覆盖前先备份原文件到 backupDir；出错时回滚本轮已覆盖的文件后抛出。
+ *
+ * fail-closed：所有路径 + 每条文件的 sha256 必须在**动任何文件之前**全部校验通过。
+ * 缺 sha256 或摘要不匹配一律整批拒绝，绝不"先验前几个、边验边覆盖"。
  */
 export async function applyPatchFromStaging({ staging, appDir, backupDir }) {
   const manifest = JSON.parse(fs.readFileSync(path.join(staging, 'manifest.json'), 'utf8'));
-  const toPosix = (rel) => String(rel).split('/').join(path.sep);
+  const appDirBase = path.resolve(appDir);
+  const stagingBase = path.resolve(staging);
+
+  // 预校验（只读，不落盘）：路径 + sha256 必须全部合法。
+  const files = (Array.isArray(manifest.files) ? manifest.files : []).map((item) => {
+    const safe = safeRel(item?.path, appDirBase, stagingBase);
+    const expected = String(item?.sha256 ?? '').trim().toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(expected)) {
+      throw new Error(`补丁文件缺少合法 sha256（拒绝应用）：${item?.path}`);
+    }
+    let st;
+    try { st = fs.lstatSync(safe.src); } catch { throw new Error(`补丁文件缺失：${item?.path}`); }
+    if (!st.isFile()) throw new Error(`补丁来源不是普通文件：${item?.path}`);
+    return { ...safe, rel: String(item.path), expected };
+  });
+  const deletions = (Array.isArray(manifest.deletions) ? manifest.deletions : [])
+    .map((rel) => safeRel(rel, appDirBase, stagingBase));
+  for (const file of files) {
+    const actual = await sha256File(file.src);   // staging 内文件名已经过 safeRel，不会逃逸
+    if (actual !== file.expected) throw new Error(`补丁文件校验失败：${file.rel}`);
+  }
+
   const applied = [];   // {dest, backedUpTo|null, deleted:true?}
   try {
-    for (const rel of manifest.deletions || []) {
-      const dest = path.join(appDir, toPosix(rel));
+    for (const { dest, segs } of deletions) {
       if (fs.existsSync(dest)) {
-        const bak = path.join(backupDir, toPosix(rel));
+        const bak = path.join(backupDir, ...segs);
         fs.mkdirSync(path.dirname(bak), { recursive: true });
         fs.renameSync(dest, bak);
         applied.push({ dest, backedUpTo: bak });
       }
     }
-    for (const item of manifest.files || []) {
-      const src = path.join(staging, toPosix(item.path));
-      const dest = path.join(appDir, toPosix(item.path));
-      if (item.sha256) {
-        const actual = await sha256File(src);
-        if (String(item.sha256).toLowerCase() !== actual) {
-          throw new Error(`补丁文件校验失败：${item.path}`);
-        }
-      }
+    for (const { dest, segs, src } of files) {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       let backedUpTo = null;
       if (fs.existsSync(dest)) {
-        backedUpTo = path.join(backupDir, toPosix(item.path));
+        backedUpTo = path.join(backupDir, ...segs);
         fs.mkdirSync(path.dirname(backedUpTo), { recursive: true });
         fs.renameSync(dest, backedUpTo);
       }

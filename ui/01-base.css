@@ -164,9 +164,13 @@
   --faint: var(--fg-mute);
   --code-bg: #f7f8fa;
   --code-fg: #454b55;
-  --green: #1f9d55;
-  --red: #d94a4a;
-  --orange: #c97a12;
+  /* 2026-11-16 审查修复：原值作正文时对比度不达标（红 4.18:1 / 橙 3.35:1 / 绿 3.49:1），
+     而状态色有大量作为纯文字的用法（02-shell/03-workspace/04-usage 等 180+ 处）。
+     亮色下统一加深到白底 ≥5:1；对浅色徽章文字与「实色底 + 白字」只会更清楚。
+     暗色主题沿用上方一套亮色值（5.5–8.5:1），无需改动。 */
+  --green: #177a43;
+  --red: #c0392b;
+  --orange: #a86200;
 
   /* r107：一键信任全部 banner 的暖色提示（亮色：金描边 + 浅暖底） */
   --warn-line: #e6b94d;
@@ -387,6 +391,18 @@ body,
   /* 阶梯入场的延迟同样要归零：否则 reduce 模式下元素要先隐形 175ms 才出现，
      那对前庭功能障碍用户比没有动画更难受。 */
   .settings-pane > * { animation-delay: 0ms !important; }
+
+  /* 进度指示器在 reduce 下**保留慢速旋转**（不归零）。
+     上面那条通配符把 animation-duration 压到 1ms + iteration-count 1，
+     于是 spinner 只转 1 毫秒就停在一个固定角度 —— 用户看到的是一个"卡住的缺口圆环"，
+     会误判成界面卡死 / 加载失败。慢速旋转（2s 一圈）对前庭的刺激远小于常规转速，
+     又是"还在跑"的唯一信号，故这里显式夺回控制权。
+     ⚠️ 必须 !important —— 通配符那条也是 !important，靠源顺序 + 特异性的组合才能赢。 */
+  .btn-spin,
+  .loading-spinner {
+    animation-duration: 2s !important;
+    animation-iteration-count: infinite !important;
+  }
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -606,19 +622,38 @@ html[data-wp='on'] #app-bg { display: none; }
   animation: spin 0.9s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-/* 按钮内联加载指示（2026-10-27）：自检模型设置「拉取模型 / 连接检测」等待时显示 */
+/* ── 按钮内联加载态（2026-10-27 起；本轮补齐"不塌陷 / 可读 / 有动感"三件事）──
+   契约（供 JS 侧调用点统一遵守）：
+     · 按钮内部结构必须是 button.btn > span.btn-spin + span.btn-label(原文案)；
+     · 加载时**只加** `.is-loading`，**不要**把 .btn-label 的文案改成「测试中…」——
+       文案一换，`.btn` 是 white-space:nowrap 自适应宽，按钮和同行控件会横向跳动；
+       原文案 + spinner 才是零位移的写法（spinner 出现时靠 flex gap 让出位置，
+       .btn 本身是 inline-flex + gap:6px + justify-content:center，不塌陷）。
+     · `.btn-spin` 默认 display:none，所以静止态不占位、不产生多余 gap。
+   ⚠️ 这里**不要**给 `.btn` 加 min-width 之类的补丁：每个按钮文案宽度不同，
+      `.btn.is-loading { display:inline-flex }` 也不需要 —— .btn 本来就是 inline-flex。 */
 .btn-spin {
   display: none;
-  width: 11px; height: 11px;
-  margin-right: 6px;
+  /* 13px + 2px 描边：比 11px 更清楚，又不会把 .btn-small（28px 高）的基线顶歪 */
+  width: 13px; height: 13px;
+  flex: none;
+  /* margin-right 撤掉：.btn 的 flex gap 已经给了 6px，再叠 margin 会变成 12px */
   border: 2px solid currentColor;
   border-top-color: transparent;
   border-radius: 50%;
-  animation: spin .8s linear infinite;
-  vertical-align: -1px;
+  animation: spin .7s linear infinite;
 }
 .btn.is-loading .btn-spin { display: inline-block; }
+/* cursor:progress 两层都写：JS 侧不一定同时设 disabled（见 app/13-doctor.js 的
+   setLoading，它两条都设；但别的调用点可能只加 class）。 */
 .btn.is-loading { cursor: progress; }
+/* ⚠️ 必须比 `.btn:disabled { opacity:.5/.45 }`（0,2,0）更特异 —— 那些规则在
+   03-workspace.css / 05-dialogs.css 里、源顺序比本文件**晚**，同特异性会输。
+   加载中不能整体洗白，否则 spinner 一起变淡、看起来像"坏了"；
+   改成只压暗文案，按钮本体保持实色，动感才传达得出去。 */
+.btn.is-loading:disabled,
+.btn.is-loading[aria-disabled='true'] { opacity: 1; cursor: progress; }
+.btn.is-loading .btn-label { opacity: .55; transition: opacity .15s ease; }
 .loading-logs {
   margin-top: 6px;
   max-height: 180px;

@@ -59,7 +59,7 @@ export function sessionsRoutes(deps, shared) {
     {
       method: 'GET', pattern: '/api/sessions',
       handler: async ({ res, json, url }) => {
-        const limit = Math.min(1048576, Math.max(1, Number(url.searchParams.get('limit')) || 1048576));
+        const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 200));
         return json(res, 200, {
           sessions: sessions.listSummaries(limit),
           // 聊天花名册（2026-11-12）：出现过会话的全部 chatKey + 最近会话时间。

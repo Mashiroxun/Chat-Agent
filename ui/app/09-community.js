@@ -74,9 +74,10 @@ function openSendConfigModal() {
           </select>
         </div>
         <div class="hint">由「思考模式适配」插件落成各厂商参数；档位仅对应渠道生效。</div></div>
-      <div class="checkbox-row"><input type="checkbox" class="sw" id="sc-thinking-route" ${c.api?.thinkingRoute !== false ? 'checked' : ''} />
-        <label for="sc-thinking-route">按消息类型分流思考档</label></div>
+      <div class="checkbox-row"><input type="checkbox" class="sw" id="sc-thinking-route" ${c.api?.thinkingRoute === true ? 'checked' : ''} />
+        <label for="sc-thinking-route">按消息类型分流思考档（默认关闭）</label></div>
       <div class="hint" style="margin:-2px 0 12px">
+        不勾选时所有请求都按模型 / 网关的默认思考强度走。勾选后才按消息轻重分流 ——
         拍一拍 / 纯表情 / 极短附和 → 不思考；常规对话 → 低强度；长文本与明确任务 → 保持默认。
         只在上面选<b>「默认」</b>时生效 —— 选了关/低/中/高就是全局强制，不再分流。
       </div>
@@ -1007,7 +1008,10 @@ function bindModuleDropZone(kind, boxEl) {
  * 「就这些吧」批量下载解压到对应目录（类型由服务器决定）。
  */
 function openInstallCodeModal() {
-  let codeRows = [];   // [{ code, status: 'idle'|'checking'|'ok'|'bad', entry }]
+  // 行对象：{ rowId, code, status: 'idle'|'checking'|'ok'|'bad', entry, pending, focusAfter }
+  // rowId 是稳定键（旧实现用数组下标 + code 比对，异步返回时同 code 的新行会吃到旧结果）。
+  let codeRows = [];
+  let rowSeq = 0;
   const overlay = modelModalShell({
     head: '口令安装',
     body: `
@@ -1025,70 +1029,168 @@ function openInstallCodeModal() {
   const rowsBox = overlay.querySelector('#ic-rows');
   const statusBox = overlay.querySelector('#ic-status');
 
-  // refocusIdx：渲染完后焦点要归还的行号。整表 innerHTML 重建必然把焦点打回
-  // body —— 之后 Ctrl+V 粘下一行口令会静默失效（2026-10-18，同族问题）。
-  // 该行已 ok（只读）或已被删时，顺延到第一个可编辑行（通常是新追加的空行）。
-  const renderRows = (refocusIdx = null) => {
-    rowsBox.innerHTML = codeRows.map((r, i) => {
-      const cls = r.status === 'ok' ? ' ok' : (r.status === 'bad' ? ' bad' : (r.status === 'checking' ? ' checking' : ''));
-      const dim = r.status === 'ok' ? ' dim' : (r.status === 'bad' ? '' : '');
-      const badge = r.status === 'ok'
-        ? `<span class="ic-check">✅</span><span class="ic-meta">${esc(r.entry?.name || '')}<span class="muted"> · ${esc(r.entry?.author || '')} · ${r.entry?.type === 'plugin' ? '插件' : '技能'}</span></span>`
-        : '';
-      return `<div class="ic-row${cls}${dim}">
-        <input type="text" class="ic-input" data-idx="${i}" value="${esc(r.code)}"
+  const mkRow = (code = '', status = 'idle', entry = null) =>
+    ({ rowId: ++rowSeq, code, status, entry, pending: null, pendingToken: null, focusAfter: false });
+  const findRow = (rowId) => codeRows.find((r) => r.rowId === rowId) || null;
+
+  const rowHtml = (r) => {
+    const ord = codeRows.indexOf(r) + 1;
+    const cls = r.status === 'ok' ? ' ok' : (r.status === 'bad' ? ' bad' : (r.status === 'checking' ? ' checking' : ''));
+    const dim = r.status === 'ok' ? ' dim' : '';
+    const badge = r.status === 'ok'
+      ? `<span class="ic-check">✅</span><span class="ic-meta">${esc(r.entry?.name || '')}<span class="muted"> · ${esc(r.entry?.author || '')} · ${r.entry?.type === 'plugin' ? '插件' : '技能'}</span></span>`
+      : '';
+    return `<div class="ic-row${cls}${dim}" data-row-id="${r.rowId}">
+        <input type="text" class="ic-input" data-row-id="${r.rowId}" value="${esc(r.code)}"
           placeholder="${r.status === 'ok' ? '已匹配' : '输入 6 位口令'}"
           autocomplete="off" spellcheck="false" ${r.status === 'ok' ? 'readonly' : ''} />
-        <button class="ic-del" data-idx="${i}" title="删除这行" aria-label="删除第 ${i + 1} 行">🗑</button>
+        <button class="ic-del" data-row-id="${r.rowId}" title="删除这行" aria-label="删除第 ${ord} 行">🗑</button>
         ${badge}
       </div>`;
-    }).join('');
-    // 绑定输入：失焦且有内容 → 触发校验 + 追加新行
-    rowsBox.querySelectorAll('.ic-input').forEach((inp) => {
-      inp.addEventListener('blur', async () => {
-        const idx = Number(inp.dataset.idx);
-        const code = inp.value.trim().toUpperCase();
-        if (!code) return;
-        if (codeRows[idx]?.code === code && codeRows[idx]?.status === 'ok') return;
-        codeRows[idx] = { code, status: 'checking', entry: null };
-        renderRows(idx);
-        try {
-          const r = await api('/api/market/verify', { method: 'POST', body: JSON.stringify({ codes: [code] }) });
-          const hit = (r.results || [])[0];
-          if (codeRows[idx]?.code !== code) return;   // 期间被删/改过，丢弃结果
-          if (hit?.ok) {
-            codeRows[idx] = { code, status: 'ok', entry: hit };
-            // 失焦且有内容 → 下一行出现（只在没有空行时追加）
-            if (!codeRows.some((x) => !x.code)) codeRows.push({ code: '', status: 'idle', entry: null });
-          } else {
-            codeRows[idx] = { code, status: 'bad', entry: null };
-          }
-        } catch (e) {
-          if (codeRows[idx]?.code === code) codeRows[idx] = { code, status: 'bad', entry: null };
-          statusBox.textContent = `校验失败：${e?.message || e}`;
-        }
-        renderRows(idx);
-      });
-    });
-    rowsBox.querySelectorAll('.ic-del').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        codeRows.splice(Number(btn.dataset.idx), 1);
-        if (!codeRows.length) codeRows.push({ code: '', status: 'idle', entry: null });
-        // 传被删行号：该行已不存在 → 内部顺延到第一个可编辑行（2026-10-18）
-        renderRows(Number(btn.dataset.idx));
-      });
-    });
-    // 焦点归还：重建后行内输入框若还在焦点链上就补回去（见函数头注释）。
-    // 用户已主动把焦点移到弹窗外（activeElement 既不在行内也不是 body）时不抢。
-    if (refocusIdx != null && (document.activeElement === document.body || rowsBox.contains(document.activeElement))) {
-      let target = rowsBox.querySelector(`.ic-input[data-idx="${refocusIdx}"]`);
-      if (!target || target.readOnly) {
-        target = Array.from(rowsBox.querySelectorAll('.ic-input')).find((el) => !el.readOnly);
-      }
-      try { target?.focus({ preventScroll: true }); } catch { /* ignore */ }
-    }
   };
-  codeRows.push({ code: '', status: 'idle', entry: null });
+
+  /**
+   * 只替换一行的 DOM（2026-11-16 审查修复）。
+   * 旧实现每次失焦校验都 renderRows() 整表重建，多行场景下第 1 行的异步校验返回时
+   * 用户已在第 2 行打字 —— 整表 innerHTML 全换让焦点掉回 body，随后又被 refocusIdx
+   * 强行拽回第 1 行，字符输错行甚至丢失。现在状态变化只重绘那一行，
+   * 其他行（含用户正在输入的那行）的 DOM 与焦点完全不动。
+   */
+  const updateRow = (rowId) => {
+    const row = findRow(rowId);
+    const el = rowsBox.querySelector(`.ic-row[data-row-id="${rowId}"]`);
+    if (!row || !el) return;
+    const holder = document.createElement('div');
+    holder.innerHTML = rowHtml(row);
+    const fresh = holder.firstElementChild;
+    if (fresh) el.replaceWith(fresh);
+  };
+
+  /** 追加一行（只 insertAdjacentHTML，不整表重建）。 */
+  const appendRow = (row) => {
+    rowsBox.insertAdjacentHTML('beforeend', rowHtml(row));
+  };
+
+  /**
+   * 整表重建：只在初始渲染 / 删除行时用（这两处本来就要重排）。
+   * 焦点归还带守卫：重建前焦点若已不在行内（用户点到了弹窗别处），不抢。
+   */
+  const renderRows = (refocusRowId = null) => {
+    const activeBefore = document.activeElement;
+    const wasInside = !activeBefore || activeBefore === document.body || rowsBox.contains(activeBefore);
+    rowsBox.innerHTML = codeRows.map(rowHtml).join('');
+    if (refocusRowId == null || !wasInside) return;
+    // 重建后焦点若已被用户点到别处（新输入框 / 弹窗按钮），就别拽回来
+    if (document.activeElement !== document.body) return;
+    let target = rowsBox.querySelector(`.ic-input[data-row-id="${refocusRowId}"]`);
+    if (!target || target.readOnly) {
+      target = Array.from(rowsBox.querySelectorAll('.ic-input')).find((el) => !el.readOnly);
+    }
+    try { target?.focus({ preventScroll: true }); } catch { /* ignore */ }
+  };
+
+  /**
+   * 校验一行口令。
+   * 返回的 Promise 挂在 row.pending 上 ——「就这些吧」批量安装前会 await 所有 pending：
+   * 用户填完口令立刻点确认时，blur 触发的校验还没返回，只读缓存状态会误判成
+   * "还没有成功对接的口令"（2026-11-16 审查修复）。
+   */
+  const checkRow = (rowId, code) => {
+    const row = findRow(rowId);
+    if (!row) return Promise.resolve();
+    row.code = code;
+    row.status = 'checking';
+    row.entry = null;
+    updateRow(rowId);
+    // 本次校验的令牌：同一行可能被连续校验两次（改了口令 / 又失焦一次），
+    // 先回来的那次不能把后一次的 pending 清掉，否则「就这些吧」会漏等。
+    const token = {};
+    const task = (async () => {
+      try {
+        const r = await api('/api/market/verify', { method: 'POST', body: JSON.stringify({ codes: [code] }) });
+        const hit = (r.results || [])[0];
+        const cur = findRow(rowId);
+        if (!cur || cur.code !== code) return;   // 期间被删/改过，丢弃结果
+        if (hit?.ok) {
+          cur.status = 'ok';
+          cur.entry = hit;
+          // 失焦且有内容 → 下一行出现（只在没有空行时追加，且只追加、不整表重建）
+          if (!codeRows.some((x) => !x.code)) {
+            const nr = mkRow();
+            codeRows.push(nr);
+            appendRow(nr);
+          }
+        } else {
+          cur.status = 'bad';
+          cur.entry = null;
+        }
+      } catch (e) {
+        const cur = findRow(rowId);
+        if (cur && cur.code === code) { cur.status = 'bad'; cur.entry = null; }
+        statusBox.textContent = `校验失败：${e?.message || e}`;
+      } finally {
+        const cur = findRow(rowId);
+        if (cur && cur.pendingToken === token) { cur.pending = null; cur.pendingToken = null; }
+        // ⚠️ 用户可能已经回到这一行继续改字：此时它的 DOM 里装着焦点，
+        //    重绘会把输入框连同光标一起换掉（字符丢失）。正在编辑就跳过重绘，
+        //    下次失焦时自然会按最新状态重画。
+        const el = rowsBox.querySelector(`.ic-row[data-row-id="${rowId}"]`);
+        const editing = !!el && el.contains(document.activeElement);
+        if (!editing) updateRow(rowId);
+        // Enter 触发的校验：这一行变只读后焦点已无处可去，交给下一个可编辑行，
+        // 这样"粘贴 → 回车 → 粘贴"能连着走。用户自己点到别处时不抢焦点。
+        if (cur && cur.focusAfter) {
+          cur.focusAfter = false;
+          if (document.activeElement === document.body) {
+            const next = Array.from(rowsBox.querySelectorAll('.ic-input')).find((e2) => !e2.readOnly);
+            try { next?.focus({ preventScroll: true }); } catch { /* ignore */ }
+          }
+        }
+      }
+    })();
+    row.pendingToken = token;
+    row.pending = task;
+    return task;
+  };
+
+  // ── 事件全部走 #ic-rows 上的委托（一次性绑定，行被替换后无需重绑）──
+  // 用 focusout 而不是 blur：blur 不冒泡，focusout 会冒泡到容器。
+  rowsBox.addEventListener('focusout', (e) => {
+    const inp = e.target.closest?.('.ic-input');
+    if (!inp || !inp.isConnected) return;
+    const rowId = Number(inp.dataset.rowId);
+    const row = findRow(rowId);
+    if (!row) return;
+    const code = String(inp.value || '').trim().toUpperCase();
+    if (!code) return;
+    if (row.code === code && (row.status === 'ok' || row.status === 'checking')) return;
+    checkRow(rowId, code);
+  });
+
+  // Enter 直接当"填完了"：旧实现压根没绑 Enter，粘贴完敲回车什么都不发生。
+  rowsBox.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const inp = e.target.closest?.('.ic-input');
+    if (!inp) return;
+    e.preventDefault();   // 别让回车冒泡成"提交/关闭弹窗"
+    const row = findRow(Number(inp.dataset.rowId));
+    if (row) row.focusAfter = true;   // 校验完成后把焦点交给下一个可编辑行
+    inp.blur();                       // 沿用失焦校验这一条路径，不另写一套
+  });
+
+  rowsBox.addEventListener('click', (e) => {
+    const del = e.target.closest?.('.ic-del');
+    if (!del) return;
+    const i = codeRows.findIndex((r) => r.rowId === Number(del.dataset.rowId));
+    if (i < 0) return;
+    codeRows.splice(i, 1);
+    if (!codeRows.length) codeRows.push(mkRow());
+    // 焦点归还到落在同一位置的那一行（该行若已只读，内部顺延到第一个可编辑行）
+    const next = codeRows[Math.min(i, codeRows.length - 1)];
+    renderRows(next ? next.rowId : null);
+  });
+
+  codeRows.push(mkRow());
   renderRows();
 
   overlay.querySelector('#ic-cancel')?.addEventListener('click', () => closeModelModal(overlay));
@@ -1098,6 +1200,16 @@ function openInstallCodeModal() {
     const btn = overlay.querySelector('#ic-confirm');
     // 装完后再点这颗钮 = 关闭。否则会拿着同一批口令再跑一遍安装（又下一份、又建草稿）。
     if (icFinished) { closeModelModal(overlay); return; }
+    // 先把还在「校验中」的行等完：用户填完口令马上点确认时，mousedown 触发的 blur
+    // 刚发出校验请求、还没回来，此时只读缓存会误判成"还没有成功对接的口令"。
+    // pending 就是校验 Promise（见 checkRow），等它 settle 后再判断。
+    const pendings = codeRows.filter((r) => r.pending).map((r) => r.pending);
+    if (pendings.length) {
+      btn.disabled = true;
+      statusBox.textContent = '正在校验口令…';
+      await Promise.all(pendings.map((p) => Promise.resolve(p).catch(() => {})));
+      btn.disabled = false;
+    }
     const ready = codeRows.filter((r) => r.status === 'ok' && r.entry);
     if (!ready.length) {
       statusBox.textContent = '还没有成功对接的口令（先把口令填对，等它变绿带 ✅）。';

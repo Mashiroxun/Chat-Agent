@@ -554,11 +554,15 @@ tr.chat-del-selected td { background: color-mix(in srgb, var(--red) 10%, transpa
 }
 
 /* R91：切页挂起子动画（PCL2 ModAnimation 的 AniControlEnabled 计数器）。
-   切页的 110ms 挂载窗口内，把**非活动视图**及其后代的过渡全部关掉 ——
+   切页的 110ms 挂载窗口内，把**被切走的那个视图**及其后代的过渡关掉 ——
    否则旧页残留的悬停态 / 浮层过渡会在切换瞬间闪一下。
-   活动视图自身照常播放入场（那是 animation，不是 transition）。 */
-body.switching .view:not(.active),
-body.switching .view:not(.active) * {
+   活动视图自身照常播放入场（那是 animation，不是 transition）。
+   2026-11-16 审查修复：原先是 `body.switching .view:not(.active) *`，
+   通配命中全部 14 个非活动视图的后代，加/删 class 两次触发大范围样式重算。
+   改为只给"正被切走的那个 view"加 .leaving，样式失效面积从 14 个 view 缩到 1 个，
+   视觉目标（旧页过渡不闪）完全保留。 */
+.view.leaving,
+.view.leaving * {
   transition: none !important;
 }
 
@@ -696,8 +700,12 @@ body.switching .view:not(.active) * {
     opacity var(--dur-leave) var(--ease-in-out);
 }
 /* 悬浮：抬升一点 + 阴影变大，给"可点"的暗示。
-   R89：进入用快档 --dur-hover；离开由 .btn 基础过渡的慢档负责。 */
-.btn:hover {
+   R89：进入用快档 --dur-hover；离开由 .btn 基础过渡的慢档负责。
+   ⚠️ `:not(:disabled):not([aria-disabled='true'])` 必须带着：禁用态只写了
+      opacity/cursor/box-shadow，不覆盖 color/border/background —— 不加这条，
+      鼠标扫过禁用的「保存/测试」会变蓝，与 not-allowed 光标自相矛盾。
+      （:disabled 只对表单元素生效，[aria-disabled] 兜住 div 扮的按钮。） */
+.btn:hover:not(:disabled):not([aria-disabled='true']) {
   border-color: var(--accent); color: var(--accent); box-shadow: var(--lift-sm);
   transition:
     transform var(--dur-hover) var(--ease-out-quart),
@@ -716,11 +724,11 @@ body.switching .view:not(.active) * {
    ③ 取消   **仍按住、但指针已划走**（:active 命中而 :hover 失效）——
             PCL2 用 800ms OutFluent(Strong) 慢慢弹回，比"确认"慢 2~3 倍。
             确认要利落，取消要"舍不得走"，误触的撤销感就是这么来的。 */
-.btn:active {
+.btn:active:not(:disabled):not([aria-disabled='true']) {
   transform: scale(.955);
   transition-duration: var(--dur-tap), var(--dur-tap), var(--dur-tap), var(--dur-tap), var(--dur-tap), var(--dur-tap);
 }
-.btn:active:not(:hover) {
+.btn:active:not(:hover):not(:disabled):not([aria-disabled='true']) {
   transform: none;
   transition:
     transform var(--dur-cancel) var(--ease-out-quart),
@@ -731,9 +739,13 @@ body.switching .view:not(.active) * {
     opacity var(--dur-cancel) var(--ease-in-out);
 }
 .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.btn:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+/* 禁用态：[aria-disabled='true'] 一并纳入 —— 项目里有 div 扮的按钮
+   （见 06-stage.css 的 .mk-btn:hover:not(:disabled) 同款口径），
+   不覆盖的话 CSS 里所有 :hover:not(:disabled) 对它们形同虚设。 */
+.btn:disabled,
+.btn[aria-disabled='true'] { opacity: .5; cursor: not-allowed; box-shadow: none; transform: none; }
 .btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.btn-primary:hover { background: var(--accent); border-color: var(--accent); color: var(--on-accent); filter: brightness(1.1); box-shadow: var(--lift-sm); }
+.btn-primary:hover:not(:disabled):not([aria-disabled='true']) { background: var(--accent); border-color: var(--accent); color: var(--on-accent); filter: brightness(1.1); box-shadow: var(--lift-sm); }
 .btn-small { padding: 4px 12px; font-size: 12px; }
 /* 危险按钮（R50）：曾经只有"红字"，深色主题下底色/描边与普通按钮融为一体，
    甚至看起来像一段裸文字（设置页「清除」）。按整站按钮语言补齐：
@@ -743,7 +755,7 @@ body.switching .view:not(.active) * {
   background: color-mix(in srgb, var(--red) 10%, transparent);
   box-shadow: var(--lift-sm), var(--paper-edge), inset 0 0 0 1px color-mix(in srgb, var(--red) 38%, transparent);
 }
-.btn-danger:hover {
+.btn-danger:hover:not(:disabled):not([aria-disabled='true']) {
   color: var(--red);
   background: color-mix(in srgb, var(--red) 17%, transparent);
   box-shadow: var(--lift-sm), var(--paper-edge), inset 0 0 0 1px color-mix(in srgb, var(--red) 60%, transparent);
@@ -1980,6 +1992,13 @@ input.sw[data-pending] { cursor: progress; }
 }
 .conn-verdict.is-warn .conn-verdict-dot { background: var(--orange); }
 .conn-verdict.is-warn .conn-verdict-title { color: var(--orange); }
+/* 第三种结论态「关闭 / 未启用」：沿用 ok/warn 同款写法，配色走中性 mute */
+.conn-verdict.is-off {
+  border-color: color-mix(in srgb, var(--fg-mute) 38%, var(--border));
+  background: color-mix(in srgb, var(--fg-mute) 8%, var(--layer-2));
+}
+.conn-verdict.is-off .conn-verdict-dot { background: var(--fg-mute); }
+.conn-verdict.is-off .conn-verdict-title { color: var(--fg-mute); }
 
 /* ② 事实行：标签列固定宽、地址等宽、末列状态 */
 .conn-facts { display: flex; flex-direction: column; }

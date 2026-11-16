@@ -1,6 +1,10 @@
 // 〔记忆视图 / 设置加载 / 价格表状态〕——M9 拆分第 6 段
 'use strict';
 // ── 记忆视图 ──
+// 2026-11-16 P1：详情请求代际号。A→B 快速切换时，A 的 Promise.all 可能晚于 B
+// 回来；旧响应不拦住就会把 B 的详情页盖回 A（"串页"）。
+let memDetailSeq = 0;
+
 async function loadMemoryView() {
   try {
     const [cfg, chats] = await Promise.all([api('/api/config'), api('/api/chats')]);
@@ -180,6 +184,7 @@ function bindMemHeadAvFallback(box) {
 }
 
 async function loadMemoryDetail(chatKey) {
+  const seq = ++memDetailSeq;
   const detail = $('#memory-detail');
   if (!detail) return;                       // R76：容器不存在（已切页）直接返回
   detail.innerHTML = '<div class="empty-hint">加载中…</div>';
@@ -188,6 +193,8 @@ async function loadMemoryDetail(chatKey) {
       api(`/api/memory-files/${chatKey.replace(':', '_')}`),
       api('/api/config')
     ]);
+    // 期间可能已经切到另一个会话/另一个页签：旧响应一律不许覆盖当前视图
+    if (seq !== memDetailSeq || state.currentMemoryChatKey !== chatKey || state.tab !== 'memory') return;
     const notes = cfg.memberNotes || {};
     const kind = chatKey.startsWith('group') ? 'group' : 'private';
     const chatId = chatKey.split(':')[1] || '';
@@ -323,6 +330,7 @@ async function loadMemoryDetail(chatKey) {
     // 若本群正在整理，启动计时刷新（切回来时也能接着走）
     if (state.consolidating[chatKey]) startConsolidateTicker();
   } catch (e) {
+    if (seq !== memDetailSeq || state.currentMemoryChatKey !== chatKey || state.tab !== 'memory') return;
     detail.innerHTML = `<div class="empty-hint">加载失败：${esc(e.message)}</div>`;
   }
 }
@@ -957,8 +965,14 @@ function renderHealthCard() {
     <div class="h-item ${'mute'}">
       <span>·</span>
       <span class="h-label">API 连通性：
-        <button class="btn btn-small" id="test-api-btn">测试一下</button>
-        <span id="test-api-result" class="muted"></span>
+        <button class="btn btn-small" id="test-api-btn" type="button">测试一下</button>
+        <!-- 2026-11-16 审查修复（问题8）：结果行加 role=status，读屏会播报结果；
+             失败时旁边显示「去配置模型」入口（由 runConnectivityTest 显隐，
+             点击复用 .hc-fix-btn 的 data-target="settings-api" 现有跳转，
+             不新造路由）。平时隐藏，避免在没测过时就摆一颗看不懂的按钮。 -->
+        <span id="test-api-result" class="muted" role="status" aria-live="polite"></span>
+        <button class="btn btn-small hc-fix-btn hidden" id="test-api-fix" type="button"
+                data-target="settings-api" title="去「模型与搜索」填写或检查 Base URL / Key / 模型">去配置模型</button>
       </span>
     </div>`;
   return `

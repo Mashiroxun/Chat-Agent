@@ -1,6 +1,7 @@
 // 配置管理：data/config.json，UI 可写。所有字段都有默认值。
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { PERSONAS, LEGACY_XIAOJINGYU_TEXT, PERSONA_TEXT_PATCHES } from './personas.js';
 import { sliderToTier } from './tier-slider.js';   // 零依赖模块，避免循环依赖
@@ -100,12 +101,16 @@ export const DEFAULT_CONFIG = {
     thinkingMode: 'auto',
     thinkingEffort: '',
     thinkingBudget: 0,
-    // 按触发类型分流思考档（2026-11-12）：拍一拍/纯表情/极短附和 → 不思考，
-    // 常规 @ / 引用 / 图片 / 闲聊 → 轻思考，长文本与明确任务意图 → 保持默认。
+    // 按触发类型分流思考档（2026-11-12 上线，2026-11-15 起默认关闭）：
+    //   拍一拍/纯表情/极短附和 → 不思考，常规 @ / 引用 / 图片 / 闲聊 → 轻思考，
+    //   长文本与明确任务意图 → 保持默认。
     // 见 src/thinking-route.js（判定）与 plugins/thinking-adapters（方言翻译）。
+    // ⚠️ 默认 false = 不做任何干预，走改前的单一档行为（网关默认思考强度）。
+    //    只有用户手动勾选「按消息类型分流思考档」并保存、显式写入 true 才启用；
+    //    历史版本由默认勾选带出来的 true 由 src/upgrade.js 的迁移项一次性归零。
     // ⚠️ 仅当 thinkingMode === 'auto' 时生效：主设置里显式选了 off/on 就是用户
-    //    的全局意图，分流不覆盖。false = 完全退回改前的单一档行为（一键回滚）。
-    thinkingRoute: true,
+    //    的全局意图，分流不覆盖。
+    thinkingRoute: false,
     // 「不思考」档默认关闭（2026-11-12 调整默认值）：
     // 实测 off 档下 reasoning 直接归零、completion 掉到 37~107 tok，回复明显变短变干；
     // 而它省的是思考 token，不是可见输出。默认只降档（light），不彻底关思考 ——
@@ -549,13 +554,19 @@ export const DEFAULT_CONFIG = {
     // 端口：QQ_AGENT_PORT 显式覆盖 > 默认 3210 + PROFILE 偏移
     // （第二实例整体 +100，避免和主实例撞端口）
     port: Number(process.env.QQ_AGENT_PORT) || (3210 + portOffset()),
-    token: '',                // 留空 = 只监听 127.0.0.1
+    // 留空时首次启动自动生成随机令牌并写回这里（P1，2026-11-16）；
+    // 空 token 不再代表"本机任意进程可写"，而是"等待自动生成"。
+    token: '',
     autoStart: false,         // 开机自启（仅 Electron 桌面端生效）
     closeToTray: true,        // 点关闭 = 最小化到托盘
     // 允许"外部浏览器打开的控制台"读取明文凭据（API Key / SnowLuma 密码）。
     // 默认 false：Origin / Referer 都是客户端可伪造的头，不能当凭据用。
     // 需要外部浏览器读密钥时，配 server.token 并带 x-console-token，而不是打开这个开关。
-    allowBrowserKeyRead: false
+    allowBrowserKeyRead: false,
+    // LAN 中转端点白名单（2026-11-16 审计修）：默认 false 保持安全收紧。
+    // 只有显式打开后，服务商 baseUrl 才允许解析到私网 / LAN 地址；
+    // 公网端点不受影响。安全例外仍与 security.allowLoopback 分开，互不代替。
+    allowLanProviders: false
   },
   // ── 桌面悬浮小窗（2026-10-20）──────────────────────────────────────────
   // 设置 → 界面与应用 → 桌面端 打开后，桌面上出现一张无边框小卡片，显示
@@ -909,6 +920,48 @@ export function getConfig() {
   return currentConfig;
 }
 
+// ── 控制台令牌（P1，2026-11-16）───────────────────────────────────────
+// 旧规则 `if (!token) return true` 意味着安装后默认无 token，本机任意进程
+// 伪造一个回环 Origin 就能拿到全部写接口。现在改成：首次取用时自动生成
+// 一枚 24 字节随机令牌，立刻写进 data/config.json，之后空 token 不再恒放行。
+// 另外落盘一份 <DATA_DIR>/console-token，方便脚本/运维读取（见 app.js）。
+// configProvider 注入的测试场景下写入不一定能反映到 getConfig()，所以内存里
+// 再留一份 override，保证 rotate 后本进程立刻生效。
+let consoleTokenOverride = '';
+
+function createConsoleToken() {
+  return randomBytes(24).toString('base64url');
+}
+
+/** 当前生效的控制台令牌：用户配置优先，没有就自动生成并落盘。 */
+export function getConsoleToken() {
+  const configured = String(getConfig().server?.token ?? '').trim();
+  // 用户在配置里改了令牌 → 以磁盘为准；轮换接口写入的值与 override 相同，
+  // 所以这条不会把刚生成的新令牌误判成"用户改的"。
+  if (configured) {
+    if (consoleTokenOverride && configured !== consoleTokenOverride) consoleTokenOverride = '';
+    return configured;
+  }
+  if (consoleTokenOverride) return consoleTokenOverride;
+  const token = createConsoleToken();
+  try {
+    updateConfig({ server: { token } });
+  } catch (error) {
+    // 落盘失败也要让本进程用上强凭据，否则又退回"空 token 全放行"。
+    console.error('[config] 控制台令牌生成后落盘失败（本进程仍会强制校验）：', error?.message ?? error);
+  }
+  consoleTokenOverride = token;
+  return token;
+}
+
+/** 设置页「重新生成」：轮换令牌并落盘，旧令牌立即失效。 */
+export function rotateConsoleToken() {
+  const token = createConsoleToken();
+  consoleTokenOverride = token;
+  updateConfig({ server: { token } });
+  return token;
+}
+
 /**
  * 剔除**派生标记**：GET /api/config 的脱敏层会生成 hasXxx / dshProviderKeyPresence
  * 这类"只表示存在性"的字段。前端把它们当成配置的一部分回传时，
@@ -955,6 +1008,66 @@ function preserveSanitizedSecrets(current, patch) {
   } catch { /* 保留失败不阻塞保存；最坏结果是回到旧行为 */ }
 }
 
+// ── trustedPlugins：信任闸不能被 /api/config 一条请求绕过（2026-11-16）──────
+//
+// POST /api/config 把请求体原样交给 updateConfig，而 trustedPlugins 是**数组整体替换**。
+// 不校验的话，带令牌的任意请求写 `{trustedPlugins:["evil"]}` 就绕过了
+// /api/skills/trust 的「该模块当前确实因高危能力被拦」前置闸 —— 那才是用户点
+// 「信任并重试」时真正发生的事。这里在合并前收回该字段：
+//   · 必须是数组；元素须为目录名字符串（也兼容 {id} 对象），形如 [A-Za-z0-9._-]；
+//   · 拒绝 '.' / '..' / 含 '..' / 超长 / 其它字符 / 非数组；
+//   · **新增**的 id 必须持有 trust 路由签发的一次性授予（进程内、单次调用有效）。
+//     删除与保持原样不受影响 —— 普通设置保存 / 升级迁移里那些历史孤儿项不会被打断。
+// 真正的 realpath containment 与「已装目录存在性」由 plugin-loader / 升级迁移把关；
+// 这里只守"谁能改这份白名单"这条线。
+const TRUSTED_ID_RE = /^[A-Za-z0-9._-]+$/;
+function normalizeTrustedId(raw) {
+  let id = '';
+  if (typeof raw === 'string') id = raw;
+  else if (raw && typeof raw === 'object' && !Array.isArray(raw)) id = String(raw.id ?? '');
+  else return null;
+  id = id.trim();
+  if (!id || id === '.' || id === '..' || id.includes('..') || id.length > 128 || !TRUSTED_ID_RE.test(id)) return null;
+  return id;
+}
+
+let pendingTrustGrant = null;
+
+/**
+ * trust 路由专用：为一次 updateConfig 调用授予「可新增某个 trustedPlugins id」。
+ * 一次性、进程内、不落盘 —— 直接打 /api/config 的调用方拿不到它（P1 已要求所有
+ * /api 请求带令牌，但令牌只证明"能连控制台"，不等于"有人在信任页点了确认"）。
+ */
+export function withTrustedPluginGrant(id, fn) {
+  const prev = pendingTrustGrant;
+  pendingTrustGrant = { id: String(id || ''), token: randomBytes(16).toString('base64url') };
+  try { return fn(); } finally { pendingTrustGrant = prev; }
+}
+
+function sanitizeTrustedPluginsPatch(patch, current) {
+  if (!Object.prototype.hasOwnProperty.call(patch, 'trustedPlugins')) return;
+  const raw = patch.trustedPlugins;
+  const cur = Array.isArray(current) ? current.map(String) : [];
+  if (!Array.isArray(raw)) { delete patch.trustedPlugins; return; }
+  const next = [];
+  for (const item of raw) {
+    const id = normalizeTrustedId(item);
+    if (!id) { delete patch.trustedPlugins; return; }
+    if (!next.includes(id)) next.push(id);
+  }
+  const added = next.filter((id) => !cur.includes(id));
+  if (added.length) {
+    const grant = pendingTrustGrant;
+    pendingTrustGrant = null;
+    // 一次授予只对应 trust 路由那一个新 id；多新增 / id 不符一律丢弃该字段。
+    if (!grant?.token || added.length !== 1 || added[0] !== grant.id) {
+      delete patch.trustedPlugins;
+      return;
+    }
+  }
+  patch.trustedPlugins = next;
+}
+
 /**
  * 更新并持久化配置（浅合并到当前值；patch 里传对象字段则整体替换该字段）。
  *
@@ -998,6 +1111,8 @@ export function updateConfig(patchOrFn) {
   // 函数式入口：先取当前配置喂给回调，再走下面同一条合并路径
   const rawPatch = typeof patchOrFn === 'function' ? patchOrFn(getConfig()) : patchOrFn;
   const cleanPatch = stripDerivedFlags(structuredClone(rawPatch ?? {}));
+  // 信任闸不可用 /api/config 绕过：非法或无一次性授予的 trustedPlugins 变更直接吞掉
+  sanitizeTrustedPluginsPatch(cleanPatch, getConfig().trustedPlugins);
   // ── 脱敏回传的密钥保留（2026-09-19 修"搜索 Key 离开页签就消失"）──
   // 前端拿到的配置是脱敏的（apiKey 被删、hasApiKey 被加）；它把整个配置/区块
   // 回传保存时，密钥字段天然缺失。对**对象型**密钥容器 deepMerge 会保留基底值
