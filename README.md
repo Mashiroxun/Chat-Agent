@@ -1,7 +1,7 @@
-# QQ Agent（洛版 v0.4.9.4 · 桌面端）
+# QQ Agent（洛版 v0.4.9.5 · 桌面端）
 ![平台](https://img.shields.io/badge/platform-Windows%20%7C%20Electron-lightgrey)
 ![技术栈](https://img.shields.io/badge/stack-Node.js%20%7C%20原生前端-orange)
-![测试](https://img.shields.io/badge/tests-590%20cases-brightgreen)
+![测试](https://img.shields.io/badge/tests-702%20cases-brightgreen)
 一个跑在你自己电脑上的 QQ 群聊机器人：装完双击启动，扫码登录，填个模型 Key 就能用。
 事件驱动 + 无状态会话架构，每次处理的 token 成本恒定可控；所有操作都在图形控制台里完成，不用碰命令行。
 从 [Derpyu520/qq-bridge](https://github.com/Derpyu520/qq-bridge) 彻底改造而来的独立 QQ agent 应用。
@@ -155,13 +155,13 @@ git clone https://github.com/Mashiroxun/Chat-Agent.git
 cd Chat-Agent
 npm install
 npx electron .      # 需要自备 Electron 运行时；日常使用请用发布包
-npm test            # 全量测试：590 个用例（node --test tests/*.test.mjs）
+npm test            # 全量测试：702 个用例（node --test tests/*.test.mjs）
 npm run baseline    # 改了 plugins/ 或 skills/ 后重算内置指纹基线
 ```
 源码只声明了 `js-yaml` / `undici` / `ws` 三个运行时依赖，桌面壳（Electron）由发布包提供。
 
 ### 测试
-`npm test`（等价 `npm run check`）跑 `tests/*.test.mjs`，当前 **590 个用例**，覆盖启动组合装配与生命周期、
+`npm test`（等价 `npm run check`）跑 `tests/*.test.mjs`，当前 **702 个用例**，覆盖启动组合装配与生命周期、
 能力审计、协议与消息规范化、发送闸与白名单、记忆与提示词注入、用量统计、头像缓存、便携 QQ 进程管理等。
 
 ### QQ 怎么来的？（免安装包，推荐）
@@ -294,6 +294,15 @@ QQ 9.9.x 用的是腾讯自研的 **HummerSetup** 安装器，**不支持静默�
 - **控制台令牌**：首次启动会自动生成 24 字节随机令牌，写入 `data/config.json` 并另存
   `<数据目录>/console-token`。所有 `/api` 请求都需带 `x-console-token: <令牌>`（或 `?token=`），
   设置页「界面与应用 → 桌面端」可查看、复制、重新生成。
+- **匿名遥测可关闭**：应用会每 6 小时向作者的统计端点上报一次匿名计数
+  （随机 installId + 版本号 + 调用次数与 token 总量）——**不含聊天内容、QQ 号、
+  群号与任何账号信息**。不想让它往外发任何请求时，在 `data/config.json` 里加
+  `"telemetry": { "enabled": false }` 即可，本地用量统计不受影响。
+- **云端共享屏蔽名单**：屏蔽名单主数据源在作者的服务器（kondius.cn），所有安装实例
+  每 5 分钟同步一次；任何实例都可以**追加**屏蔽项（公开接口），**删除/覆盖**需要管理密钥。
+  方向是 fail-closed：同步失败时本地名单照常生效，不会放开已屏蔽的人；本机解除屏蔽
+  即使没有密钥也立即生效（写进 `communityExemptions`，不会被云端同步回滚）。
+  依赖这份名单=信任作者的云端判断，介意者可自行清空 `globalBlocklist` 并停用同步。
 
 ### 分发前脱敏
 分享自己的部署副本前，直接删除 `data/` 目录即可 —— 里面是 API Key、群白名单、聊天存档、

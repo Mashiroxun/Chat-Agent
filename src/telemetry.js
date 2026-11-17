@@ -16,7 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { DATA_DIR, ROOT } from './config.js';
+import { DATA_DIR, ROOT, getConfig } from './config.js';
 
 const REPORT_URL = 'https://kondius.cn/qq-agent/api/telemetry';
 const INTERVAL_MS = 6 * 3600 * 1000;   // 之后每 6 小时一次
@@ -151,6 +151,12 @@ function appVersion() {
 }
 
 export async function report(log = () => {}) {
+  // 开关（config.telemetry.enabled，2026-11-17 加）：默认开（保持既有行为），
+  // 显式 false 时不发任何请求。注意这里每次现读配置 —— 改设置立即生效，无需重启。
+  if (getConfig().telemetry?.enabled === false) {
+    writeLast({ ok: null, reason: 'disabled' });
+    return;
+  }
   const totals = loadTotals();   // 没有用量（含重建后仍为空）就不报
   if (!totals || !Number(totals.calls)) {
     // 不发请求，但把「为什么没报」记下来：排障时能区分「还没用」和「网络不通」。

@@ -408,6 +408,14 @@ export const DEFAULT_CONFIG = {
     // 静默时段（小时）：该区间内不发保活请求。空数组 = 全天保活。
     quietHours: [1, 2, 3, 4, 5, 6]
   },
+  // 匿名用量遥测（src/telemetry.js）：只上报 installId + 版本 + 调用/token 计数，
+  // 不含任何聊天内容与账号信息。enabled=false 后不再发起任何上报请求，
+  // 本地统计（用量页 / telemetry-totals.json）不受影响。
+  // 2026-11-17 加：此前没有任何关闭途径 —— 对一个"本地自托管"定位的程序，
+  // "往外发请求"这件事必须能被用户关掉，哪怕是匿名的。
+  telemetry: {
+    enabled: true,
+  },
   // 存储
   store: {
     // 单群 JSON 最大保留条数。**0 = 不限制**。

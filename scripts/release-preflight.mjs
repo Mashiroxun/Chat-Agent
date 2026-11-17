@@ -18,6 +18,10 @@
 // 2026-11-13 起，体检不再只看"静态摆设"，多了两道真门禁（都是 FATAL 级）：
 //   门禁 A：真的 spawn 一遍 tests/*.test.mjs（约 10s），红了就不许发版；
 //   门禁 B：独立扫一遍 electron/main.js 的静态求值图，禁入模块一条边都不许有。
+//
+// 2026-11-17：末尾输出的 --exclude 全部改成精确路径锚定（^./相对路径）。
+// 裸 basename 会按任意层级匹配，曾误删 js-yaml/dist、src/data-dir.js、undici/data-url.js
+// 导致「装完双击没反应」；而只锚顶层又会漏排 resources/app/data（API Key 真正的位置）。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -31,10 +35,16 @@ const ROOT = path.resolve(APP_DIR, '..', '..');         // 安装根（QQ Agent.
 const findings = [];
 const seen = new Set();
 const rel = (target) => String(target).split(path.sep).join('/');
+// 「打包时必须排除」的目标单独收一份，供末尾生成 tar 命令用。
+// EXCLUDE 自动进；FATAL 里只有真正属于排除项的才显式 markExclude —— 门禁类 FATAL
+// （例如缺 node_modules）绝不能被写进 --exclude，否则照抄命令会把运行时依赖排掉。
+const excludeTargets = new Set();
+const markExclude = (target) => excludeTargets.add(rel(target));
 const add = (level, target, message, hint) => {
   const key = `${level}|${rel(target)}|${message}`;
   if (seen.has(key)) return;                    // 同一条被多条规则命中时只报一次
   seen.add(key);
+  if (level === 'EXCLUDE') markExclude(target);
   findings.push({ level, target: rel(target), message, hint });
 };
 
@@ -52,6 +62,10 @@ const ROOT_MUST_EXCLUDE = [
   // 改代码前的整目录备份（含 QQ Agent.exe.orig 等）。2026-11-12 实测每个包
   // 白带 180MB —— 发布包里塞一份旧版 exe，既浪费体积又可能被当成可用程序。
   { name: 'backup', desc: '旧的整目录备份（含 .orig 旧 exe），不进发布包' },
+  // 安装根的 dist/ 是已产出的发布包（每个上百 MB），压进新包会让体积翻倍。
+  // 注意与 resources/app/dist（补丁产物）区分；也绝不能写成裸 --exclude=dist ——
+  // 那样会连 node_modules/js-yaml/dist/* 一起删掉。精确锚定 `^./dist/` 只作用于顶层。
+  { name: 'dist', desc: '已产出的发布包（zip / sha256），不进新包' },
   // 自更新（2026-11-12，P3-6）的残留物。它们**正好都在安装根**：用户机器上跑过一次
   // 应用内更新之后再来打包，就会把旧 exe（.update-old）或半套 147MB 的新包
   // （.update-staging / .update-download）静默压进发布包 —— 体积翻倍，而且
@@ -62,6 +76,16 @@ const ROOT_MUST_EXCLUDE = [
   { name: '.update-pending', desc: '自更新待应用标记，发布包里绝不能带' },
   { name: '.update-result.json', desc: '自更新应用结果（含本机路径），发布包里绝不能带' },
   { name: '.update-helper.lock', desc: '自更新助手进程锁（本机 pid），发布包里绝不能带' }
+];
+
+/**
+ * 固定排除模板：不依赖本机是否存在，打包命令里必须带上。
+ * 只放前缀足够特殊的目录名 —— 绝不能出现 `data-*` 这种宽模板，裸 basename
+ * 在 libarchive 里按任意层级匹配，会连带删掉 src/data-dir.js 与
+ * node_modules/undici/lib/web/fetch/data-url.js（历史事故，装完双击没反应）。
+ */
+const ALWAYS_EXCLUDE_PATTERNS = [
+  'data.removed-*'   // 手工挪走的历史数据备份（含 config.json / API Key），可能在任意层级
 ];
 
 /** app 目录内不进包的东西（同样是"本机存在正常、但会污染分发"）。 */
@@ -79,7 +103,11 @@ const APP_MUST_EXCLUDE = [
   // 注意与 doc/（单数，面向插件开发者的接口文档）区分，后者仍随包分发。
   { name: 'docs', desc: '开发内部资料（历史/验证/分析），不对外分发' },
   // make-patch.mjs 的输出目录（patch zip / staging）：发布资产单独上传，不进全量包
-  { name: 'dist', desc: '补丁包产物目录（scripts/make-patch.mjs 输出）' }
+  { name: 'dist', desc: '补丁包产物目录（scripts/make-patch.mjs 输出）' },
+  // 源码仓库元数据与本地源码快照：backup/ 是未跟踪目录，既可能被一次
+  // `git add -A` 推上公开仓库，也会随 tar 进分发包（内含本机路径与旧代码）。
+  { name: '.git', desc: '源码仓库元数据（含全部历史提交），不进分发包' },
+  { name: 'backup', desc: '未提交的源码快照（含本机路径），不进分发包' }
 ];
 
 /** 打包必须保留的文件（缺了就是打不出能用的包）。 */
@@ -108,21 +136,29 @@ const REQUIRED = [
 for (const item of ROOT_MUST_EXCLUDE) {
   const level = item.level || 'EXCLUDE';
   if (fs.existsSync(path.join(ROOT, item.name))) {
+    // FATAL 级的 data/ 也必须出现在示例 tar 命令里（原来按 level 过滤会漏掉它）。
+    markExclude(item.name);
     add(level, item.name, item.desc, level === 'FATAL'
       ? '残留即禁止打包（exit≠0）。打包命令必须排除，并确认这不是本机真实数据'
       : '打包命令里必须排除；不要删（本机还在用）');
   }
 }
-// 通配型残留：*.flag / *.bak-* / *.lnk / 测试-*.bat / data-probe*
+// 通配型残留：*.flag / *.bak-* / *.lnk / 测试-*.bat / data-probe* / data.removed-*
 for (const entry of fs.readdirSync(ROOT, { withFileTypes: true })) {
   const name = entry.name;
   const is = (re) => re.test(name);
   if (is(/\.flag$/i)) add('EXCLUDE', name, '运行时渲染/调试开关文件', '打包时排除');
-  if (is(/\.bak-/i)) add('FATAL', name, '备份文件（改代码时留下的）', '打包时排除，或确认无用后删除；残留即禁止打包');
+  if (is(/\.bak-/i)) {
+    add('FATAL', name, '备份文件（改代码时留下的）', '打包时排除，或确认无用后删除；残留即禁止打包');
+    markExclude(name);
+  }
   if (is(/\.orig$/i)) add('EXCLUDE', name, '备份文件（.orig：patch/替换前的原件）', '打包时排除，或确认无用后删除');
   if (is(/\.rej$/i)) add('EXCLUDE', name, 'patch 冲突残留（.rej）', '打包时排除');
   if (is(/\.lnk$/i)) add('EXCLUDE', name, '快捷方式，指向的是本机路径', '打包时排除');
   if (is(/^测试-.*\.bat$/i)) add('EXCLUDE', name, '排障脚本，收包人双击会关掉安全沙箱', '打包时排除');
+  // 注释里一直写着「data.removed-* 已在打包排除清单」，实际此前从未被任何规则命中：
+  // 它含 config.json（API Key），漏排等于把密钥塞进分发包。这里补上。
+  if (is(/^data\.removed-/i)) add('EXCLUDE', name, '手工挪走的历史数据备份（含 config.json / API Key）', '打包时排除；绝不能进分发包');
   if (is(/^data[-_]?probe/i)) add('EXCLUDE', name, '排障用的临时数据目录', '打包时排除');
 }
 
@@ -130,6 +166,12 @@ for (const entry of fs.readdirSync(ROOT, { withFileTypes: true })) {
 for (const item of APP_MUST_EXCLUDE) {
   if (fs.existsSync(path.join(APP_DIR, item.name))) {
     add('EXCLUDE', `resources/app/${item.name}`, item.desc, '打包时排除');
+  }
+}
+// 数据也可能被挪到 app 目录旁边（DATA_DIR 默认就是 resources/app/data）。
+for (const entry of fs.readdirSync(APP_DIR, { withFileTypes: true })) {
+  if (/^data\.removed-/i.test(entry.name)) {
+    add('EXCLUDE', `resources/app/${entry.name}`, '手工挪走的历史数据备份（含 config.json / API Key）', '打包时排除；绝不能进分发包');
   }
 }
 // 代码目录里的备份副本：plugins/ 与 skills/ 下混进 *.bak 会被指纹校验当成"占名顶替"
@@ -577,8 +619,30 @@ const FATAL = findings.filter((f) => f.level === 'FATAL');
 const EXCLUDE = findings.filter((f) => f.level === 'EXCLUDE');
 const WARN = findings.filter((f) => f.level === 'WARN');
 
+/**
+ * 把体检命中的目标转成 bsdtar/libarchive 可用的 --exclude 模式。
+ *
+ * libarchive 的 --exclude 不带 ^ 时按「任意层级 basename」匹配，历史事故就是这么来的：
+ *   --exclude=dist     → 连 node_modules/js-yaml/dist/* 一起删（装完双击没反应）
+ *   --exclude=data-*   → 删 src/data-dir.js、undici 的 data-url.js（同上）
+ * 但只写 ^dist/ 这种顶层锚定也不行：会漏排 resources/app/data（真正存 API Key 的位置）
+ * 和 resources/app/dist。本机实测（bsdtar 3.8.9）唯一稳妥的形态是
+ * 「^./ + 精确相对路径（目录补 /）」，误删 0、漏排 0。
+ * 固定模板（含 * ?）保留任意层级匹配，用来兜住可能出现在任意深度的历史备份目录。
+ */
+function toExcludePattern(target) {
+  if (/[*?]/.test(target)) return target;
+  let isDir = false;
+  try { isDir = fs.statSync(path.join(ROOT, target)).isDirectory(); } catch { /* 命中后已被挪走 */ }
+  return `^./${target}${isDir ? '/' : ''}`;
+}
+const excludePatterns = [...new Set([
+  ...[...excludeTargets].map(toExcludePattern),
+  ...ALWAYS_EXCLUDE_PATTERNS,
+])].sort();
+
 if (process.argv.includes('--json')) {
-  console.log(JSON.stringify({ root: ROOT, scannedFiles, findings, ok: FATAL.length === 0 }, null, 2));
+  console.log(JSON.stringify({ root: ROOT, scannedFiles, findings, excludePatterns, ok: FATAL.length === 0 }, null, 2));
   process.exit(FATAL.length === 0 ? 0 : 1);
 }
 
@@ -610,14 +674,15 @@ if (WARN.length) {
   console.log('');
 }
 
-console.log('打包时请显式排除（示例，Windows 自带 tar 可用）：');
-// 列出**全部**待排除项（含通配命中的 *.flag / *.bak-* / 测试-*.bat），
-// 否则照抄示例打出来的包仍然带着排障残留。
-const excl = findings
-  .filter((f) => f.level === 'EXCLUDE')
-  .map((f) => `--exclude "${f.target}"`)
-  .join(' ');
+console.log('打包时请显式排除（示例，Windows 自带 tar / libarchive 可用）：');
+// 列出**全部**待排除项（含 FATAL 级的 data/ 与 *.bak-*）；每项都用精确路径锚定，
+// 绝不能输出 --exclude dist 这种裸 basename，否则会误删运行时文件。
+const excl = excludePatterns.map((p) => `--exclude "${p}"`).join(' ');
 console.log(`   tar -a -c -f QQAgent-release.zip ${excl} -C "${ROOT}" .`);
+console.log('\n打包后必须复检（排除规则误删运行时文件不报错，只表现为「装完双击没反应」）：');
+console.log('   tar -x -f QQAgent-release.zip -C ./unpacked');
+console.log('   node resources/app/scripts/check-package.mjs --dir ./unpacked --report check.json');
+console.log('   退出码必须为 0 —— 检查器会全量核对包内每个静态相对 import/require 的目标文件。');
 
 if (pkgVer) {
   // 这条不是代码能"检查"出来的：远程 version.json 真的落后，本地也看不出来。

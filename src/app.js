@@ -756,7 +756,9 @@ export function createApp({ log = console.log, desktopPetHost = null, components
         sender,
         store,
         log,
-        sendSegments: (k, id2, segs) => onebot.sendSegments(k, id2, segs),
+        // sendSegments 统一走发送队列（白名单 + 限频 + 留档），不再直连 onebot ——
+        // 直连会绕过"白名单外不发言"的最终不变量（见 sender.js sendSegments 注释）。
+        sendSegments: (k, id2, segs) => sender.sendSegments(`${k}:${id2}`, segs),
         // opts 可选透传（如 { dedupe: false }）—— 给"进度提示"这类本就该重复的内容用。
         // 不传时行为与以前完全一致（走默认去重）。
         send: (messages, opts) => sender.sendTextBatch(`${kind}:${id}`, Array.isArray(messages) ? messages : [String(messages)], opts || {})
@@ -1027,12 +1029,12 @@ export function createApp({ log = console.log, desktopPetHost = null, components
     //   之前只传了 { chatKey, mid, event }，而 runHook 原样透传 ctx，于是
     //   anti-recall 的 sendSegmentsSafe 三级回退全落空（ctx.onebot.call 抛
     //   TypeError 被 catch 吞掉）→ 撤回时机器人毫无反应。见 CORE-PATCH.md 的契约。
-    //   段发送用 onebot.sendSegments —— SendQueue **没有**同名方法（只有
-    //   sendMedia/sendTextBatch），按 CORE-PATCH 原文写 sender.sendSegments 会 undefined。
+    //   段发送走 sender.sendSegments（2026-11-17 起 SendQueue 有了这个受闸方法：
+    //   白名单 + 限频 + 留档；此前直连 onebot.sendSegments 会绕过这些闸）。
     try {
       skillManager.runHook('onRecall', {
         event, chatKey, mid, onebot, sender, store, log,
-        sendSegments: (kind, id2, segs) => onebot.sendSegments(kind, id2, segs)
+        sendSegments: (kind, id2, segs) => sender.sendSegments(`${kind}:${id2}`, segs)
       }).catch(() => {});
     } catch { /* ignore */ }
   }

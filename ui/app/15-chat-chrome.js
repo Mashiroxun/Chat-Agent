@@ -1000,56 +1000,9 @@
   }
 
   // ── 卡内动作条：重试 / 中止 ──────────────────────────────────────────────
-  // 为什么必须在这里补一套：02-sse-sessions.js 的「重试 / 中止」按钮只渲染进
-  // #session-items，而本层一进全屏「会话选择」页就给 #session-items 加 .cc-hide
-  // （buildStatic 末尾），全屏页关掉后 #session-list 又整体在隐藏的 .bp-mode-chat 里
-  // —— 两条路径都点不到。后果：出错会话无法重试、跑飞的长任务无法止损，
-  // 用户只能等它跑完或重启应用（2026-11-16 两位审查专家独立确认）。
-  // 这里在卡片底部补一条动作条，**处理器直接复用 02 的 getSessionListHandlers()**
-  // （它是全局函数；onRetry/onAbort 只依赖 btn.dataset.id / disabled / textContent，
-  //  传本层的真实 <button> 进去就能工作，不必在 02 里开新导出）。
-  // #session-items 里那套按钮保持原样 —— 经典列表模式仍走它。
-  /** 按钮 HTML（不含外层容器）。显示条件与 02 的 retryHtml / abortHtml 逐字对齐。 */
-  function cardActsButtons(s) {
-    if (!s || !s.status) return '';
-    var out = '';
-    if (s.status === 'error' && !(s.sent && s.sent.length)) {
-      out += '<button class="btn btn-small session-retry-btn" type="button"' +
-        ' data-id="' + esc2(s.id) + '"' +
-        ' aria-label="重试这条出错的会话"' +
-        ' title="把这条会话的触发消息翻回未读并重新处理">重试</button>';
-    }
-    if (s.status === 'running' || s.status === 'waiting') {
-      out += '<button class="btn btn-small btn-danger session-abort-btn" type="button"' +
-        ' data-id="' + esc2(s.id) + '"' +
-        ' aria-label="中止这次处理（已发出的消息不受影响）"' +
-        ' title="中止这次处理（已发出的消息不受影响）">中止</button>';
-    }
-    return out;
-  }
-
-  /** 把动作条同步到某张卡上（没有动作就整块移除；内容没变不动 DOM）。 */
-  function syncCardActs(card, s) {
-    if (!card) return;
-    var html = cardActsButtons(s);
-    var box = card.querySelector('.cc-card-acts');
-    if (!html) { if (box) box.remove(); return; }
-    // 卡体是后来挂回来的（restoreExpanded / 点卡头展开都走 appendChild），
-    // 会把这个盒子挤到中间去 —— 每次同步顺手挪回末尾，保证"头 → 正文 → 动作"。
-    if (box && card.lastElementChild !== box) card.appendChild(box);
-    if (box && box.getAttribute('data-acts') === html) return;
-    if (!box) {
-      box = document.createElement('div');
-      box.className = 'cc-card-acts';
-      box.setAttribute('data-cc', '1');
-      // 内联样式而非新建 CSS 类：本批修复不动 CSS 文件（并行改动会冲突），
-      // 只用布局（右对齐 + 与卡头同水平内边距），按钮外观完全沿用全局 .btn.btn-small。
-      box.setAttribute('style', 'display:flex;gap:8px;justify-content:flex-end;padding:0 16px 12px');
-      card.appendChild(box);
-    }
-    box.setAttribute('data-acts', html);
-    box.innerHTML = html;
-  }
+  // 2026-11-16：动作按钮已按用户要求挪进详情头 h2（02 的 renderSessionDetail 里），
+  // 跟「JSON 模式 / 删除」排一行。本层不再在卡片底部补动作条 —— cardActsButtons /
+  // syncCardActs 整套移除，避免同一会话出现两处「重试 / 中止」。
 
   /** 长期持有的 .session-status 引用 —— 见 ensureHead() 注释里「坑 2」。
    *  ⚠️ 必须是模块级 var，不能省；本文件顶有 'use strict'，
@@ -1265,8 +1218,7 @@
       (nodes || []).forEach(function (n) { body.appendChild(n); });
       card.appendChild(body);
     }
-    // 动作条放最后（卡体之下）：折叠卡也能重试/中止，展开卡的按钮不挤在正文入口
-    syncCardActs(card, s);
+    // 2026-11-16：卡片底部动作条已移除 ——「重试 / 中止」改在详情头 h2 里渲染。
     return card;
   }
 
@@ -1732,11 +1684,8 @@
         }
       }
     });
-    // ①′ 卡内动作条（重试 / 中止）同样按状态同步：会话从「运行中」「出错」
-    //     走到终态时按钮要自己消失，不能等下一次全量重建。
-    cards.querySelectorAll('.bp-card[data-sid]').forEach(function (card) {
-      syncCardActs(card, map[card.dataset.sid]);
-    });
+    // ①′（2026-11-16 移除）「重试 / 中止」已移入详情头 h2，由 02 的
+    //     renderSessionDetail 随状态变化重绘，这里不再同步卡片底部动作条。
     // ② 删卡：列表里没有的（会话被删除 / 清空已结束）
     cards.querySelectorAll('.bp-card[data-sid]').forEach(function (card) {
       if (!map[card.dataset.sid]) card.remove();
@@ -2139,38 +2088,8 @@
     card.classList.toggle('ts-open', show);
   });
 
-  // 卡内动作条的重试 / 中止：同样委托在 #session-detail 上（卡片会整体重建，
-  // 逐个绑定必丢事件）。处理器复用 02 的全局 getSessionListHandlers()。
-  DETAIL.addEventListener('click', function (e) {
-    var t = e.target;
-    if (!t || !t.closest) return;
-    var btn = t.closest('.session-retry-btn') || t.closest('.session-abort-btn');
-    // 只认本层卡内的动作条：#session-items 里那套由 02 自己的委托处理，别抢
-    if (!btn || !btn.closest('#cc-cards')) return;
-    if (typeof getSessionListHandlers !== 'function') return;
-    var h = getSessionListHandlers();
-    var isRetry = btn.classList.contains('session-retry-btn');
-    var card = btn.closest('.bp-card');
-    var p;
-    try {
-      p = isRetry ? h.onRetry(btn) : h.onAbort(btn);
-    } catch (err) {
-      p = null;
-    }
-    // 收尾后强制重算这张卡的动作条：中止成功后会话可能仍是 running（后端要等
-    // 下一轮请求前才收尾），状态没变的话签名比对不会重绘，按钮会永久停在
-    // 「中止中…」+ disabled。清掉签名即可保证下一轮一定重写。
-    var done = function () {
-      try {
-        if (card) {
-          var box = card.querySelector('.cc-card-acts');
-          if (box) box.removeAttribute('data-acts');
-        }
-        if (active && tabNow() === 'sessions') refreshCards();
-      } catch (err) { /* 忽略：最差是等下一轮轮询刷新 */ }
-    };
-    Promise.resolve(p).then(done, done);
-  });
+  // （2026-11-16 移除）卡片底部动作条的重试 / 中止委托整段删除 ——
+  // 按钮已挪进详情头 h2，由 02 的 renderSessionDetail 在节点上直接绑定事件。
 
   sync();
 })();

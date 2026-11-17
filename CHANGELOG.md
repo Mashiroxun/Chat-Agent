@@ -4,7 +4,7 @@
 
 ---
 
-## 未发布（拟并入 0.4.9.5）
+## 0.4.9.5（2026-11-17 · tag `v0.4.9.5`）
 
 ### 修复 · 思考强度
 
@@ -17,6 +17,18 @@
 - **空 token 不再全放行**：首次启动自动生成 24 字节随机控制台令牌，写入 `data/config.json` 并另存一份 `<数据目录>/console-token`；所有 `/api` 请求必须带 `x-console-token: <令牌>`（或 `?token=`），Electron 控制台仍用进程私有凭据自动注入。设置页「界面与应用 → 桌面端」可查看、复制、重新生成令牌。
 - **外部脚本需适配**：过去只带 `Origin: http://127.0.0.1:<端口>` 或无来源 GET 就能调接口的脚本现在会收到 401，需改带令牌请求头。新增 `POST /api/console-token/regenerate` 供设置页轮换；旧令牌立即失效。
 - 回归测试：新增 `tests/console-token.test.mjs`，覆盖自动生成落盘、重复取用稳定、轮换即时生效、用户自定义令牌不被覆盖。
+
+### 变更 · 匿名遥测可关闭
+
+- `config.telemetry.enabled`（默认 `true` 保持既有行为）显式设为 `false` 后，`src/telemetry.js` 不再发起任何上报请求；每次现读配置，改设置立即生效、无需重启。本地用量统计与 `telemetry-totals.json` 不受影响。
+- README「常见问题」补匿名上报说明与关闭方式；version.json 更新说明同步。
+
+### 修复 · 发版与发布资产
+
+- `package.json` 的 repository / bugs / homepage 由旧地址修正为 `Mashiroxun/Chat-Agent`，与 README 安装指引及实际发布仓库一致。
+- `scripts/release-preflight.mjs`：排除项改为按完整相对路径锚定，避免误删 `node_modules/*/dist/` 与 `src/data-*` 等运行时文件；补齐几处「注释说排除、实际没进清单」的敏感目录。
+- `scripts/check-package.mjs`：新增全包静态相对依赖完整性断言（覆盖独立入口与依赖内部 require）与敏感路径反向校验；0.4.9.4 的坏包会被判 FAIL，正式包仍 PASS。
+- 重打包并替换 0.4.9.4 发布资产，清除历史与包内残留的个人信息；git 历史剔除内部 `docs/` 工程记录（真实本机路径 0 残留），提交拓扑不变。
 
 ## 0.4.9.4（2026-11-15 · tag `v0.4.9.4`）
 

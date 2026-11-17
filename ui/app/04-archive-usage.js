@@ -1702,6 +1702,15 @@ function renderUsagePage(stats, st, prices) {
   $$('#usage-page [data-range]').forEach((el) => {
     el.addEventListener('click', () => {
       usageRange = el.dataset.range;
+      // 2026-11-17（用户反馈「第一次切近30天要卡一下才切过去」）：
+      // 冷缓存时 loadUsageView 要等 /api/usage/stats + /api/status 回来才走到
+      // updateUsagePage 里的按钮高亮，用户点下去那一刻没有任何反馈 —— 看着就是
+      // 「卡住 / 顿一下才切」。这里先立刻把高亮切过来（与 updateUsagePage 1942 行
+      // 同一套 btn-primary），数据随后原地填入。热缓存时 updateUsagePage 也会再
+      // 设一次，classList.toggle 幂等，不冲突。只动按钮，不碰数据渲染。
+      $$('#usage-page [data-range]').forEach((b) => {
+        b.classList.toggle('btn-primary', b.dataset.range === String(usageRange));
+      });
       // R226：inPlace —— 切范围原地更新数值层，不重建 DOM、不重播入场动画
       loadUsageView({ force: true, keepContent: true, inPlace: true });
     });

@@ -919,11 +919,23 @@ function renderSessionDetail(s) {
 
   const html = [];
   const canDelete = s.status !== 'running';   // 运行中的会话不能删（usage 还在累加）
+  // 2026-11-16：把「重试 / 中止」从卡片底部那条动作条挪进详情头 h2，跟
+  // 「JSON 模式 / 删除」排成一行（用户画红框指定的位置）。样式、文案、class、
+  // data-id、title 全部沿用原样 —— 只改位置，不动观感。显示条件也逐字不变：
+  //   重试 = error 且没发出过消息；中止 = running / waiting。
+  const detailRetryHtml = s.status === 'error' && !(s.sent && s.sent.length)
+    ? `<button class="btn btn-small session-retry-btn" data-id="${esc(s.id)}" title="把这条会话的触发消息翻回未读并重新处理">重试</button>`
+    : '';
+  const detailAbortHtml = (s.status === 'running' || s.status === 'waiting')
+    ? `<button class="btn btn-small btn-danger session-abort-btn" data-id="${esc(s.id)}" title="中止这次处理（已发出的消息不受影响）">中止</button>`
+    : '';
   html.push(`
     <div class="detail-header">
       <h2>${esc(chatName)} ${replyFreqChip(s.chatKey)} ${statusBadge}
         <button class="btn btn-small" id="json-mode-btn" style="margin-left:10px">JSON 模式</button>
         ${canDelete ? `<button class="btn btn-small btn-danger" id="session-delete-btn" style="margin-left:6px" title="删除这条会话记录">删除</button>` : ''}
+        ${detailRetryHtml ? `<span style="margin-left:6px">${detailRetryHtml}</span>` : ''}
+        ${detailAbortHtml ? `<span style="margin-left:6px">${detailAbortHtml}</span>` : ''}
       </h2>
       <div class="sub">
         <span>触发：${esc(s.triggerSummary || (s.trigger === 'proactive' ? '主动机会' : '-'))}</span>
@@ -1047,6 +1059,14 @@ function renderSessionDetail(s) {
     lastDetailFp = null;   // 强制重渲染
     renderSessionDetail(s);
   });
+  // 2026-11-16：详情头里的「重试 / 中止」按钮事件。直接绑在节点上（不靠容器委托），
+  // 因为全屏会话页会把 detail-header 搬进卡片卡体，容器委托够不到；绑节点则跟着走。
+  // 处理器复用 getSessionListHandlers()，与会话列表里那套按钮完全同一套逻辑。
+  const headerHandlers = getSessionListHandlers();
+  const headerRetry = detail.querySelector('.detail-header .session-retry-btn');
+  if (headerRetry) headerRetry.addEventListener('click', () => headerHandlers.onRetry(headerRetry));
+  const headerAbort = detail.querySelector('.detail-header .session-abort-btn');
+  if (headerAbort) headerAbort.addEventListener('click', () => headerHandlers.onAbort(headerAbort));
   // 删除这条会话记录
   const delBtn = $('#session-delete-btn');
   if (delBtn) delBtn.addEventListener('click', async () => {

@@ -537,6 +537,39 @@ export class SendQueue {
     });
   }
 
+  /**
+   * 发送任意消息段（钩子契约 sendSegments 的统一出口）。
+   *
+   * ⚠️ 曾经把 onebot.sendSegments 原样递给 onMessage / onRecall 钩子 ——
+   * 绕过白名单闸与限频，和本文件"所有出站都过队列"的不变量矛盾
+   * （app.js 的 ingest / recall 两处都是）。现在钩子拿到的就是本方法：
+   * 白名单硬闸 → 发送配额 → 随机延迟 → onebot.sendSegments → 留档。
+   * 段内容原样透传（协议端语义，构造责任在调用方）；不做媒体去重 ——
+   * 通用段（reply/at/text 组合）没有稳定的文本指纹，幂等性由调用方保证。
+   *
+   * @param {string} chatKey  "group:群号" / "private:QQ号"
+   * @param {Array} segments  OneBot 段数组
+   * @param {object} options { label }（留档文案）
+   */
+  sendSegments(chatKey, segments, options = {}) {
+    const [kind, id] = String(chatKey).split(':');
+    if (kind !== 'group' && kind !== 'private') return Promise.reject(new Error(`非法会话 key：${chatKey}`));
+    const segs = (Array.isArray(segments) ? segments : []).filter((s) => s && s.type);
+    if (!segs.length) return Promise.reject(new Error('消息段为空'));
+    const label = String(options.label || '[消息段]');
+    const chain = this.#chain(chatKey);
+    return chain(async () => {
+      this.#ensureAllowed(chatKey);   // 白名单硬闸（与其它出站路径同闸）
+      this.#checkRate(chatKey);
+      await sleep(randInt(300, 900));
+      const data = await this.onebot.sendSegments(kind, id, segs);
+      const ts = Date.now();
+      this.store.appendSelf(chatKey, { text: label, ts, mid: data?.message_id ?? null });
+      this.onSent?.({ chatKey, text: label, messageId: data?.message_id ?? null, kind: 'segments' });
+      return data;
+    });
+  }
+
   /** 拍一拍。发送成功后留档（self 记录），否则下一次运行不知道自己拍过。 */  poke(chatKey, targetUserId) {
     const [kind, id] = String(chatKey).split(':');
     const chain = this.#chain(chatKey);

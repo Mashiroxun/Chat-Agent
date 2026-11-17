@@ -14,9 +14,16 @@
  *   3. 主进程本地 import 图：从 main 入口出发，正则扫描静态 import、
  *      export ... from、动态 import()、require()，只跟随相对路径，
  *      递归构建可达文件集合（visited 防环），断言每个可达文件存在且非空。
- *   4. 基础断言：QQ Agent.exe、version.json 与 package.json 版本一致、
+ *   4. 全包静态相对依赖完整性（2026-11-17 新增）：扫描包内**所有** JS/CJS/MJS
+ *      的静态相对 import / require，断言目标文件存在。堵住第 2、3 项共同的盲区：
+ *      headless 入口 src/server.js 引用的 src/data-dir.js 不在主进程 import 图里，
+ *      依赖内部 require 的 undici/data-url.js 也不在 exports 里。这两处曾因
+ *      `--exclude=data-*` 裸 basename 被误删，收包人「装完双击没反应」，而前 3 项全 PASS。
+ *   5. 敏感路径反向校验：包内不得出现 data/、backup/、docs/、*.log、
+ *      config.json、data.removed-* 等运行时数据（排除规则漏排的另一面）。
+ *   6. 基础断言：QQ Agent.exe、version.json 与 package.json 版本一致、
  *      关键文件非 0 字节、总文件数 / 总字节数。
- *   5. 输出 report.json（结构化）+ 控制台中文摘要；退出码 0 = 全过，1 = 有问题。
+ *   7. 输出 report.json（结构化）+ 控制台中文摘要；退出码 0 = 全过，1 = 有问题。
  *
  * 仅依赖 Node 内建模块，零第三方依赖；zip 输入自行解析（含 GBK 中文名还原）。
  *
@@ -61,6 +68,17 @@ const TYPE_ONLY_EXT = /\.(?:d\.ts|d\.mts|d\.cts)$/i;
 
 /** 只跟随相对路径 spec；其余（裸包名、node: 内建、别名、绝对 URL）记为外部模块。 */
 const EXTERNAL_SPEC_RE = /^(?:\/|[a-zA-Z][a-zA-Z0-9+.-]*:)/;
+
+/**
+ * 发布包里绝不该出现的路径 —— 打包排除规则「漏排」的反向校验。
+ * 只按 app 根下的**精确前缀**判断：正式包里合法存在
+ * node_modules/undici/docs/ 与 plugins/mem-layered/docs/ 共 38 条，
+ * 用任意层级的 /docs/ 会误报一大片。
+ */
+const FORBIDDEN_APP_PREFIXES = [
+  'data/', 'backup/', 'docs/', 'plugin-data/', 'dist/', '.git/', '.workbuddy/',
+];
+const FORBIDDEN_APP_FILES = ['config.json', 'console-token', '.update-result.json'];
 
 /**
  * 字节数格式化为千分位。既提升可读性，也避免脱敏器把连续长数字
@@ -980,10 +998,89 @@ function runChecks(ctx) {
     importGraph.pass = false;
   }
 
+  // ---------------- 4. 全包静态相对依赖完整性 ----------------
+  // 为什么不能只在主进程 import 图里查（第 3 项）：`--exclude=data-*` 那次事故
+  // 删掉的 src/data-dir.js 只被 headless 入口 src/server.js 引用，而 server.js
+  // 不在桌面启动链里；undici 的 data-url.js 则是依赖包内部 require，
+  // 第 2 类断言只看 main/module/exports，同样看不到。
+  // 正式包实测 1035 条相对 spec 全部可解析，因此这里可以做成零误报硬门禁。
+  const staticImports = {
+    pass: true,
+    scannedFiles: 0,
+    relativeSpecCount: 0,
+    unresolved: [],
+    missingTargets: [],
+  };
+  const jsFiles = files.filter((n) => /\.(?:js|mjs|cjs)$/i.test(n));
+  const missingByTarget = new Map();
+  for (const file of jsFiles) {
+    let code = '';
+    try {
+      code = source.read(file).toString('utf8');
+    } catch (err) {
+      noteFailure('staticImports', '包内 JS 可读', `读取失败: ${file} (${err.message})`, file);
+      continue;
+    }
+    if (!code || code.includes('\u0000')) continue;      // 二进制 / 空文件跳过
+    staticImports.scannedFiles += 1;
+    for (const spec of extractSpecifiers(code)) {
+      if (!spec.startsWith('.')) continue;               // 裸包名 / node: / URL 不归这里管
+      staticImports.relativeSpecCount += 1;
+      const info = resolveLocalImport(source, file, spec);
+      if (info.resolved) continue;
+      const item = { from: redact(file), spec: redact(spec), expected: redact(info.expected) };
+      staticImports.unresolved.push(item);
+      if (!missingByTarget.has(info.expected)) missingByTarget.set(info.expected, []);
+      missingByTarget.get(info.expected).push(item);
+    }
+  }
+  staticImports.missingTargets = [...missingByTarget.entries()]
+    .map(([expected, refs]) => ({
+      expected: redact(expected),
+      referencedBy: refs.length,
+      samples: refs.slice(0, 3),
+    }))
+    .sort((a, b) => b.referencedBy - a.referencedBy);
+  staticImports.pass = staticImports.unresolved.length === 0;
+  if (!staticImports.pass) {
+    for (const [expected, refs] of missingByTarget) {
+      noteFailure('staticImports', '静态相对依赖目标存在',
+        `包内缺失 ${expected}（被 ${refs.length} 处引用）—— 多半是打包 --exclude 误删，收包人会 MODULE_NOT_FOUND`,
+        expected);
+    }
+  }
+
+  // ---------------- 5. 敏感路径反向校验 ----------------
+  // 打包前体检管「别把 data/ 排漏」，这里管「万一漏排了能不能被发现」。
+  const sensitivePaths = { pass: true, hits: [] };
+  const forbiddenPrefixes = [
+    `${roots.installRoot}data/`,
+    ...FORBIDDEN_APP_PREFIXES.map((p) => `${roots.appRoot}${p}`),
+  ].map((p) => p.toLowerCase());
+  const forbiddenFiles = FORBIDDEN_APP_FILES.map((f) => `${roots.appRoot}${f}`.toLowerCase());
+  for (const name of files) {
+    const lower = name.toLowerCase();
+    let reason = '';
+    if (forbiddenPrefixes.some((p) => lower.startsWith(p))) reason = '运行时数据 / 内部资料目录';
+    else if (forbiddenFiles.includes(lower)) reason = '本机配置文件（可能含 API Key）';
+    else if (/\.log$/i.test(name)) reason = '运行日志';
+    else if (/(?:^|\/)data\.removed-/i.test(name)) reason = '历史数据备份（含 API Key）';
+    else if (/(?:^|\/)console-token/i.test(name)) reason = '控制台令牌';
+    else if (/(?:^|\/)\.update-(?:old|staging|download|pending)\//i.test(name)) reason = '自更新残留';
+    if (reason) sensitivePaths.hits.push({ path: redact(name), reason });
+  }
+  sensitivePaths.pass = sensitivePaths.hits.length === 0;
+  if (!sensitivePaths.pass) {
+    for (const hit of sensitivePaths.hits.slice(0, 20)) {
+      noteFailure('sensitivePaths', '发布包不含运行时数据', `${hit.reason}: ${hit.path}`, hit.path);
+    }
+  }
+
   // ---------------- 汇总 ----------------
-  const ok = basicPass && dependencyEntriesPass && importGraph.pass;
+  const ok = basicPass && dependencyEntriesPass && importGraph.pass
+    && staticImports.pass && sensitivePaths.pass;
   const report = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     ok,
     generatedAt: new Date().toISOString(),
     tool: { name: 'check-package.mjs', runtime: `node ${process.version}` },
@@ -1019,6 +1116,8 @@ function runChecks(ctx) {
         exemptions,
       },
       importGraph,
+      staticImports,
+      sensitivePaths,
     },
     missingFiles: [...missingFiles].sort(),
     failures,
@@ -1035,6 +1134,15 @@ function runChecks(ctx) {
 /** @param {object} r 报告对象。 @param {string} reportPath 实际报告输出路径。 */
 function printSummary(r, reportPath) {
   const line = '─'.repeat(66);
+  // errorReport 没有 roots / assertions，走完整摘要会 TypeError；直接给结论。
+  if (r.error) {
+    console.log('');
+    console.log('══════════════ 发布包启动完整性检查 ══════════════');
+    console.log(`结论      : FAIL  检查过程中止：${r.error}`);
+    console.log(`退出码    : ${r.exitCode}`);
+    console.log('');
+    return;
+  }
   console.log('');
   console.log('══════════════ 发布包启动完整性检查 ══════════════');
   console.log(`输入      : ${r.input.mode.toUpperCase()}  ${r.input.path}`);
@@ -1048,11 +1156,11 @@ function printSummary(r, reportPath) {
   console.log(line);
 
   const b = r.assertions.basic;
-  console.log(`[1/3] 基础断言           ${b.pass ? '[PASS]' : '[FAIL]'}  ${b.checks.filter((c) => c.pass).length}/${b.checks.length}`);
+  console.log(`[1/5] 基础断言           ${b.pass ? '[PASS]' : '[FAIL]'}  ${b.checks.filter((c) => c.pass).length}/${b.checks.length}`);
   for (const c of b.checks) console.log(`       ${c.pass ? '[OK]  ' : '[FAIL]'} ${c.name}${c.detail ? ` — ${c.detail}` : ''}`);
 
   const d = r.assertions.dependencyEntries;
-  console.log(`[2/3] 依赖入口断言       ${d.pass ? '[PASS]' : '[FAIL]'}  ${d.runtimeTargetPassed}/${d.runtimeTargetCount} 运行时目标，${d.dependencyCount} 个依赖，豁免 ${d.exemptions.length} 项`);
+  console.log(`[2/5] 依赖入口断言       ${d.pass ? '[PASS]' : '[FAIL]'}  ${d.runtimeTargetPassed}/${d.runtimeTargetCount} 运行时目标，${d.dependencyCount} 个依赖，豁免 ${d.exemptions.length} 项`);
   for (const dep of d.dependencies) {
     const bad = dep.targets.filter((t) => t.runtimeRelevant && !t.waived && !t.pass);
     console.log(`       ${dep.pass ? '[OK]  ' : '[FAIL]'} ${dep.name}@${dep.version || '?'}  运行时目标 ${dep.runtimeTargetCount}，豁免 ${dep.waivedTargetCount}`);
@@ -1064,9 +1172,18 @@ function printSummary(r, reportPath) {
   }
 
   const g = r.assertions.importGraph;
-  console.log(`[3/3] 主进程 import 图   ${g.pass ? '[PASS]' : '[FAIL]'}  可达 ${g.reachableFileCount} 文件 / 外部 ${g.externalSpecCount} 模块 / 未解析 ${g.unresolved.length} / 空文件 ${g.emptyFiles.length}`);
+  console.log(`[3/5] 主进程 import 图   ${g.pass ? '[PASS]' : '[FAIL]'}  可达 ${g.reachableFileCount} 文件 / 外部 ${g.externalSpecCount} 模块 / 未解析 ${g.unresolved.length} / 空文件 ${g.emptyFiles.length}`);
   for (const u of g.unresolved) console.log(`              -> 未解析 ${u.from} : ${u.spec} => ${u.expected}`);
   for (const e of g.emptyFiles) console.log(`              -> 空文件 ${e}`);
+
+  const s = r.assertions.staticImports;
+  console.log(`[4/5] 全包静态相对依赖   ${s.pass ? '[PASS]' : '[FAIL]'}  扫描 ${s.scannedFiles} 个 JS / ${s.relativeSpecCount} 条相对 spec / 未解析 ${s.unresolved.length}`);
+  for (const m of s.missingTargets.slice(0, 10)) {
+    console.log(`              -> 缺失 ${m.expected}（被 ${m.referencedBy} 处引用，疑似被 --exclude 误删）`);
+  }
+  const sp = r.assertions.sensitivePaths;
+  console.log(`[5/5] 敏感路径反向校验   ${sp.pass ? '[PASS]' : '[FAIL]'}  命中 ${sp.hits.length} 条`);
+  for (const h of sp.hits.slice(0, 10)) console.log(`              -> ${h.reason}: ${h.path}`);
   console.log(line);
 
   if (r.missingFiles.length > 0) {
@@ -1142,7 +1259,7 @@ function writeReport(reportPath, report) {
 /** 构造输入错误时的最小报告。 */
 function errorReport(message, mode, inputPath) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     ok: false,
     generatedAt: new Date().toISOString(),
     input: { mode: mode || 'unknown', path: redactUserPath(inputPath) },

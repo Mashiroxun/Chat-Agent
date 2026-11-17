@@ -1,6 +1,6 @@
 {
   "name": "qq-agent",
-  "version": "0.4.9.4",
+  "version": "0.4.9.5",
   "private": false,
   "description": "QQ 群 AI 机器人（桌面版）：事件驱动的无状态 Agent，接 OpenAI 兼容 API，带会话式控制台。",
   "type": "module",
@@ -23,10 +23,10 @@
   "author": "Kondius",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Kondius/qq-agent.git"
+    "url": "https://github.com/Mashiroxun/Chat-Agent.git"
   },
   "bugs": {
-    "url": "https://github.com/Kondius/qq-agent/issues"
+    "url": "https://github.com/Mashiroxun/Chat-Agent/issues"
   },
-  "homepage": "https://github.com/Kondius/qq-agent#readme"
+  "homepage": "https://github.com/Mashiroxun/Chat-Agent#readme"
 }
