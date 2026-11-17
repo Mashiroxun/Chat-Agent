@@ -1068,6 +1068,7 @@ function runChecks(ctx) {
     // 令牌文件本身无扩展名；console-token.test.mjs 是测试夹具，必须随包发布，不能误伤
     else if (/(?:^|\/)console-token(?:\/|$)/i.test(name)) reason = '控制台令牌';
     else if (/(?:^|\/)\.update-(?:old|staging|download|pending)\//i.test(name)) reason = '自更新残留';
+    else if (/(?:^|\/)HISTORY-REWRITE-BACKUP-/i.test(name)) reason = '历史重写备份残留';
     if (reason) sensitivePaths.hits.push({ path: redact(name), reason });
   }
   sensitivePaths.pass = sensitivePaths.hits.length === 0;
