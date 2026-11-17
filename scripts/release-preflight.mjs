@@ -143,11 +143,12 @@ for (const item of ROOT_MUST_EXCLUDE) {
       : '打包命令里必须排除；不要删（本机还在用）');
   }
 }
-// 通配型残留：*.flag / *.bak-* / *.lnk / 测试-*.bat / data-probe* / data.removed-*
+// 通配型残留：*.flag / *.log / *.bak-* / *.lnk / 测试-*.bat / data-probe* / data.removed-*
 for (const entry of fs.readdirSync(ROOT, { withFileTypes: true })) {
   const name = entry.name;
   const is = (re) => re.test(name);
   if (is(/\.flag$/i)) add('EXCLUDE', name, '运行时渲染/调试开关文件', '打包时排除');
+  if (is(/\.log$/i) && entry.isFile()) add('EXCLUDE', name, '运行日志（含本机错误与路径），发布包里绝不能带', '打包时排除');
   if (is(/\.bak-/i)) {
     add('FATAL', name, '备份文件（改代码时留下的）', '打包时排除，或确认无用后删除；残留即禁止打包');
     markExclude(name);

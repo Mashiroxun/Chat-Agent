@@ -1065,7 +1065,8 @@ function runChecks(ctx) {
     else if (forbiddenFiles.includes(lower)) reason = '本机配置文件（可能含 API Key）';
     else if (/\.log$/i.test(name)) reason = '运行日志';
     else if (/(?:^|\/)data\.removed-/i.test(name)) reason = '历史数据备份（含 API Key）';
-    else if (/(?:^|\/)console-token/i.test(name)) reason = '控制台令牌';
+    // 令牌文件本身无扩展名；console-token.test.mjs 是测试夹具，必须随包发布，不能误伤
+    else if (/(?:^|\/)console-token(?:\/|$)/i.test(name)) reason = '控制台令牌';
     else if (/(?:^|\/)\.update-(?:old|staging|download|pending)\//i.test(name)) reason = '自更新残留';
     if (reason) sensitivePaths.hits.push({ path: redact(name), reason });
   }
